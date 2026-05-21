@@ -1,0 +1,50 @@
+[package]
+name = "meld-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Meld visual diff and merge tool — rewritten in Rust with gtk-rs"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/tu-usuario/meld-rs"
+homepage = "https://github.com/tu-usuario/meld-rs"
+authors = ["meld-rs contributors"]
+keywords = ["diff", "merge", "gtk4", "tool", "vcs"]
+categories = ["gui", "development-tools"]
+
+[features]
+default = ["gui"]
+gui = ["gtk4", "gio", "glib", "cairo-rs", "pango", "gdk4", "sourceview5", "libadwaita"]
+
+[dependencies]
+# GTK 4 ecosystem (gtk-rs 0.10.x — enables FileDialog from GTK 4.10+)
+gtk4 = { version = "0.10", features = ["v4_14"], optional = true }
+gio = { version = "0.21", optional = true }
+glib = { version = "0.21", optional = true }
+cairo-rs = { version = "0.21", optional = true }
+pango = { version = "0.21", optional = true }
+gdk4 = { version = "0.10", optional = true }
+sourceview5 = { version = "0.10", features = ["v5_12"], optional = true }
+libadwaita = { version = "0.8", optional = true }
+
+# Utilities
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "6"
+regex = "1"
+encoding_rs = "0.8"
+uuid = { version = "1", features = ["v4"] }
+
+# Diff engine
+similar = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

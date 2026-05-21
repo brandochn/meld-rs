@@ -1,0 +1,281 @@
+/* Meld-rs application stylesheet — matches original Meld visual design */
+
+/* ── Action bar and toolbar styling ── */
+.meld-actionbar {
+    padding: 2px 4px;
+    border-bottom: 1px solid alpha(@borders, 0.3);
+    min-height: 32px;
+}
+
+/* ── Message area ── */
+.meld-msgarea {
+    background-color: @theme_base_color;
+    border-bottom: 1px solid alpha(@borders, 0.2);
+    min-height: 24px;
+}
+
+/* ── Status bar ── */
+.meld-status-bar {
+    padding: 2px 6px;
+    border-top: 1px solid alpha(@borders, 0.3);
+    font-size: 0.85em;
+}
+
+/* ── Notebook child ── */
+.meld-notebook-child {
+    padding: 0;
+}
+
+/* ── New diff tab ── */
+.new-diff-title {
+    font-size: 1.5em;
+    font-weight: bold;
+}
+
+.new-diff-button {
+    padding: 24px;
+    border-radius: 12px;
+}
+
+.new-diff-button:checked {
+    background-color: alpha(@theme_selected_bg_color, 0.15);
+}
+
+/* ── Tab label ── */
+.small-button {
+    min-width: 20px;
+    min-height: 20px;
+    padding: 0;
+}
+
+.flat {
+    background: none;
+    border: none;
+    box-shadow: none;
+}
+
+/* ── Image button ── */
+.image-button {
+    padding: 2px;
+}
+
+/* ── Linked groups ── */
+.linked button {
+    border-radius: 0;
+}
+.linked button:first-child {
+    border-radius: 6px 0 0 6px;
+}
+.linked button:last-child {
+    border-radius: 0 6px 6px 0;
+}
+.linked button:only-child {
+    border-radius: 6px;
+}
+
+/* ── Suggested action ── */
+.suggested-action {
+    font-weight: bold;
+}
+
+/* ── Diff highlighting colours (matching meld-base style scheme) ── */
+.meld-insert {
+    background: #d0ffa3;
+    color: #008800;
+}
+.meld-insert textview {
+    background: #a5ff4c;
+}
+
+.meld-replace {
+    background: #bdddff;
+    color: #0044dd;
+}
+.meld-replace textview {
+    background: #65b2ff;
+}
+
+.meld-conflict {
+    background: #ffa5a3;
+    color: #ff0000;
+}
+.meld-conflict textview {
+    background: #ff4f4c;
+}
+
+.meld-delete {
+    background: #cccccc;
+    color: #880000;
+}
+
+.meld-inline {
+    background: #8ac2ff;
+}
+
+.meld-current-line-highlight {
+    background: rgba(255, 255, 0, 0.25);
+}
+
+.meld-overscroll {
+    background: rgba(50, 50, 50, 0.1);
+}
+
+.meld-syncpoint-outline {
+    color: #555555;
+}
+
+.meld-unknown-text {
+    color: #888888;
+}
+
+.meld-current-chunk-highlight {
+    background: rgba(255, 255, 255, 0.5);
+}
+
+.meld-dimmed {
+    color: #999999;
+}
+
+/* ── Map overlay ── */
+.map-overlay {
+    background: rgba(100, 100, 100, 0.4);
+}
+
+/* ── Source map container ── */
+.sourcemap-container {
+    padding: 2px;
+    background: alpha(@borders, 0.1);
+}
+
+/* ── Source view font size (matching original Meld default) ── */
+.diff-view-12px {
+    font-size: 12px;
+}
+
+/* ── Action gutter (between diff panes) ── */
+.action-gutter {
+    background: transparent;
+    min-width: 24px;
+}
+
+/* ── Diff tag styling (line-level with paragraph-background for full width) ── */
+textview.diff-delete {
+    background-color: #cccccc;
+    color: #880000;
+}
+
+textview.diff-insert {
+    background-color: #d0ffa3;
+    color: #008800;
+}
+
+textview.diff-replace {
+    background-color: #bdddff;
+    color: #0044dd;
+}
+
+textview.diff-conflict {
+    background-color: #ffa5a3;
+    color: #ff0000;
+}
+
+/* ── Inline diff ── */
+textview.diff-inline {
+    background-color: #8ac2ff;
+}
+
+/* ── Search highlight ── */
+textview text.selection {
+    background-color: @theme_selected_bg_color;
+    color: @theme_selected_fg_color;
+}
+
+/* ── Notebook tab ── */
+notebook tab {
+    padding: 4px 8px;
+}
+
+/* ── Development mode warning ── */
+.devel {
+    background-image: crossfade(0.02, image(white), image(orange));
+}
+
+/* ── Dark mode overrides (matches meld-dark style scheme) ── */
+@media (prefers-color-scheme: dark) {
+    .meld-insert {
+        background: #123806;
+        color: #4e6206;
+    }
+    .meld-insert textview {
+        background: #245515;
+    }
+
+    .meld-replace {
+        background: #003266;
+        color: #1d59d6;
+    }
+    .meld-replace textview {
+        background: #0053a6;
+    }
+
+    .meld-conflict {
+        background: #7a2a28;
+        color: #ff0000;
+    }
+    .meld-conflict textview {
+        background: #ac3b39;
+    }
+
+    .meld-delete {
+        background: #cccccc;
+        color: #a40000;
+    }
+
+    .meld-inline {
+        background: #24527e;
+    }
+
+    .meld-current-line-highlight {
+        background: rgba(17, 17, 0, 0.25);
+    }
+
+    .meld-overscroll {
+        background: rgba(255, 255, 255, 0.1);
+    }
+
+    .meld-syncpoint-outline {
+        color: #bbbbbb;
+    }
+
+    .meld-unknown-text {
+        color: #aaaaaa;
+    }
+
+    .meld-current-chunk-highlight {
+        background: rgba(255, 255, 255, 0.06);
+    }
+
+    .map-overlay {
+        background: rgba(200, 200, 200, 0.4);
+    }
+
+    textview.diff-delete {
+        background-color: #cccccc;
+        color: #a40000;
+    }
+    textview.diff-insert {
+        background-color: #123806;
+        color: #4e6206;
+    }
+    textview.diff-replace {
+        background-color: #003266;
+        color: #1d59d6;
+    }
+    textview.diff-conflict {
+        background-color: #7a2a28;
+        color: #ff0000;
+    }
+    textview.diff-inline {
+        background-color: #24527e;
+    }
+}

@@ -1,0 +1,61 @@
+<?xml version="1.0" ?>
+<schemalist>
+  <schema id="org.gnome.meld-rs" path="/org/gnome/meld-rs/">
+    <key name="last-open-dir" type="ms">
+      <default>nothing</default>
+      <summary>The last directory opened by the file chooser</summary>
+    </key>
+    <key name="last-save-dir" type="ms">
+      <default>nothing</default>
+      <summary>The last directory used for saving files</summary>
+    </key>
+    <key name="window-width" type="i">
+      <default>-1</default>
+      <summary>Default window width</summary>
+    </key>
+    <key name="window-height" type="i">
+      <default>-1</default>
+      <summary>Default window height</summary>
+    </key>
+    <key name="is-maximized" type="b">
+      <default>false</default>
+      <summary>Default window maximized state</summary>
+    </key>
+    <key name="prefer-dark-theme" type="b">
+      <default>false</default>
+      <summary>Prefer application-wide dark theme</summary>
+    </key>
+    <key name="show-line-numbers" type="b">
+      <default>false</default>
+      <summary>Show line numbers</summary>
+    </key>
+    <key name="highlight-syntax" type="b">
+      <default>false</default>
+      <summary>Highlight syntax</summary>
+    </key>
+    <key name="use-system-font" type="b">
+      <default>true</default>
+      <summary>Use the system default monospace font</summary>
+    </key>
+    <key name="custom-font" type="s">
+      <default>'monospace 11'</default>
+      <summary>Custom font</summary>
+    </key>
+    <key name="style-scheme" type="s">
+      <default>'classic'</default>
+      <summary>Color scheme to use for syntax highlighting</summary>
+    </key>
+    <key name="wrap-mode" type="s">
+      <default>'none'</default>
+      <summary>Wrap mode for text views</summary>
+    </key>
+    <key name="indent-width" type="i">
+      <default>8</default>
+      <summary>Width of an indentation step</summary>
+    </key>
+    <key name="ignore-blank-lines" type="b">
+      <default>false</default>
+      <summary>Ignore blank lines when comparing files</summary>
+    </key>
+  </schema>
+</schemalist>
