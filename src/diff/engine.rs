@@ -65,10 +65,15 @@ impl Differ {
     /// to strip common prefix/suffix and discard unique lines before
     /// diffing, then reconstructs the full diff with the removed lines
     /// inserted back as Delete/Insert chunks.
+    ///
+    /// Chunk construction mirrors Python's `difflib.SequenceMatcher.get_opcodes()`:
+    /// consecutive Delete+Insert runs between Equal chunks are grouped into a
+    /// single Replace chunk, rather than relying on adjacency detection after
+    /// the fact. This handles situations where `similar` produces interleaved
+    /// Equal changes within what should be a single Replace gap.
     pub fn compare(&self) -> LineDiff {
         let pre = preprocess_diff(&self.text_a, &self.text_b);
 
-        // Join the preprocessed (filtered) lines for diffing
         let a_joined = if pre.filtered_a.is_empty() {
             String::new()
         } else {
@@ -81,53 +86,10 @@ impl Differ {
         };
 
         let diff = TextDiff::from_lines(&a_joined, &b_joined);
-        let mut chunks = Vec::new();
+        let mut chunks = build_chunks_from_gaps(&diff);
 
-        for change in diff.iter_all_changes() {
-            let tag = change.tag();
-            let line_count = change.value().lines().count();
-
-            let chunk = match tag {
-                ChangeTag::Equal => {
-                    let idx = change.old_index().expect("Equal must have old_index");
-                    let nidx = change.new_index().expect("Equal must have new_index");
-                    Chunk {
-                        start_a: idx,
-                        end_a: idx + line_count,
-                        start_b: nidx,
-                        end_b: nidx + line_count,
-                        op: DiffOp::Equal,
-                    }
-                }
-                ChangeTag::Delete => {
-                    let idx = change.old_index().expect("Delete must have old_index");
-                    Chunk {
-                        start_a: idx,
-                        end_a: idx + line_count,
-                        start_b: idx,
-                        end_b: idx,
-                        op: DiffOp::Delete,
-                    }
-                }
-                ChangeTag::Insert => {
-                    let idx = change.new_index().expect("Insert must have new_index");
-                    Chunk {
-                        start_a: idx,
-                        end_a: idx,
-                        start_b: idx,
-                        end_b: idx + line_count,
-                        op: DiffOp::Insert,
-                    }
-                }
-            };
-
-            chunks.push(chunk);
-        }
-
-        // Remap indices from filtered space back to original positions
         unprocess_chunks(&mut chunks, &pre);
 
-        // Insert chunks for the stripped prefix and suffix as Equal
         if pre.prefix_len > 0 {
             chunks.insert(
                 0,
@@ -152,9 +114,6 @@ impl Differ {
             });
         }
 
-        // Insert Delete/Insert chunks for unique lines that were removed.
-        // Only scan the middle region (between prefix and suffix) to avoid
-        // spurious chunks for the prefix/suffix lines, which are already Equal.
         insert_unique_line_chunks(
             &mut chunks,
             &self.text_a,
@@ -174,10 +133,19 @@ impl Differ {
 }
 
 /// Scan the original texts for runs of lines that were filtered out
-/// (unique to one side) and insert Delete/Insert chunks for them.
+/// (unique to one side) and split the existing (filtered-diff) chunks at
+/// these boundaries so that the final chunk list is a clean, non-overlapping
+/// partition of the original lines — matching Python Meld's
+/// `build_matching_blocks()` partitioning.
 ///
 /// Only scans the middle region `[prefix_len .. len - suffix_len]` because
 /// the prefix and suffix are already covered by dedicated Equal chunks.
+///
+/// After `unprocess_chunks` the filtered-diff chunks span original ranges
+/// that may include both kept and non-kept lines.  This function walks
+/// through each chunk, detects runs of non-kept positions, and emits
+/// Delete / Insert chunks for them, using the chunk's internal A↔B offset
+/// to derive correct cross-side indices.
 fn insert_unique_line_chunks(
     chunks: &mut Vec<Chunk>,
     text_a: &[String],
@@ -190,65 +158,578 @@ fn insert_unique_line_chunks(
     if index_map_a.is_empty() && index_map_b.is_empty() {
         return;
     }
-    let kept_a: std::collections::HashSet<usize> = index_map_a.iter().copied().collect();
-    let kept_b: std::collections::HashSet<usize> = index_map_b.iter().copied().collect();
+    use std::collections::HashSet;
+    let kept_a: HashSet<usize> = index_map_a.iter().copied().collect();
+    let kept_b: HashSet<usize> = index_map_b.iter().copied().collect();
 
-    // Only scan the middle region (between prefix and suffix). The prefix
-    // and suffix are already covered by dedicated Equal chunks.
-    let a_mid_start = prefix_len;
-    let a_mid_end = text_a.len() - suffix_len;
-    let b_mid_start = prefix_len;
-    let b_mid_end = text_b.len() - suffix_len;
+    // Sort by A position so we walk the original text left-to-right
+    chunks.sort_by_key(|c| (c.start_a, c.start_b));
 
-    let mut del_runs: Vec<(usize, usize)> = Vec::new();
-    let mut i = a_mid_start;
-    while i < a_mid_end {
-        if !kept_a.contains(&i) {
-            let start = i;
-            while i < a_mid_end && !kept_a.contains(&i) {
+    let mut new_chunks = Vec::with_capacity(chunks.len());
+
+    let mid_start = prefix_len;
+    let mid_end_a = text_a.len().saturating_sub(suffix_len);
+    let mid_end_b = text_b.len().saturating_sub(suffix_len);
+
+    for chunk in chunks.drain(..) {
+        // Pass prefix and suffix chunks through unchanged — they were
+        // inserted by `compare()` and represent the stripped common
+        // prefix / suffix, not part of the filtered diff.
+        if chunk.end_a <= mid_start && chunk.end_b <= mid_start {
+            new_chunks.push(chunk);
+            continue;
+        }
+        if chunk.start_a >= mid_end_a && chunk.start_b >= mid_end_b {
+            new_chunks.push(chunk);
+            continue;
+        }
+
+        match chunk.op {
+            DiffOp::Equal => {
+                split_equal(
+                    &mut new_chunks,
+                    &chunk,
+                    &kept_a,
+                    &kept_b,
+                );
+            }
+            DiffOp::Delete => {
+                // Delete from the filtered diff — already correct,
+                // but may still span non-kept A positions.
+                split_delete(
+                    &mut new_chunks,
+                    &chunk,
+                    &kept_a,
+                );
+            }
+            DiffOp::Insert => {
+                split_insert(
+                    &mut new_chunks,
+                    &chunk,
+                    &kept_b,
+                );
+            }
+            DiffOp::Replace => {
+                split_replace(
+                    &mut new_chunks,
+                    &chunk,
+                    &kept_a,
+                    &kept_b,
+                );
+            }
+        }
+    }
+
+    *chunks = new_chunks;
+
+    // Now walk through the clean partition and insert any remaining
+    // unique-line runs that fall between chunks (i.e. where a gap spans
+    // the boundary between two filtered chunks).  Because the filtered
+    // diff covers all kept lines, gaps between chunks only exist in the
+    // original text when contiguous non-kept runs cross chunk boundaries.
+
+    // Sort by A position again (newly pushed chunks preserve order)
+    chunks.sort_by_key(|c| (c.start_a, c.start_b));
+
+    fill_between_gaps(chunks, &kept_a, &kept_b, text_a.len(), text_b.len(), prefix_len, suffix_len);
+}
+
+// ─── Chunk-splitting helpers ─────────────────────────────────────────
+
+/// Internal offset between A and B positions within a chunk: `sb - sa`.
+fn ab_offset(chunk: &Chunk) -> isize {
+    chunk.start_b as isize - chunk.start_a as isize
+}
+
+/// Split an Equal chunk at A-side and B-side non-kept positions.
+fn split_equal(
+    out: &mut Vec<Chunk>,
+    chunk: &Chunk,
+    kept_a: &std::collections::HashSet<usize>,
+    kept_b: &std::collections::HashSet<usize>,
+) {
+    let offset = ab_offset(chunk);
+
+    // Walk A positions within the chunk, emitting Equal blocks for kept
+    // positions and Delete blocks for non-kept positions.  The B side
+    // position of each delete is `a_pos + offset`.
+    let mut a = chunk.start_a;
+    while a < chunk.end_a {
+        if kept_a.contains(&a) {
+            // Start of a kept (Equal) sub-range
+            let b = (a as isize + offset) as usize;
+            let eq_start_a = a;
+            let eq_start_b = b;
+            while a < chunk.end_a && kept_a.contains(&a) {
+                a += 1;
+            }
+            let eq_end_a = a;
+            let eq_end_b = (eq_end_a as isize + offset) as usize;
+            if eq_end_a > eq_start_a && eq_end_b <= chunk.end_b {
+                out.push(Chunk {
+                    start_a: eq_start_a,
+                    end_a: eq_end_a,
+                    start_b: eq_start_b,
+                    end_b: eq_end_b,
+                    op: DiffOp::Equal,
+                });
+            }
+        } else {
+            // Non-kept A run → Delete
+            let del_start = a;
+            while a < chunk.end_a && !kept_a.contains(&a) {
+                a += 1;
+            }
+            let del_b = (del_start as isize + offset) as usize;
+            out.push(Chunk {
+                start_a: del_start,
+                end_a: a,
+                start_b: del_b,
+                end_b: del_b,
+                op: DiffOp::Delete,
+            });
+        }
+    }
+
+    // Now handle B-side non-kept positions that were NOT covered by the
+    // A walk (this handles the case where B has unique lines but A does
+    // not at the same offset).
+    let mut b = chunk.start_b;
+    while b < chunk.end_b {
+        if !kept_b.contains(&b) {
+            let ins_start = b;
+            while b < chunk.end_b && !kept_b.contains(&b) {
+                b += 1;
+            }
+            let ins_a = (ins_start as isize - offset) as usize;
+            out.push(Chunk {
+                start_a: ins_a,
+                end_a: ins_a,
+                start_b: ins_start,
+                end_b: b,
+                op: DiffOp::Insert,
+            });
+        } else {
+            b += 1;
+        }
+    }
+
+    // Re-sort the newly appended portion of `out` by A position.
+    // We know the indices of the chunks we just pushed: they are the
+    // suffix of `out` whose length is at most the original chunk span.
+    let old_len = out.len().saturating_sub(
+        (chunk.end_a - chunk.start_a).saturating_add(chunk.end_b - chunk.start_b).saturating_add(4)
+    );
+    let old_len = old_len.min(out.len());
+    out[old_len..].sort_by_key(|c| (c.start_a, c.start_b));
+}
+
+/// Split a Delete chunk from the filtered diff.
+///
+/// Emits the original deletion for kept-A positions (these are the diff's
+/// legitimate content) *and* extracts any non-kept A positions that were
+/// folded into the chunk's range by `unprocess_chunks` into separate
+/// Delete chunks with correct cross-side positions.
+fn split_delete(
+    out: &mut Vec<Chunk>,
+    chunk: &Chunk,
+    kept_a: &std::collections::HashSet<usize>,
+) {
+    let offset = ab_offset(chunk);
+    // Emit the kept-position deletions — these ARE the filtered diff's output
+    let mut a = chunk.start_a;
+    while a < chunk.end_a {
+        if kept_a.contains(&a) {
+            let del_start = a;
+            while a < chunk.end_a && kept_a.contains(&a) {
+                a += 1;
+            }
+            let del_b = (del_start as isize + offset) as usize;
+            out.push(Chunk {
+                start_a: del_start,
+                end_a: a,
+                start_b: del_b,
+                end_b: del_b,
+                op: DiffOp::Delete,
+            });
+        } else {
+            a += 1;
+        }
+    }
+    // Emit non-kept positions as unique-line Deletes
+    a = chunk.start_a;
+    while a < chunk.end_a {
+        if !kept_a.contains(&a) {
+            let del_start = a;
+            while a < chunk.end_a && !kept_a.contains(&a) {
+                a += 1;
+            }
+            let del_b = (del_start as isize + offset) as usize;
+            out.push(Chunk {
+                start_a: del_start,
+                end_a: a,
+                start_b: del_b,
+                end_b: del_b,
+                op: DiffOp::Delete,
+            });
+        } else {
+            a += 1;
+        }
+    }
+}
+
+/// Split an Insert chunk from the filtered diff.
+///
+/// Like `split_delete` but for B-side non-kept positions.
+fn split_insert(
+    out: &mut Vec<Chunk>,
+    chunk: &Chunk,
+    kept_b: &std::collections::HashSet<usize>,
+) {
+    let offset = ab_offset(chunk);
+    // Emit kept-position insertions
+    let mut b = chunk.start_b;
+    while b < chunk.end_b {
+        if kept_b.contains(&b) {
+            let ins_start = b;
+            while b < chunk.end_b && kept_b.contains(&b) {
+                b += 1;
+            }
+            let ins_a = (ins_start as isize - offset) as usize;
+            out.push(Chunk {
+                start_a: ins_a,
+                end_a: ins_a,
+                start_b: ins_start,
+                end_b: b,
+                op: DiffOp::Insert,
+            });
+        } else {
+            b += 1;
+        }
+    }
+    // Emit non-kept positions as unique-line Inserts
+    b = chunk.start_b;
+    while b < chunk.end_b {
+        if !kept_b.contains(&b) {
+            let ins_start = b;
+            while b < chunk.end_b && !kept_b.contains(&b) {
+                b += 1;
+            }
+            let ins_a = (ins_start as isize - offset) as usize;
+            out.push(Chunk {
+                start_a: ins_a,
+                end_a: ins_a,
+                start_b: ins_start,
+                end_b: b,
+                op: DiffOp::Insert,
+            });
+        } else {
+            b += 1;
+        }
+    }
+}
+
+/// Split a Replace chunk from the filtered diff.
+///
+/// Emits kept-position blocks as the original Replace (plus any contained
+/// unique-line Deletes/Inserts) after `merge_adjacent_replace_chunks`
+/// reassembles them downstream.
+fn split_replace(
+    out: &mut Vec<Chunk>,
+    chunk: &Chunk,
+    kept_a: &std::collections::HashSet<usize>,
+    kept_b: &std::collections::HashSet<usize>,
+) {
+    let offset = ab_offset(chunk);
+
+    // Kept A-positions → Delete (will merge into Replace downstream)
+    let mut a = chunk.start_a;
+    while a < chunk.end_a {
+        if kept_a.contains(&a) {
+            let del_start = a;
+            while a < chunk.end_a && kept_a.contains(&a) {
+                a += 1;
+            }
+            let del_b = (del_start as isize + offset) as usize;
+            out.push(Chunk {
+                start_a: del_start,
+                end_a: a,
+                start_b: del_b,
+                end_b: del_b,
+                op: DiffOp::Delete,
+            });
+        } else {
+            a += 1;
+        }
+    }
+
+    // Non-kept A-positions → extra unique-line Deletes
+    a = chunk.start_a;
+    while a < chunk.end_a {
+        if !kept_a.contains(&a) {
+            let del_start = a;
+            while a < chunk.end_a && !kept_a.contains(&a) {
+                a += 1;
+            }
+            let del_b = (del_start as isize + offset) as usize;
+            out.push(Chunk {
+                start_a: del_start,
+                end_a: a,
+                start_b: del_b,
+                end_b: del_b,
+                op: DiffOp::Delete,
+            });
+        } else {
+            a += 1;
+        }
+    }
+
+    // Kept B-positions → Insert (will merge into Replace downstream)
+    let mut b = chunk.start_b;
+    while b < chunk.end_b {
+        if kept_b.contains(&b) {
+            let ins_start = b;
+            while b < chunk.end_b && kept_b.contains(&b) {
+                b += 1;
+            }
+            let ins_a = (ins_start as isize - offset) as usize;
+            out.push(Chunk {
+                start_a: ins_a,
+                end_a: ins_a,
+                start_b: ins_start,
+                end_b: b,
+                op: DiffOp::Insert,
+            });
+        } else {
+            b += 1;
+        }
+    }
+
+    // Non-kept B-positions → extra unique-line Inserts
+    b = chunk.start_b;
+    while b < chunk.end_b {
+        if !kept_b.contains(&b) {
+            let ins_start = b;
+            while b < chunk.end_b && !kept_b.contains(&b) {
+                b += 1;
+            }
+            let ins_a = (ins_start as isize - offset) as usize;
+            out.push(Chunk {
+                start_a: ins_a,
+                end_a: ins_a,
+                start_b: ins_start,
+                end_b: b,
+                op: DiffOp::Insert,
+            });
+        } else {
+            b += 1;
+        }
+    }
+}
+
+/// After splitting all chunks at internal gaps, scan the resulting chunk
+/// list for gaps that remain between consecutive chunks and insert
+/// Delete / Insert for any remaining non-kept lines that cross chunk
+/// boundaries.
+fn fill_between_gaps(
+    chunks: &mut Vec<Chunk>,
+    kept_a: &std::collections::HashSet<usize>,
+    kept_b: &std::collections::HashSet<usize>,
+    text_a_len: usize,
+    text_b_len: usize,
+    prefix_len: usize,
+    suffix_len: usize,
+) {
+    let a_end = text_a_len - suffix_len;
+    let b_end = text_b_len - suffix_len;
+
+    // Insert a sentinel chunk at the end to simplify the loop
+    let n = chunks.len();
+
+    let mut extra = Vec::new();
+
+    for idx in 0..=n {
+        let prev_end_a = if idx == 0 {
+            prefix_len
+        } else {
+            chunks[idx - 1].end_a
+        };
+        let prev_end_b = if idx == 0 {
+            prefix_len
+        } else {
+            chunks[idx - 1].end_b
+        };
+        let next_start_a = if idx < n { chunks[idx].start_a } else { a_end };
+        let next_start_b = if idx < n { chunks[idx].start_b } else { b_end };
+
+        // A-side gap
+        let mut a_pos = prev_end_a;
+        while a_pos < next_start_a && a_pos < a_end {
+            if !kept_a.contains(&a_pos) {
+                let start = a_pos;
+                while a_pos < next_start_a && a_pos < a_end && !kept_a.contains(&a_pos) {
+                    a_pos += 1;
+                }
+                extra.push(Chunk {
+                    start_a: start,
+                    end_a: a_pos,
+                    start_b: prev_end_b,
+                    end_b: prev_end_b,
+                    op: DiffOp::Delete,
+                });
+            } else {
+                a_pos += 1;
+            }
+        }
+
+        // B-side gap
+        let mut b_pos = prev_end_b;
+        while b_pos < next_start_b && b_pos < b_end {
+            if !kept_b.contains(&b_pos) {
+                let start = b_pos;
+                while b_pos < next_start_b && b_pos < b_end && !kept_b.contains(&b_pos) {
+                    b_pos += 1;
+                }
+                extra.push(Chunk {
+                    start_a: prev_end_a,
+                    end_a: prev_end_a,
+                    start_b: start,
+                    end_b: b_pos,
+                    op: DiffOp::Insert,
+                });
+            } else {
+                b_pos += 1;
+            }
+        }
+    }
+
+    chunks.extend(extra);
+    chunks.sort_by_key(|c| (c.start_a, c.start_b));
+}
+
+// ─── Gap-based chunk construction ────────────────────────────────────
+
+/// A lightweight snapshot of a single change from the `similar` crate,
+/// used to build chunk groups without lifetime constraints.
+#[derive(Debug, Clone)]
+struct RawChange {
+    tag: similar::ChangeTag,
+    old_index: Option<usize>,
+    new_index: Option<usize>,
+    line_count: usize,
+}
+
+/// Build diff chunks from `similar`'s change stream using the same gap-based
+/// logic as Python's `difflib.SequenceMatcher.get_opcodes()`.
+///
+/// Consecutive Delete + Insert runs that sit in the same gap between Equal
+/// regions are merged into a single [`DiffOp::Replace`] chunk. Standalone
+/// Deletes or Inserts (i.e., only one side changed in a gap) remain as their
+/// respective operation types.
+///
+/// This avoids the adjacency-detection problem where `similar` may produce
+/// interleaved Equal changes that separate Delete/Insert pairs that belong
+/// to the same logical Replace.
+fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, 'a, str>) -> Vec<Chunk> {
+    let raw: Vec<RawChange> = diff
+        .iter_all_changes()
+        .map(|c| RawChange {
+            tag: c.tag(),
+            old_index: c.old_index(),
+            new_index: c.new_index(),
+            line_count: c.value().lines().count(),
+        })
+        .collect();
+
+    let mut chunks = Vec::new();
+    let mut i = 0;
+    let n = raw.len();
+
+    while i < n {
+        match raw[i].tag {
+            similar::ChangeTag::Equal => {
+                let ri = &raw[i];
+                let oi = ri.old_index.unwrap();
+                let ni = ri.new_index.unwrap();
+                chunks.push(Chunk {
+                    start_a: oi,
+                    end_a: oi + ri.line_count,
+                    start_b: ni,
+                    end_b: ni + ri.line_count,
+                    op: DiffOp::Equal,
+                });
                 i += 1;
             }
-            del_runs.push((start, i));
-        } else {
-            i += 1;
-        }
-    }
+            _ => {
+                let gap_start = i;
+                while i < n && raw[i].tag != similar::ChangeTag::Equal {
+                    i += 1;
+                }
+                let gap = &raw[gap_start..i];
 
-    let mut ins_runs: Vec<(usize, usize)> = Vec::new();
-    let mut j = b_mid_start;
-    while j < b_mid_end {
-        if !kept_b.contains(&j) {
-            let start = j;
-            while j < b_mid_end && !kept_b.contains(&j) {
-                j += 1;
+                let has_delete = gap.iter().any(|r| r.tag == similar::ChangeTag::Delete);
+                let has_insert = gap.iter().any(|r| r.tag == similar::ChangeTag::Insert);
+
+                if has_delete && has_insert {
+                    let start_a = gap
+                        .iter()
+                        .filter(|r| r.tag == similar::ChangeTag::Delete)
+                        .map(|r| r.old_index.unwrap())
+                        .min()
+                        .unwrap();
+                    let end_a = gap
+                        .iter()
+                        .filter(|r| r.tag == similar::ChangeTag::Delete)
+                        .map(|r| r.old_index.unwrap() + r.line_count)
+                        .max()
+                        .unwrap();
+                    let start_b = gap
+                        .iter()
+                        .filter(|r| r.tag == similar::ChangeTag::Insert)
+                        .map(|r| r.new_index.unwrap())
+                        .min()
+                        .unwrap();
+                    let end_b = gap
+                        .iter()
+                        .filter(|r| r.tag == similar::ChangeTag::Insert)
+                        .map(|r| r.new_index.unwrap() + r.line_count)
+                        .max()
+                        .unwrap();
+                    chunks.push(Chunk {
+                        start_a,
+                        end_a,
+                        start_b,
+                        end_b,
+                        op: DiffOp::Replace,
+                    });
+                } else if has_delete {
+                    for r in gap.iter().filter(|r| r.tag == similar::ChangeTag::Delete) {
+                        let idx = r.old_index.unwrap();
+                        chunks.push(Chunk {
+                            start_a: idx,
+                            end_a: idx + r.line_count,
+                            start_b: idx,
+                            end_b: idx,
+                            op: DiffOp::Delete,
+                        });
+                    }
+                } else {
+                    for r in gap.iter().filter(|r| r.tag == similar::ChangeTag::Insert) {
+                        let idx = r.new_index.unwrap();
+                        chunks.push(Chunk {
+                            start_a: idx,
+                            end_a: idx,
+                            start_b: idx,
+                            end_b: idx + r.line_count,
+                            op: DiffOp::Insert,
+                        });
+                    }
+                }
             }
-            ins_runs.push((start, j));
-        } else {
-            j += 1;
         }
     }
 
-    for (start, end) in &del_runs {
-        chunks.push(Chunk {
-            start_a: *start,
-            end_a: *end,
-            start_b: *start,
-            end_b: *start,
-            op: DiffOp::Delete,
-        });
-    }
-
-    for (start, end) in &ins_runs {
-        chunks.push(Chunk {
-            start_a: *start,
-            end_a: *start,
-            start_b: *start,
-            end_b: *end,
-            op: DiffOp::Insert,
-        });
-    }
-
-    chunks.sort_by_key(|c| c.start_a.min(c.start_b));
+    chunks
 }
 
 // ─── Three-way merge ───────────────────────────────────────────────
@@ -505,33 +986,72 @@ impl InlineDiffer {
     /// Compare two lines and return a list of inline changes.
     /// Only returns differences when the lines are different but similar
     /// enough (e.g., a single word change).
+    ///
+    /// Mirrors Python Meld's character-level diff pipeline:
+    /// 1. Compute char-level diff via `similar::TextDiff::from_chars`
+    /// 2. Filter out tiny equal segments (< 3 chars, except at boundaries)
+    ///    to reduce visual noise
+    /// 3. Merge consecutive Delete+Insert runs into Replace chunks
     pub fn compare_line(line_a: &str, line_b: &str) -> Vec<InlineChange> {
         if line_a == line_b {
             return Vec::new();
         }
 
         let diff = TextDiff::from_chars(line_a, line_b);
-        let mut changes = Vec::new();
 
-        for change in diff.iter_all_changes() {
-            match change.tag() {
-                ChangeTag::Equal => continue,
+        // Collect all changes so we can filter small equals
+        struct RawCharChange {
+            tag: ChangeTag,
+            old_index: Option<usize>,
+            new_index: Option<usize>,
+            len: usize,
+        }
+        let raw: Vec<RawCharChange> = diff
+            .iter_all_changes()
+            .map(|c| RawCharChange {
+                tag: c.tag(),
+                old_index: c.old_index(),
+                new_index: c.new_index(),
+                len: c.value().chars().count(),
+            })
+            .collect();
+
+        // Find the full span of non-equal changes for boundary detection
+        let first_change = raw.iter().position(|r| r.tag != ChangeTag::Equal);
+        let last_change = raw.iter().rposition(|r| r.tag != ChangeTag::Equal);
+
+        // Build the filtered change list, removing tiny equal segments
+        let mut changes = Vec::new();
+        for (i, r) in raw.iter().enumerate() {
+            match r.tag {
+                ChangeTag::Equal => {
+                    // Skip equal segments smaller than 3 chars that are not
+                    // at the very start or end of the changed span (mirroring
+                    // Python Meld's process_matches() filter).
+                    let at_start =
+                        first_change.map_or(false, |fc| i < fc);
+                    let at_end =
+                        last_change.map_or(false, |lc| i > lc);
+                    if r.len < 3 && !at_start && !at_end {
+                        continue;
+                    }
+                    // Larger equal segments are simply omitted from inline
+                    // highlighting (we only emit changed characters).
+                }
                 ChangeTag::Delete => {
-                    if let Some(idx) = change.old_index() {
-                        let len = change.value().chars().count();
+                    if let Some(idx) = r.old_index {
                         changes.push(InlineChange {
                             start: idx,
-                            end: idx + len,
+                            end: idx + r.len,
                             op: DiffOp::Delete,
                         });
                     }
                 }
                 ChangeTag::Insert => {
-                    if let Some(idx) = change.new_index() {
-                        let len = change.value().chars().count();
+                    if let Some(idx) = r.new_index {
                         changes.push(InlineChange {
                             start: idx,
-                            end: idx + len,
+                            end: idx + r.len,
                             op: DiffOp::Insert,
                         });
                     }
@@ -539,23 +1059,46 @@ impl InlineDiffer {
             }
         }
 
-        // Post-process to merge adjacent Delete+Insert into Replace
-        Self::_postprocess(&mut changes);
+        // Merge consecutive Delete+Insert runs into Replace chunks.
+        // Handles patterns like Delete, Delete, Insert, Insert → one Replace.
+        Self::_postprocess_multi(&mut changes);
         changes
     }
 
-    fn _postprocess(changes: &mut Vec<InlineChange>) {
+    /// Merge all consecutive runs of Delete and Insert (in any order)
+    /// into a single Replace chunk, matching the line-level gap-based
+    /// logic used by `merge_adjacent_replace_chunks`.
+    fn _postprocess_multi(changes: &mut Vec<InlineChange>) {
         let mut i = 0;
-        while i + 1 < changes.len() {
-            if changes[i].op == DiffOp::Delete && changes[i + 1].op == DiffOp::Insert {
-                let del = changes[i].clone();
-                let ins = changes[i + 1].clone();
-                changes[i] = InlineChange {
-                    start: del.start,
-                    end: ins.end,
-                    op: DiffOp::Replace,
-                };
-                changes.remove(i + 1);
+        while i < changes.len() {
+            let mut j = i;
+            let mut has_delete = false;
+            let mut has_insert = false;
+            while j < changes.len() {
+                match changes[j].op {
+                    DiffOp::Delete => {
+                        has_delete = true;
+                    }
+                    DiffOp::Insert => {
+                        has_insert = true;
+                    }
+                    _ => break,
+                }
+                j += 1;
+            }
+            if has_delete && has_insert {
+                // Merge [i..j) into a single Replace spanning the full range
+                let start = changes[i].start;
+                let end = changes[j - 1].end;
+                changes.drain(i..j);
+                changes.insert(
+                    i,
+                    InlineChange {
+                        start,
+                        end,
+                        op: DiffOp::Replace,
+                    },
+                );
             }
             i += 1;
         }
@@ -682,14 +1225,22 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
 
     // Only use the filtered version if enough lines were discarded
     if discarded <= 10 {
-        // Not worth it — return unfiltered result
+        // Not worth it — return the full middle section (prefix/suffix
+        // already stripped so the diff only processes middle lines).
+        // Prefix and suffix themselves are re-inserted by `compare()`.
+        // The index maps must map filtered (middle-section) positions to
+        // original (full-text) positions.
+        let full_a = text_a[prefix_len..len_a - suffix_len].to_vec();
+        let full_b = text_b[prefix_len..len_b - suffix_len].to_vec();
+        let map_a: Vec<usize> = (0..full_a.len()).map(|i| prefix_len + i).collect();
+        let map_b: Vec<usize> = (0..full_b.len()).map(|i| prefix_len + i).collect();
         return PreprocessResult {
-            filtered_a: text_a.to_vec(),
-            filtered_b: text_b.to_vec(),
-            index_map_a: (0..text_a.len()).collect(),
-            index_map_b: (0..text_b.len()).collect(),
-            prefix_len: 0,
-            suffix_len: 0,
+            filtered_a: full_a,
+            filtered_b: full_b,
+            index_map_a: map_a,
+            index_map_b: map_b,
+            prefix_len,
+            suffix_len,
         };
     }
 
@@ -704,30 +1255,43 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
 }
 
 /// Remap chunk indices from filtered space back to original line numbers.
-/// Also handles zero-width chunks (e.g. Insert where start_a == end_a).
+///
+/// For chunks that span multiple filtered lines (non-zero-width), the end
+/// position is computed from the last mapped index + 1.
+///
+/// For zero-width chunks (e.g. Insert where start_a == end_a, or Delete
+/// where start_b == end_b), the end position must equal the start position
+/// to maintain the zero-width invariant.  The first-branch fallthrough bug
+/// would otherwise produce invalid ranges like `[599..598)` when gaps exist
+/// in the index maps (caused by the unique-line discard optimisation).
 pub fn unprocess_chunks(chunks: &mut Vec<Chunk>, pre: &PreprocessResult) {
     for chunk in chunks.iter_mut() {
-        // Remap start_a: filtered index → original index
-        if chunk.start_a < pre.index_map_a.len() {
-            chunk.start_a = pre.index_map_a[chunk.start_a];
+        // Snapshot original (filtered-space) indices before any remapping
+        let f_start_a = chunk.start_a;
+        let f_end_a = chunk.end_a;
+        let f_start_b = chunk.start_b;
+        let f_end_b = chunk.end_b;
+
+        // ── A side ──
+        if f_start_a < pre.index_map_a.len() {
+            chunk.start_a = pre.index_map_a[f_start_a];
         }
-        // Remap end_a: if the chunk spans filtered lines, map the last one + 1.
-        // For zero-width chunks (e.g. Insert where start_a == end_a),
-        // use the same mapping as start_a.
-        if chunk.end_a > 0 && chunk.end_a - 1 < pre.index_map_a.len() {
-            chunk.end_a = pre.index_map_a[chunk.end_a - 1] + 1;
-        } else if chunk.start_a == chunk.end_a && chunk.start_a < pre.index_map_a.len() {
-            // Zero-width chunk: end_a maps to the same position as start_a
-            chunk.end_a = pre.index_map_a[chunk.start_a];
+        if f_start_a == f_end_a {
+            // Zero-width chunk: end maps to the same original position as start
+            chunk.end_a = chunk.start_a;
+        } else if f_end_a > 0 && f_end_a - 1 < pre.index_map_a.len() {
+            chunk.end_a = pre.index_map_a[f_end_a - 1] + 1;
         }
-        // Same for B side
-        if chunk.start_b < pre.index_map_b.len() {
-            chunk.start_b = pre.index_map_b[chunk.start_b];
+
+        // ── B side ──
+        if f_start_b < pre.index_map_b.len() {
+            chunk.start_b = pre.index_map_b[f_start_b];
         }
-        if chunk.end_b > 0 && chunk.end_b - 1 < pre.index_map_b.len() {
-            chunk.end_b = pre.index_map_b[chunk.end_b - 1] + 1;
-        } else if chunk.start_b == chunk.end_b && chunk.start_b < pre.index_map_b.len() {
-            chunk.end_b = pre.index_map_b[chunk.start_b];
+        if f_start_b == f_end_b {
+            // Zero-width chunk: end maps to the same original position as start
+            chunk.end_b = chunk.start_b;
+        } else if f_end_b > 0 && f_end_b - 1 < pre.index_map_b.len() {
+            chunk.end_b = pre.index_map_b[f_end_b - 1] + 1;
         }
     }
 }

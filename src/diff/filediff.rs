@@ -14,6 +14,7 @@
 use gio::prelude::*;
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use pango;
 use sourceview5 as gsv;
 use sourceview5::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -259,6 +260,18 @@ impl FileDiff {
 
         let buffer = gsv::Buffer::new(None::<&gtk::TextTagTable>);
 
+        // Apply the default style scheme so that syntax highlighting and
+        // theme-aware colours work.  Python Meld uses "classic" as its
+        // base, falling back to the system scheme on unavailability.
+        let manager = gsv::StyleSchemeManager::new();
+        let scheme = manager
+            .scheme("classic")
+            .or_else(|| manager.scheme("Adwaita"))
+            .or_else(|| manager.scheme("Adwaita-dark"));
+        if let Some(ref s) = scheme {
+            buffer.set_style_scheme(Some(s));
+        }
+
         let view = gsv::View::with_buffer(&buffer);
         view.set_monospace(true);
         view.set_show_line_numbers(true);
@@ -330,6 +343,42 @@ impl FileDiff {
                 lbls[i] = label.clone();
                 self.panes[i].file_label.set_text(label);
             }
+        }
+    }
+
+    /// Apply the configured font to all panes.
+    ///
+    /// When `use_system_font` is true the monospace font is read from the
+    /// system theme.  Otherwise the `custom_font` string (e.g. "Consolas 11")
+    /// is parsed and applied via `override_font`.
+    pub fn set_font(&self, use_system: bool, custom: &str) {
+        let desc = if use_system {
+            None
+        } else if !custom.is_empty() {
+            Some(pango::FontDescription::from_string(custom))
+        } else {
+            None
+        };
+        if let Some(ref d) = desc {
+            // GTK4 removed `override_font`; apply via CSS provider instead.
+            let provider = gtk::CssProvider::new();
+            let font_css = format!("textview {{ font: {}; }}", d.to_string());
+            provider.load_from_data(&font_css);
+            for pane in &self.panes {
+                pane.view
+                    .style_context()
+                    .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            }
+        }
+    }
+
+    /// Enable or disable blank-line ignoring during diff computation.
+    pub fn set_ignore_blanks(&self, ignore: bool) {
+        // Store the flag for use by compute_diff (and buffer-change handler)
+        // This is a minimal implementation; a full solution would pass the
+        // flag into the Differ engine itself.
+        if ignore {
+            log::info!("ignore_blank_lines enabled (not yet wired to engine)");
         }
     }
 
@@ -1111,7 +1160,15 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
     ensure_tag_full(tag_table, "diff-delete", "#cccccc", "#880000", "#cccccc");
     // Inline differences within a line — single intense blue for BOTH panes,
     // matching the original Meld "meld:inline" style.
-    ensure_tag(tag_table, "diff-inline", "#8ac2ff", "#000000");
+    // Use GtkSource.Tag (not plain GtkTextTag) with draw_spaces = true so
+    // that whitespace changes are visible, matching Python Meld behaviour.
+    if tag_table.lookup("diff-inline").is_none() {
+        let tag = gsv::Tag::new(Some("diff-inline"));
+        tag.set_background(Some("#8ac2ff"));
+        tag.set_foreground(Some("#000000"));
+        tag.set_draw_spaces(true);
+        tag_table.add(&tag);
+    }
 }
 
 fn apply_diff_tags_to_buffer(
@@ -1233,8 +1290,17 @@ fn apply_inline_diff(
             if let Some(tag) = tag_table.lookup("diff-inline") {
                 let start_offset = base_iter.offset() as usize + rel_start;
                 let end_offset = base_iter.offset() as usize + rel_end;
-                let s = buffer.iter_at_offset(start_offset as i32);
-                let e = buffer.iter_at_offset(end_offset as i32);
+                let mut s = buffer.iter_at_offset(start_offset as i32);
+                let mut e = buffer.iter_at_offset(end_offset as i32);
+                // Adjust iterators to valid cursor positions so that
+                // combining characters (Unicode diacritics) are not split
+                // by the tag boundary.  Mirrors Python Meld.
+                if !s.is_cursor_position() {
+                    s.backward_cursor_position();
+                }
+                if !e.is_cursor_position() {
+                    e.forward_cursor_position();
+                }
                 if s.offset() < e.offset() {
                     buffer.apply_tag(&tag, &s, &e);
                 }

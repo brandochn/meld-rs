@@ -323,20 +323,16 @@ impl ActionGutter {
 // ─── Action classification ──────────────────────────────────────────
 
 /// Determine which action should be available for a given chunk and direction.
+///
+/// Mirrors Python Meld's `_classify_change_actions()`:
+///   - Replace chunks get the push/replace arrow (►)
+///   - Delete chunks get the delete button (×) — removes extra lines from source
+///   - Insert chunks get the push arrow (►) — pushes inserted lines back to source
 fn classify_action(chunk: &Chunk, _direction: GutterDirection) -> GutterAction {
     match chunk.op {
-        DiffOp::Equal => GutterAction::Replace, // unused for equal chunks
-        DiffOp::Delete => {
-            // Deletes can be pushed (replace) or deleted from source
-            GutterAction::Replace
-        }
-        DiffOp::Insert => {
-            // Inserts on the target side; from source perspective:
-            // - If LeftToRight, we're looking at source (left) pane where
-            //   this insert appears in the target (right). Show copy options.
-            // - If RightToLeft, it's a delete from the right pane perspective.
-            GutterAction::Replace
-        }
+        DiffOp::Equal => GutterAction::Replace,
+        DiffOp::Delete => GutterAction::Delete,
+        DiffOp::Insert => GutterAction::Replace,
         DiffOp::Replace => GutterAction::Replace,
     }
 }
