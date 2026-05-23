@@ -47,6 +47,59 @@ pub struct LineDiff {
     pub line_b: Vec<String>,
 }
 
+impl LineDiff {
+    /// Yield chunks between `from_pane` and `to_pane`, optionally filtered
+    /// by a visible line range `(start, end)`.
+    ///
+    /// Mirrors the original Meld's `Differ.pair_changes()` used by LinkMap
+    /// and scroll sync. When `from_pane == 0` and `to_pane == 1`, returns
+    /// chunks in left→right orientation; when reversed (1→0), the caller
+    /// should swap A/B positions as needed.
+    ///
+    /// The `visible` range is expressed in `from_pane` line numbers.
+    /// Chunks whose range on the from-side overlaps `visible` are included.
+    pub fn pair_changes(
+        &self,
+        from_pane: usize,
+        to_pane: usize,
+        visible: Option<(usize, usize)>,
+    ) -> Vec<(usize, &Chunk)> {
+        self.chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                let from_start = if from_pane == 0 { c.start_a } else { c.start_b };
+                let from_end = if from_pane == 0 { c.end_a } else { c.end_b };
+
+                // Skip Equal chunks and zero-width chunks with no visual footprint
+                if c.op == DiffOp::Equal {
+                    return false;
+                }
+                if from_end <= from_start {
+                    return false;
+                }
+
+                if let Some((v_start, v_end)) = visible {
+                    from_end > v_start && from_start < v_end
+                } else {
+                    true
+                }
+            })
+            .collect()
+    }
+
+    /// Yield changes visible in a single pane, optionally filtered by a
+    /// visible line range. Used for per-pane chunk background rendering
+    /// and the overview ChunkMap.
+    pub fn single_changes(
+        &self,
+        pane: usize,
+        visible: Option<(usize, usize)>,
+    ) -> Vec<(usize, &Chunk)> {
+        self.pair_changes(pane, if pane == 0 { 1 } else { 0 }, visible)
+    }
+}
+
 /// A line-level differ that computes differences between two texts.
 pub struct Differ {
     text_a: Vec<String>,
@@ -186,36 +239,18 @@ fn insert_unique_line_chunks(
 
         match chunk.op {
             DiffOp::Equal => {
-                split_equal(
-                    &mut new_chunks,
-                    &chunk,
-                    &kept_a,
-                    &kept_b,
-                );
+                split_equal(&mut new_chunks, &chunk, &kept_a, &kept_b);
             }
             DiffOp::Delete => {
                 // Delete from the filtered diff — already correct,
                 // but may still span non-kept A positions.
-                split_delete(
-                    &mut new_chunks,
-                    &chunk,
-                    &kept_a,
-                );
+                split_delete(&mut new_chunks, &chunk, &kept_a);
             }
             DiffOp::Insert => {
-                split_insert(
-                    &mut new_chunks,
-                    &chunk,
-                    &kept_b,
-                );
+                split_insert(&mut new_chunks, &chunk, &kept_b);
             }
             DiffOp::Replace => {
-                split_replace(
-                    &mut new_chunks,
-                    &chunk,
-                    &kept_a,
-                    &kept_b,
-                );
+                split_replace(&mut new_chunks, &chunk, &kept_a, &kept_b);
             }
         }
     }
@@ -231,7 +266,15 @@ fn insert_unique_line_chunks(
     // Sort by A position again (newly pushed chunks preserve order)
     chunks.sort_by_key(|c| (c.start_a, c.start_b));
 
-    fill_between_gaps(chunks, &kept_a, &kept_b, text_a.len(), text_b.len(), prefix_len, suffix_len);
+    fill_between_gaps(
+        chunks,
+        &kept_a,
+        &kept_b,
+        text_a.len(),
+        text_b.len(),
+        prefix_len,
+        suffix_len,
+    );
 }
 
 // ─── Chunk-splitting helpers ─────────────────────────────────────────
@@ -318,7 +361,9 @@ fn split_equal(
     // We know the indices of the chunks we just pushed: they are the
     // suffix of `out` whose length is at most the original chunk span.
     let old_len = out.len().saturating_sub(
-        (chunk.end_a - chunk.start_a).saturating_add(chunk.end_b - chunk.start_b).saturating_add(4)
+        (chunk.end_a - chunk.start_a)
+            .saturating_add(chunk.end_b - chunk.start_b)
+            .saturating_add(4),
     );
     let old_len = old_len.min(out.len());
     out[old_len..].sort_by_key(|c| (c.start_a, c.start_b));
@@ -330,11 +375,7 @@ fn split_equal(
 /// legitimate content) *and* extracts any non-kept A positions that were
 /// folded into the chunk's range by `unprocess_chunks` into separate
 /// Delete chunks with correct cross-side positions.
-fn split_delete(
-    out: &mut Vec<Chunk>,
-    chunk: &Chunk,
-    kept_a: &std::collections::HashSet<usize>,
-) {
+fn split_delete(out: &mut Vec<Chunk>, chunk: &Chunk, kept_a: &std::collections::HashSet<usize>) {
     let offset = ab_offset(chunk);
     // Emit the kept-position deletions — these ARE the filtered diff's output
     let mut a = chunk.start_a;
@@ -381,11 +422,7 @@ fn split_delete(
 /// Split an Insert chunk from the filtered diff.
 ///
 /// Like `split_delete` but for B-side non-kept positions.
-fn split_insert(
-    out: &mut Vec<Chunk>,
-    chunk: &Chunk,
-    kept_b: &std::collections::HashSet<usize>,
-) {
+fn split_insert(out: &mut Vec<Chunk>, chunk: &Chunk, kept_b: &std::collections::HashSet<usize>) {
     let offset = ab_offset(chunk);
     // Emit kept-position insertions
     let mut b = chunk.start_b;
@@ -962,6 +999,189 @@ pub fn merge_adjacent_replace_chunks(chunks: &[Chunk]) -> Vec<Chunk> {
     result
 }
 
+/// Adjust chunk boundaries and tags when `ignore_blank_lines` is active.
+///
+/// Mirrors the original Meld's `consume_blank_lines()` in `diffutil.py`.
+/// Trims leading and trailing blank lines from each chunk. If a `Replace`
+/// chunk's A or B side becomes empty after trimming, its tag is demoted
+/// to `Delete` or `Insert` respectively, and empty chunks are removed.
+pub fn consume_blank_lines(chunks: &mut Vec<Chunk>, text_a: &[String], text_b: &[String]) {
+    chunks.retain_mut(|chunk| {
+        let mut a_start = chunk.start_a;
+        let mut a_end = chunk.end_a;
+        let mut b_start = chunk.start_b;
+        let mut b_end = chunk.end_b;
+
+        // Trim leading blank lines from A side
+        while a_start < a_end && a_start < text_a.len() && text_a[a_start].trim().is_empty() {
+            a_start += 1;
+        }
+        // Trim trailing blank lines from A side
+        while a_end > a_start && a_end <= text_a.len() && text_a[a_end - 1].trim().is_empty() {
+            a_end -= 1;
+        }
+        // Trim leading blank lines from B side
+        while b_start < b_end && b_start < text_b.len() && text_b[b_start].trim().is_empty() {
+            b_start += 1;
+        }
+        // Trim trailing blank lines from B side
+        while b_end > b_start && b_end <= text_b.len() && text_b[b_end - 1].trim().is_empty() {
+            b_end -= 1;
+        }
+
+        let a_has_content = a_end > a_start;
+        let b_has_content = b_end > b_start;
+
+        // Adjust tag based on what remains
+        if chunk.op == DiffOp::Replace {
+            if a_has_content && b_has_content {
+                // Still a replace — update bounds
+                chunk.start_a = a_start;
+                chunk.end_a = a_end;
+                chunk.start_b = b_start;
+                chunk.end_b = b_end;
+                true
+            } else if a_has_content {
+                // Only A remains → demote to Delete
+                chunk.op = DiffOp::Delete;
+                chunk.start_a = a_start;
+                chunk.end_a = a_end;
+                chunk.start_b = b_start; // zero-width
+                chunk.end_b = b_start;
+                a_end > a_start
+            } else if b_has_content {
+                // Only B remains → demote to Insert
+                chunk.op = DiffOp::Insert;
+                chunk.start_a = a_start; // zero-width
+                chunk.end_a = a_start;
+                chunk.start_b = b_start;
+                chunk.end_b = b_end;
+                b_end > b_start
+            } else {
+                // Both empty → remove
+                false
+            }
+        } else if a_has_content || b_has_content {
+            chunk.start_a = a_start;
+            chunk.end_a = a_end;
+            chunk.start_b = b_start;
+            chunk.end_b = b_end;
+            true
+        } else {
+            false
+        }
+    });
+}
+
+// ─── Tokenization helper ───────────────────────────────────────────
+
+/// Split a line into tokens at whitespace, punctuation, and
+/// CamelCase/snake_case boundaries. Returns (tokens, start_offsets).
+///
+/// Each token is a contiguous run of alphanumeric characters or an
+/// individual punctuation/whitespace character. CamelCase identifiers
+/// like `FooBar` are split into `["Foo", "Bar"]`.
+fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
+    let mut tokens = Vec::new();
+    let mut offsets = Vec::new();
+    let chars: Vec<char> = line.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let ch = chars[i];
+        let start = i;
+
+        if ch.is_alphanumeric() || ch == '_' {
+            // Start of an identifier/word — split on camelCase and
+            // snake_case boundaries.
+            let mut word_start = i;
+            let mut prev_kind = char_kind(ch);
+
+            i += 1;
+            while i < len {
+                let c = chars[i];
+                let kind = char_kind(c);
+
+                if c == '_' {
+                    // snake_case boundary
+                    tokens.push(line[word_start..i].to_string());
+                    offsets.push(word_start);
+                    // Emit underscore as its own token
+                    tokens.push("_".to_string());
+                    offsets.push(i);
+                    i += 1;
+                    word_start = i;
+                    // Find next alphanumeric start
+                    while i < len && !chars[i].is_alphanumeric() && chars[i] != '_' {
+                        tokens.push(chars[i].to_string());
+                        offsets.push(i);
+                        i += 1;
+                    }
+                    word_start = i;
+                    if i < len {
+                        prev_kind = char_kind(chars[i]);
+                        i += 1;
+                    }
+                } else if kind != prev_kind
+                    && prev_kind == CharKind::Lower
+                    && kind == CharKind::Upper
+                {
+                    // camelCase boundary: "fooBar" -> "foo", "Bar"
+                    tokens.push(line[word_start..i].to_string());
+                    offsets.push(word_start);
+                    word_start = i;
+                    prev_kind = kind;
+                    i += 1;
+                } else if !c.is_alphanumeric() {
+                    // End of word at punctuation/whitespace
+                    tokens.push(line[word_start..i].to_string());
+                    offsets.push(word_start);
+                    word_start = i;
+                    break;
+                } else {
+                    prev_kind = kind;
+                    i += 1;
+                }
+            }
+
+            // Emit the remaining word
+            if word_start < i.min(len) {
+                tokens.push(line[word_start..i.min(len)].to_string());
+                offsets.push(word_start);
+            }
+        } else {
+            // Punctuation/whitespace — each character is its own token
+            tokens.push(ch.to_string());
+            offsets.push(start);
+            i += 1;
+        }
+    }
+
+    (tokens, offsets)
+}
+
+/// Classify a character for camelCase boundary detection.
+#[derive(Debug, PartialEq, Eq)]
+enum CharKind {
+    Lower,
+    Upper,
+    Digit,
+    Other,
+}
+
+fn char_kind(ch: char) -> CharKind {
+    if ch.is_lowercase() {
+        CharKind::Lower
+    } else if ch.is_uppercase() {
+        CharKind::Upper
+    } else if ch.is_ascii_digit() {
+        CharKind::Digit
+    } else {
+        CharKind::Other
+    }
+}
+
 // ─── Inline (word-level) diff ──────────────────────────────────────
 
 /// An in-word change within a single line.
@@ -1028,10 +1248,8 @@ impl InlineDiffer {
                     // Skip equal segments smaller than 3 chars that are not
                     // at the very start or end of the changed span (mirroring
                     // Python Meld's process_matches() filter).
-                    let at_start =
-                        first_change.map_or(false, |fc| i < fc);
-                    let at_end =
-                        last_change.map_or(false, |lc| i > lc);
+                    let at_start = first_change.map_or(false, |fc| i < fc);
+                    let at_end = last_change.map_or(false, |lc| i > lc);
                     if r.len < 3 && !at_start && !at_end {
                         continue;
                     }
@@ -1103,20 +1321,252 @@ impl InlineDiffer {
             i += 1;
         }
     }
+
+    /// Compare two lines at the token (word) level.
+    ///
+    /// Tokenizes each line into words split by whitespace, punctuation, and
+    /// CamelCase/snake_case boundaries. Then computes a diff over the token
+    /// sequences and maps the result back to character offsets in the
+    /// original lines.
+    ///
+    /// This produces more meaningful diffs for code than raw character-level
+    /// comparison, especially for identifier renames and import changes.
+    pub fn compare_line_tokens(line_a: &str, line_b: &str) -> Vec<InlineChange> {
+        if line_a == line_b {
+            return Vec::new();
+        }
+
+        let (tokens_a, offsets_a) = tokenize_with_offsets(line_a);
+        let (tokens_b, offsets_b) = tokenize_with_offsets(line_b);
+
+        let token_strs_a: Vec<&str> = tokens_a.iter().map(|t| t.as_str()).collect();
+        let token_strs_b: Vec<&str> = tokens_b.iter().map(|t| t.as_str()).collect();
+
+        let joined_a = token_strs_a.join("\n");
+        let joined_b = token_strs_b.join("\n");
+
+        let diff = TextDiff::from_lines(&joined_a, &joined_b);
+        let mut changes = Vec::new();
+
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Equal => {}
+                ChangeTag::Delete => {
+                    if let Some(idx) = change.old_index() {
+                        let end_idx = idx + change.value().lines().count();
+                        let start = offsets_a[idx];
+                        let end = if end_idx < offsets_a.len() {
+                            offsets_a[end_idx]
+                        } else {
+                            line_a.len()
+                        };
+                        if start < end {
+                            changes.push(InlineChange {
+                                start,
+                                end,
+                                op: DiffOp::Delete,
+                            });
+                        }
+                    }
+                }
+                ChangeTag::Insert => {
+                    if let Some(idx) = change.new_index() {
+                        let end_idx = idx + change.value().lines().count();
+                        let start = offsets_b[idx];
+                        let end = if end_idx < offsets_b.len() {
+                            offsets_b[end_idx]
+                        } else {
+                            line_b.len()
+                        };
+                        if start < end {
+                            changes.push(InlineChange {
+                                start,
+                                end,
+                                op: DiffOp::Insert,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Token-level diffs treat each identifier/punctuation group as an
+        // atomic unit.  Unlike character-level diffs, we do NOT call
+        // _postprocess_multi here: merging consecutive Delete+Insert runs
+        // would collapse distinct token changes (e.g., deleting
+        // "EnvironmentContext" and inserting "notifySuccess" at a different
+        // position) into a single over-broad Replace, losing the per-token
+        // granularity that Meld users expect.
+        changes
+    }
+
+    pub fn compare_import_lines(line_a: &str, line_b: &str) -> Vec<InlineChange> {
+        let ids_a = Self::extract_import_specifiers(line_a);
+        let ids_b = Self::extract_import_specifiers(line_b);
+        if ids_a.is_empty() || ids_b.is_empty() {
+            return Vec::new();
+        }
+        use std::collections::HashSet;
+        let set_a: HashSet<&str> = ids_a.iter().map(|(id, _)| id.as_str()).collect();
+        let set_b: HashSet<&str> = ids_b.iter().map(|(id, _)| id.as_str()).collect();
+        let mut changes = Vec::new();
+        for (id, (start, end)) in &ids_a {
+            if !set_b.contains(id.as_str()) {
+                changes.push(InlineChange {
+                    start: *start,
+                    end: *end,
+                    op: DiffOp::Delete,
+                });
+            }
+        }
+        for (id, (start, end)) in &ids_b {
+            if !set_a.contains(id.as_str()) {
+                changes.push(InlineChange {
+                    start: *start,
+                    end: *end,
+                    op: DiffOp::Insert,
+                });
+            }
+        }
+        changes
+    }
+
+    /// `other_sets` maps module -> all identifiers on the other buffer.
+    /// `missing_op` specifies the op for identifiers missing from the other
+    /// side: `DiffOp::Delete` for the left (old) pane, `DiffOp::Insert` for
+    /// the right (new) pane.
+    pub fn compare_import_lines_grouped(
+        line_this: &str,
+        _line_other: &str,
+        other_sets: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+        missing_op: DiffOp,
+    ) -> Vec<InlineChange> {
+        let (module, ids_this) = match Self::parse_import_line(line_this) {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        let empty_set = std::collections::HashSet::new();
+        let other_ids = other_sets.get(&module).unwrap_or(&empty_set);
+        let mut changes = Vec::new();
+        for (id, (start, end)) in &ids_this {
+            if !other_ids.contains(id) {
+                changes.push(InlineChange {
+                    start: *start,
+                    end: *end,
+                    op: missing_op,
+                });
+            }
+        }
+        changes
+    }
+    fn extract_import_specifiers(line: &str) -> Vec<(String, (usize, usize))> {
+        match Self::parse_import_line(line) {
+            Some((_module, ids)) => ids,
+            None => Vec::new(),
+        }
+    }
+
+    pub fn parse_import_line(line: &str) -> Option<(String, Vec<(String, (usize, usize))>)> {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("import") {
+            return None;
+        }
+        let brace_start = match line.find('{') {
+            Some(p) => p,
+            None => return None,
+        };
+        let brace_end = match line.rfind('}') {
+            Some(p) => p,
+            None => return None,
+        };
+        if brace_end <= brace_start {
+            return None;
+        }
+        let after_brace = &line[brace_end + 1..];
+        if !after_brace.contains("from") {
+            return None;
+        }
+        let module = match Self::extract_module_string(after_brace) {
+            Some(m) => m,
+            None => return None,
+        };
+        let inner = &line[brace_start + 1..brace_end];
+        let mut results = Vec::new();
+        let mut search_pos = brace_start + 1;
+        for part in inner.split(',') {
+            let trimmed_id = part.trim();
+            if !trimmed_id.is_empty() && Self::is_identifier(trimmed_id) {
+                if let Some(rel_pos) = line[search_pos..].find(trimmed_id) {
+                    let start = search_pos + rel_pos;
+                    let end = start + trimmed_id.len();
+                    let before_ok = start == 0
+                        || !line.as_bytes()[start - 1].is_ascii_alphanumeric()
+                            && line.as_bytes()[start - 1] != b'_';
+                    let after_ok = end >= line.len()
+                        || !line.as_bytes()[end].is_ascii_alphanumeric()
+                            && line.as_bytes()[end] != b'_';
+                    if before_ok && after_ok {
+                        results.push((trimmed_id.to_string(), (start, end)));
+                    }
+                    search_pos = end;
+                }
+            }
+        }
+        Some((module, results))
+    }
+
+    fn extract_module_string(after_brace: &str) -> Option<String> {
+        let from_pos = after_brace.find("from")?;
+        let after_from = &after_brace[from_pos + 4..];
+        let trimmed = after_from.trim_start();
+        let quote = trimmed.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+        let inner = &trimmed[1..];
+        let close_pos = inner.find(quote)?;
+        Some(inner[..close_pos].to_string())
+    }
+
+    fn is_identifier(s: &str) -> bool {
+        let mut chars = s.chars();
+        match chars.next() {
+            Some(c) if c.is_alphabetic() || c == '_' || c == '$' => {}
+            _ => return false,
+        }
+        chars.all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    }
 }
 
 // ─── Line cache (O(1) chunk navigation) ────────────────────────────
 
 /// Caches a mapping from line numbers to chunk indices for fast navigation.
+///
+/// Stores `(prev, curr, next)` chunk indices per line so that navigation
+/// (next/previous change) and hover sync can operate in O(1) time.
+/// Only non-Equal chunks are tracked; Equal chunks return `None` for all three.
 #[derive(Debug, Clone)]
 pub struct LineCache {
+    /// The chunk index containing each line, if the chunk is non-Equal.
     entries: Vec<Option<usize>>,
+    /// The previous non-Equal chunk index for each line (for prev-change nav).
+    prevs: Vec<Option<usize>>,
+    /// The next non-Equal chunk index for each line (for next-change nav).
+    nexts: Vec<Option<usize>>,
 }
 
 impl LineCache {
     /// Build a line cache from diff chunks.
+    ///
+    /// Computes `(prev, curr, next)` for every line in O(chunks * lines)
+    /// by scanning forward for `prev`/`curr` and backward for `next`.
     pub fn new(chunks: &[Chunk], max_lines: usize) -> Self {
         let mut entries = vec![None; max_lines];
+        let mut prevs = vec![None; max_lines];
+        let mut nexts = vec![None; max_lines];
+
+        // Forward pass: fill `entries` and `prevs`
+        let mut prev_non_equal: Option<usize> = None;
         for (ci, chunk) in chunks.iter().enumerate() {
             let (start, end) = match chunk.op {
                 DiffOp::Delete => (chunk.start_a, chunk.end_a),
@@ -1131,9 +1581,34 @@ impl LineCache {
                 if entries[line].is_none() {
                     entries[line] = Some(ci);
                 }
+                prevs[line] = prev_non_equal;
             }
+            prev_non_equal = Some(ci);
         }
-        Self { entries }
+
+        // Backward pass: fill `nexts`
+        let mut next_non_equal: Option<usize> = None;
+        for (ci, chunk) in chunks.iter().enumerate().rev() {
+            let (start, end) = match chunk.op {
+                DiffOp::Delete => (chunk.start_a, chunk.end_a),
+                DiffOp::Insert => (chunk.start_b, chunk.end_b),
+                DiffOp::Replace => (
+                    chunk.start_a.max(chunk.start_b),
+                    chunk.end_a.max(chunk.end_b),
+                ),
+                DiffOp::Equal => continue,
+            };
+            for line in start..end.min(max_lines) {
+                nexts[line] = next_non_equal;
+            }
+            next_non_equal = Some(ci);
+        }
+
+        Self {
+            entries,
+            prevs,
+            nexts,
+        }
     }
 
     /// Return the chunk index for a given line, if any.
@@ -1141,11 +1616,16 @@ impl LineCache {
         self.entries.get(line).copied().flatten()
     }
 
-    /// Return the chunk indices surrounding a line (prev, curr, next).
-    pub fn chunk_triad(&self, _line: usize) -> (Option<usize>, Option<usize>, Option<usize>) {
-        // Simplified: just return current
-        let curr = self.locate_chunk(_line);
-        (None, curr, None)
+    /// Return the chunk indices surrounding a line `(prev, curr, next)`.
+    ///
+    /// Only non-Equal chunks are returned — Equal chunks are skipped
+    /// to match navigation expectations (jumping between actual changes).
+    /// All three may be `None` if the line is in an Equal region.
+    pub fn chunk_triad(&self, line: usize) -> (Option<usize>, Option<usize>, Option<usize>) {
+        let curr = self.locate_chunk(line);
+        let prev = self.prevs.get(line).copied().flatten();
+        let next = self.nexts.get(line).copied().flatten();
+        (prev, curr, next)
     }
 }
 

@@ -112,6 +112,19 @@
     background: #8ac2ff;
 }
 
+/* ── Differentiated inline diff tags (token-level) ── */
+.meld-inline-delete {
+    background: #ff6666;
+}
+
+.meld-inline-insert {
+    background: #66ff66;
+}
+
+.meld-inline-replace {
+    background: #4488ff;
+}
+
 .meld-current-line-highlight {
     background: rgba(255, 255, 0, 0.25);
 }
@@ -184,6 +197,19 @@ textview.diff-inline {
     background-color: #8ac2ff;
 }
 
+/* ── Differentiated inline diff tags ── */
+textview.diff-inline-delete {
+    background-color: #ff6666;
+}
+
+textview.diff-inline-insert {
+    background-color: #66ff66;
+}
+
+textview.diff-inline-replace {
+    background-color: #4488ff;
+}
+
 /* ── Search highlight ── */
 textview text.selection {
     background-color: @theme_selected_bg_color;
@@ -235,6 +261,19 @@ notebook tab {
         background: #24527e;
     }
 
+    /* Differentiated inline tags — dark mode */
+    .meld-inline-delete {
+        background: #7a2828;
+    }
+
+    .meld-inline-insert {
+        background: #285728;
+    }
+
+    .meld-inline-replace {
+        background: #28487a;
+    }
+
     .meld-current-line-highlight {
         background: rgba(17, 17, 0, 0.25);
     }
@@ -277,5 +316,14 @@ notebook tab {
     }
     textview.diff-inline {
         background-color: #24527e;
+    }
+    textview.diff-inline-delete {
+        background-color: #7a2828;
+    }
+    textview.diff-inline-insert {
+        background-color: #285728;
+    }
+    textview.diff-inline-replace {
+        background-color: #28487a;
     }
 }

@@ -6,6 +6,12 @@
 pub mod engine;
 pub mod matchers;
 
+/// Cross-line similarity matching for non-aligned changes.
+pub mod similarity;
+
+/// Moved code block detection for relocated content.
+pub mod movement;
+
 /// LRU cache for inline (character-level) diff results.
 pub mod inline_cache;
 

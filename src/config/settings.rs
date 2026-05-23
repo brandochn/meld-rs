@@ -69,6 +69,16 @@ pub struct MeldSettings {
     #[serde(default)]
     pub ignore_blank_lines: bool,
 
+    // ── Diff visualization ──
+    #[serde(default = "default_true")]
+    pub detect_moved_lines: bool,
+    #[serde(default = "default_true")]
+    pub show_connectors: bool,
+    #[serde(default = "default_inline_mode")]
+    pub inline_diff_mode: String,
+    #[serde(default = "default_similarity_threshold")]
+    pub similarity_threshold: f64,
+
     // ── External helpers ──
     #[serde(default = "default_true")]
     pub use_system_editor: bool,
@@ -234,6 +244,14 @@ fn default_neg1() -> i32 {
     -1
 }
 
+fn default_inline_mode() -> String {
+    "characters".into()
+}
+
+fn default_similarity_threshold() -> f64 {
+    0.6
+}
+
 impl Default for MeldSettings {
     fn default() -> Self {
         Self {
@@ -252,6 +270,10 @@ impl Default for MeldSettings {
             show_overview_map: true,
             overview_map_style: "chunkmap".into(),
             ignore_blank_lines: false,
+            detect_moved_lines: true,
+            show_connectors: true,
+            inline_diff_mode: "characters".into(),
+            similarity_threshold: 0.6,
             use_system_editor: true,
             custom_editor_command: String::new(),
             folder_columns: default_folder_columns(),
