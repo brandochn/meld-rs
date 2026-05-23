@@ -425,12 +425,6 @@ impl FileDiff {
         let result = differ.compare();
         let merged = merge_adjacent_replace_chunks(&result.chunks);
 
-        log::debug!(
-            "compute_diff: raw={:?}, merged={:?}",
-            &result.chunks,
-            &merged
-        );
-
         // ── Cross-line similarity matching ──────────────────────────
         // Build the set of line indices that are already matched by the
         // line-level diff (Equal chunks). These are NOT candidates for
@@ -481,6 +475,12 @@ impl FileDiff {
             gutter.set_chunks(&merged);
         }
 
+        // Build token-level moved-identifier relations for visual connectors.
+        // Must happen BEFORE the link-map update loop so every link map
+        // receives the freshly computed relations, not stale data from the
+        // previous diff run.
+        *self.token_relations.borrow_mut() = build_token_relations(&text_a, &text_b);
+
         // Update link maps with chunks, similarity, movement, and token relations
         for lm in &self.link_maps {
             lm.update_chunks(&merged);
@@ -488,9 +488,6 @@ impl FileDiff {
             lm.update_moves(&movement);
             lm.update_token_relations(&self.token_relations.borrow());
         }
-
-        // Build token-level moved-identifier relations for visual connectors
-        *self.token_relations.borrow_mut() = build_token_relations(&text_a, &text_b);
 
         // Store for later use (e.g., tooltips, hover sync)
         *self.similarity_map.borrow_mut() = similarity;
@@ -1212,8 +1209,6 @@ impl FileDiff {
                 let differ = Differ::new(text_a.clone(), text_b.clone());
                 let result = differ.compare();
                 let merged = merge_adjacent_replace_chunks(&result.chunks);
-
-                log::debug!("changed: raw={:?}, merged={:?}", &result.chunks, &merged);
 
                 // Clear and re-apply tags
                 for (bi, buf) in buffers.iter().enumerate() {

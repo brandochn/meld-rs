@@ -71,12 +71,17 @@ pub struct TokenRelation {
 }
 
 /// Pixel layout for a single token, computed from the text view.
+///
+/// Holds the single representative point for the token:
+/// the horizontal character position and the vertical centre of its line.
 #[derive(Debug, Clone, Copy)]
 struct TokenLayout {
-    /// Buffer-space Y (pixels from top of buffer).
-    buffer_y: f64,
-    /// Line height in pixels.
-    height: f64,
+    /// Buffer-space X of the token's representative character (pixels from
+    /// the left edge of the text area).
+    x: f64,
+    /// Buffer-space Y at the vertical centre of the token's line (pixels
+    /// from the top of the buffer, before scroll compensation).
+    center_y: f64,
 }
 
 impl LinkMap {
@@ -105,9 +110,10 @@ impl LinkMap {
         let draw_left_view = Rc::clone(&left_view);
         let draw_right_view = Rc::clone(&right_view);
 
-        drawing_area.set_draw_func(move |_da, cr, width, height| {
+        drawing_area.set_draw_func(move |da, cr, width, height| {
             // ── FORCED DEBUG: verify rendering pipeline is active ──
             eprintln!("LINKMAP DRAW w={} h={}", width, height);
+            let da_widget: &gtk::Widget = da.upcast_ref();
 
             let w = width as f64;
             let h = height as f64;
@@ -149,13 +155,6 @@ impl LinkMap {
             // Background
             cr.set_source_rgba(0.95, 0.95, 0.95, 0.6);
             cr.paint().ok();
-
-            // ── FORCED DEBUG: verify rendering pipeline is active ──
-            // Drawn AFTER background so it's visible on top.
-            cr.set_source_rgb(1.0, 0.0, 0.0);
-            cr.set_line_width(3.0);
-            cr.rectangle(2.0, 2.0, w - 4.0, h - 4.0);
-            cr.stroke().ok();
 
             for chunk in chunks.iter() {
                 // Viewport culling: skip chunks outside the visible range
@@ -274,30 +273,16 @@ impl LinkMap {
                 cr.set_dash(&[], 0.0);
             }
 
-            // ── FORCED TEST: fixed-position line to prove drawing works ──
-            cr.set_source_rgb(0.0, 1.0, 0.0); // green
-            cr.set_line_width(4.0);
-            if w >= 40.0 && h >= 40.0 {
-                cr.move_to(5.0, 5.0);
-                cr.line_to(w - 5.0, h - 5.0);
-                cr.stroke().ok();
-                cr.move_to(w - 5.0, 5.0);
-                cr.line_to(5.0, h - 5.0);
-                cr.stroke().ok();
-            }
-
-            // Draw token-level moved-identifier connectors (thin blue curves)
-            // using real pixel coordinates from GtkTextView APIs.
+            // Draw token-level moved-identifier connectors.
             //
-            // Coordinate pipeline (no translate_coordinates, no
-            // buffer_to_window_coords — only buffer-space coords +
-            // scroll compensation):
-            //   1. buffer.iter_at_offset(start_offset)  → GtkTextIter
-            //   2. text_view.iter_location(&iter)        → GdkRectangle (buffer space)
-            //   3. visible_y = rect.y() - vadjustment.value()
-            //   4. draw curve at visible_y in DrawingArea
-            cr.set_source_rgba(0.27, 0.53, 1.0, 0.7);
-            cr.set_line_width(1.5);
+            // Full coordinate pipeline:
+            //   1. translate_coordinates(lv/rv → da) gives the text view's
+            //      top-left corner in DrawingArea space (left_origin / right_origin).
+            //   2. iter_at_offset(center_offset) → iter_location(iter) gives the
+            //      character rectangle in buffer coordinates (buffer space).
+            //   3. Final position = origin + buffer_rect - scroll.
+            //      This correctly handles both horizontal and vertical offsets,
+            //      regardless of widget layout or heading heights.
 
             let token_count = token_entries.len();
             if token_count > 0 {
@@ -305,108 +290,92 @@ impl LinkMap {
             }
 
             if let (Some(lv), Some(rv)) = (left_view_opt.as_ref(), right_view_opt.as_ref()) {
-                // Get scroll offsets from both text views.
-                // `vadjustment().value()` is the pixel offset from the top
-                // of the buffer that is currently at the top of the visible
-                // viewport.  Subtracting it from buffer_y gives the Y
-                // position relative to the visible area — which matches
-                // the DrawingArea coordinate space because both widgets
-                // share the same vertical extent in the layout.
+                let lv_widget: &gtk::Widget = lv.upcast_ref();
+                let rv_widget: &gtk::Widget = rv.upcast_ref();
+
+                // Translate each text view's y-origin into DrawingArea space.
+                // Only the Y component matters: for a link-map strip the left
+                // connector endpoint is always at x=0 (left edge of the strip)
+                // and the right endpoint at x=w (right edge). Adding the text
+                // view's buffer x to a large negative/positive origin_x would
+                // place both endpoints far outside the strip.
+                let (_, left_origin_y) = lv_widget
+                    .translate_coordinates(da_widget, 0.0, 0.0)
+                    .unwrap_or((0.0, 0.0));
+                let (_, right_origin_y) = rv_widget
+                    .translate_coordinates(da_widget, 0.0, 0.0)
+                    .unwrap_or((0.0, 0.0));
+
+                // Scroll offsets: how many buffer pixels are above the viewport.
                 let scroll_left = lv.vadjustment().map(|a| a.value()).unwrap_or(0.0);
                 let scroll_right = rv.vadjustment().map(|a| a.value()).unwrap_or(0.0);
 
-                // Track all Y values to detect same-Y bug
-                let mut all_y_left: Vec<f64> = Vec::with_capacity(token_count);
-                let mut all_y_right: Vec<f64> = Vec::with_capacity(token_count);
-
                 for (idx, tr) in token_entries.iter().enumerate() {
-                    // ── Build left-side token layout ──
-                    let left_layout = compute_token_layout(lv, tr.left_offset_start as i32);
+                    // ── STEP 1: Validate relation — both sides must be present ──
+                    println!(
+                        "RELATION [{}]: left_line={} → right_line={}",
+                        idx, tr.left_line, tr.right_line
+                    );
 
-                    // ── Build right-side token layout ──
-                    let right_layout = compute_token_layout(rv, tr.right_offset_start as i32);
+                    // ONE offset per side: the centre of the character span.
+                    // Never iterate over the range; use this single point only.
+                    let left_center =
+                        ((tr.left_offset_start + tr.left_offset_end) / 2) as i32;
+                    let right_center =
+                        ((tr.right_offset_start + tr.right_offset_end) / 2) as i32;
 
-                    // ── Compute visible Y: buffer_y - scroll ──
-                    let (left_h, yl) = match left_layout {
+                    // ONE iter → ONE rect → ONE layout per side.
+                    let left_layout = compute_token_layout(lv, left_center);
+                    let right_layout = compute_token_layout(rv, right_center);
+
+                    // ── STEP 2: Resolve left endpoint ──
+                    // lx is always the LEFT edge of the strip (x = 0).
+                    // ly = origin_y_offset + buffer_center_y − scroll, clamped
+                    //      to the visible height so the dot stays inside the widget.
+                    let (lx, ly) = match left_layout {
                         Some(ref l) => {
-                            let vy = l.buffer_y - scroll_left;
-                            eprintln!(
-                                "TOKEN [{}] LEFT  offset={} buf_y={:.0} scroll={:.0} -> y={:.0}",
-                                idx, tr.left_offset_start, l.buffer_y, scroll_left, vy,
-                            );
-                            (l.height, vy)
+                            let y = (left_origin_y + l.center_y - scroll_left)
+                                .clamp(0.0, h);
+                            println!("LEFT:  ({:.1}, {:.1})", 0.0_f64, y);
+                            (0.0_f64, y)
                         }
                         None => {
-                            eprintln!(
-                                "TOKEN [{}] LEFT  offset={} -> LAYOUT FAILED (past end)",
-                                idx, tr.left_offset_start,
-                            );
-                            (18.0, (tr.left_line as f64 / max_lines as f64) * h + 2.0)
+                            let y = (tr.left_line as f64 / max_lines as f64) * h + 2.0;
+                            println!("LEFT:  fallback (0.0, {:.1})", y);
+                            (0.0_f64, y)
                         }
                     };
 
-                    let (right_h, yr) = match right_layout {
+                    // ── STEP 3: Resolve right endpoint ──
+                    // rx is always the RIGHT edge of the strip (x = w).
+                    let (rx, ry) = match right_layout {
                         Some(ref l) => {
-                            let vy = l.buffer_y - scroll_right;
-                            eprintln!(
-                                "TOKEN [{}] RIGHT offset={} buf_y={:.0} scroll={:.0} -> y={:.0}",
-                                idx, tr.right_offset_start, l.buffer_y, scroll_right, vy,
-                            );
-                            (l.height, vy)
+                            let y = (right_origin_y + l.center_y - scroll_right)
+                                .clamp(0.0, h);
+                            println!("RIGHT: ({:.1}, {:.1})", w, y);
+                            (w, y)
                         }
                         None => {
-                            eprintln!(
-                                "TOKEN [{}] RIGHT offset={} -> LAYOUT FAILED (past end)",
-                                idx, tr.right_offset_start,
-                            );
-                            (18.0, (tr.right_line as f64 / max_lines as f64) * h + 2.0)
+                            let y = (tr.right_line as f64 / max_lines as f64) * h + 2.0;
+                            println!("RIGHT: fallback ({:.1}, {:.1})", w, y);
+                            (w, y)
                         }
                     };
 
-                    // Clamp to DrawingArea bounds
-                    let yl_c = (yl + left_h / 2.0).clamp(0.0, h);
-                    let yr_c = (yr + right_h / 2.0).clamp(0.0, h);
-
-                    all_y_left.push(yl_c);
-                    all_y_right.push(yr_c);
-
-                    // ── FORCE DEBUG: red/green circles at token positions ──
+                    // ── Debug dots at the real endpoints (both inside the strip) ──
                     cr.set_source_rgb(1.0, 0.0, 0.0);
-                    cr.arc(5.0, yl_c, 4.0, 0.0, 2.0 * std::f64::consts::PI);
+                    cr.arc(lx + 4.0, ly, 4.0, 0.0, 2.0 * std::f64::consts::PI);
                     cr.fill().ok();
                     cr.set_source_rgb(0.0, 0.7, 0.0);
-                    cr.arc(w - 5.0, yr_c, 4.0, 0.0, 2.0 * std::f64::consts::PI);
+                    cr.arc(rx - 4.0, ry, 4.0, 0.0, 2.0 * std::f64::consts::PI);
                     cr.fill().ok();
 
-                    // ── Draw the connector curve ──
+                    // ── Exactly ONE connector per relation ──
                     cr.set_source_rgba(0.27, 0.53, 1.0, 0.9);
                     cr.set_line_width(2.0);
-                    cr.move_to(0.0, yl_c);
-                    let cp_y = (yl_c + yr_c) / 2.0;
-                    cr.curve_to(w * 0.3, cp_y - 2.0, w * 0.7, cp_y + 2.0, w, yr_c);
+                    cr.move_to(lx, ly);
+                    cr.line_to(rx, ry);
                     cr.stroke().ok();
-                }
-
-                // ── Detect same-Y bug: all left or all right Y equal ──
-                if token_count > 1 {
-                    let all_same_left = all_y_left.windows(2).all(|w| (w[0] - w[1]).abs() < 0.5);
-                    let all_same_right = all_y_right.windows(2).all(|w| (w[0] - w[1]).abs() < 0.5);
-                    if all_same_left {
-                        eprintln!(
-                            "LINKMAP BUG: all {} left Y values equal ({:.0}) — \
-                             offsets or scroll may be wrong",
-                            token_count,
-                            all_y_left.first().copied().unwrap_or(0.0),
-                        );
-                    }
-                    if all_same_right {
-                        eprintln!(
-                            "LINKMAP BUG: all {} right Y values equal ({:.0}) — \
-                             offsets or scroll may be wrong",
-                            token_count,
-                            all_y_right.first().copied().unwrap_or(0.0),
-                        );
-                    }
                 }
             } else {
                 eprintln!("LINKMAP views not associated — skipping token connectors");
@@ -496,37 +465,39 @@ impl LinkMap {
 
 // ─── Helper: compute real pixel position of a buffer token ──────────
 
-/// Return the buffer-space Y and line height for the character at
-/// `start_offset`.
+/// Return the single representative pixel point for the character at
+/// `center_offset` within `view`.
 ///
-/// Uses `iter_at_offset` → `GtkTextIter`, then `iter_location` →
-/// `GdkRectangle` in **buffer coordinates** (origin at top of buffer,
-/// not affected by window position or scroll).
+/// Pipeline (one offset → one iter → one rect → one point):
+/// 1. `buffer.iter_at_offset(center_offset)` → `GtkTextIter`
+/// 2. `text_view.iter_location(&iter)`        → `GdkRectangle` (buffer space)
+/// 3. `x      = rect.x()`
+///    `center_y = rect.y() + rect.height() / 2`
 ///
-/// The caller must compensate for the current scroll offset by
-/// subtracting `vadjustment().value()` before drawing.
+/// All coordinates are in **buffer space** (origin at the top of the
+/// full buffer, independent of scroll position).  The caller must
+/// subtract `vadjustment().value()` to obtain DrawingArea-relative Y.
 ///
-/// Returns `None` when the offset is past the end of the buffer (e.g.
-/// the buffer was modified since token relations were built).
-fn compute_token_layout(view: &gsv::View, start_offset: i32) -> Option<TokenLayout> {
+/// Returns `None` when `center_offset` is past the end of the buffer
+/// (e.g. the buffer was modified since the token relations were built).
+fn compute_token_layout(view: &gsv::View, center_offset: i32) -> Option<TokenLayout> {
     use gtk4::prelude::TextViewExt;
 
     let buffer = view.buffer();
 
-    // Step 1: get a GtkTextIter at the character offset.
-    // When the offset is past-end, gtk returns the end iter.
-    let start_iter = buffer.iter_at_offset(start_offset);
-    if start_iter.is_end() && start_offset > 0 {
+    // Step 1: single GtkTextIter at the centre of the token span.
+    let iter = buffer.iter_at_offset(center_offset);
+    if iter.is_end() && center_offset > 0 {
         return None;
     }
 
-    // Step 2: get the pixel rectangle in buffer coordinates.
-    // rect.y() is the pixel distance from the top of the buffer.
+    // Step 2: pixel rectangle in buffer coordinates.
     let tv: &gtk::TextView = view.upcast_ref();
-    let rect = tv.iter_location(&start_iter);
+    let rect = tv.iter_location(&iter);
 
+    // Step 3: derive the single representative point.
     Some(TokenLayout {
-        buffer_y: rect.y() as f64,
-        height: rect.height() as f64,
+        x: rect.x() as f64,
+        center_y: rect.y() as f64 + rect.height() as f64 / 2.0,
     })
 }
