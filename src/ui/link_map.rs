@@ -128,78 +128,97 @@ impl LinkMap {
             let left_view_opt = draw_left_view.borrow();
             let right_view_opt = draw_right_view.borrow();
 
-            // Determine visible line ranges for viewport culling
-            let (vis_start, vis_end) =
-                if let (Some(lv), Some(rv)) = (left_view_opt.as_ref(), right_view_opt.as_ref()) {
-                    let l_rect = lv.visible_rect();
-                    let r_rect = rv.visible_rect();
-                    let l_buf = lv.buffer();
-                    let r_buf = rv.buffer();
-                    let l_total = l_buf.line_count().max(1) as f64;
-                    let r_total = r_buf.line_count().max(1) as f64;
-                    let l_rect_h = l_rect.height() as f64;
-                    let l_rect_y = l_rect.y() as f64;
-                    let r_rect_h = r_rect.height() as f64;
-                    let r_rect_y = r_rect.y() as f64;
-                    let l_start = (l_rect_y / l_rect_h.max(1.0) * l_total) as usize;
-                    let l_end = ((l_rect_y + l_rect_h) / l_rect_h.max(1.0) * l_total) as usize;
-                    let r_start = (r_rect_y / r_rect_h.max(1.0) * r_total) as usize;
-                    let r_end = ((r_rect_y + r_rect_h) / r_rect_h.max(1.0) * r_total) as usize;
-                    let start = l_start.min(r_start);
-                    let end = l_end.max(r_end);
-                    (start.saturating_sub(5), end + 5)
-                } else {
-                    (0, max_lines)
-                };
-
             // Background
             cr.set_source_rgba(0.95, 0.95, 0.95, 0.6);
             cr.paint().ok();
 
-            for chunk in chunks.iter() {
-                // Viewport culling: skip chunks outside the visible range
-                if chunk.end_a < vis_start && chunk.end_b < vis_start {
-                    continue;
+            // Helper: translate a line number in a text view to a Y
+            // position in LinkMap widget coordinates.  Mirrors Python
+            // Meld's `view_offset_line()`.  Correctly subtracts the
+            // scroll offset so that curves move with the text.
+            let line_to_y = |view_opt: &Option<gsv::View>, line: usize| -> f64 {
+                if let Some(view) = view_opt {
+                    // Scroll offset: how many buffer pixels are above
+                    // the visible viewport.
+                    let scroll = view.vadjustment().map(|a| a.value()).unwrap_or(0.0);
+
+                    let buffer_y = if line >= view.buffer().line_count() as usize {
+                        // Past-the-end: use the bottom of the last line.
+                        let last = (view.buffer().line_count() - 1).max(0);
+                        if let Some(iter) = view.buffer().iter_at_line(last) {
+                            let rect = view.iter_location(&iter);
+                            rect.y() as f64 + rect.height() as f64
+                        } else {
+                            return (line as f64 / max_lines as f64) * h;
+                        }
+                    } else if let Some(iter) = view.buffer().iter_at_line(line as i32) {
+                        let rect = view.iter_location(&iter);
+                        rect.y() as f64
+                    } else {
+                        return (line as f64 / max_lines as f64) * h;
+                    };
+
+                    // Convert buffer Y to view-relative Y (account for scroll).
+                    let visible_y = buffer_y - scroll;
+
+                    // Translate from the view's widget coordinate system
+                    // to the LinkMap's DrawingArea coordinate system.
+                    let (_, widget_y) = view
+                        .upcast_ref::<gtk::Widget>()
+                        .translate_coordinates(da_widget, 0.0, visible_y)
+                        .unwrap_or((0.0, visible_y));
+                    return widget_y;
                 }
-                if chunk.start_a > vis_end && chunk.start_b > vis_end {
+                (line as f64 / max_lines as f64) * h
+            };
+
+            for chunk in chunks.iter() {
+                if chunk.op == DiffOp::Equal {
                     continue;
                 }
 
-                let y_from_start = (chunk.start_a as f64 / max_lines as f64) * h;
-                let y_from_end = (chunk.end_a as f64 / max_lines as f64) * h;
-                let y_to_start = (chunk.start_b as f64 / max_lines as f64) * h;
-                let y_to_end = (chunk.end_b as f64 / max_lines as f64) * h;
+                // Get line positions in LinkMap widget coordinates via the
+                // text views' buffer iterators and coordinate translation.
+                // This mirrors Python Meld's `view_offset_line()`, properly
+                // handling scroll offsets and widget layout.
+                let f0 = line_to_y(&left_view_opt, chunk.start_a);
+                let f1 = if chunk.end_a == chunk.start_a {
+                    f0
+                } else {
+                    line_to_y(&left_view_opt, chunk.end_a.saturating_sub(1))
+                        + (line_to_y(&left_view_opt, chunk.end_a) - f0).max(1.0)
+                };
+
+                let t0 = line_to_y(&right_view_opt, chunk.start_b);
+                let t1 = if chunk.end_b == chunk.start_b {
+                    t0
+                } else {
+                    line_to_y(&right_view_opt, chunk.end_b.saturating_sub(1))
+                        + (line_to_y(&right_view_opt, chunk.end_b) - t0).max(1.0)
+                };
 
                 let (r, g, b) = match chunk.op {
-                    DiffOp::Equal => (0.5, 0.5, 0.5),
                     DiffOp::Delete => (1.0, 0.3, 0.3),
                     DiffOp::Insert => (0.3, 1.0, 0.3),
                     DiffOp::Replace => (0.3, 0.3, 1.0),
+                    DiffOp::Equal => continue,
                 };
 
-                let has_from = chunk.end_a > chunk.start_a;
-                let has_to = chunk.end_b > chunk.start_b;
-
-                if !has_from && !has_to {
-                    continue;
-                }
-
-                // Draw filled bezier shape (matching original Meld's LinkMap)
-                let y0 = y_from_start.max(0.0);
-                let y1 = y_from_end.min(h);
-                let t0 = y_to_start.max(0.0);
-                let t1 = y_to_end.min(h);
+                let y0 = f0.clamp(0.0, h);
+                let y1 = f1.clamp(0.0, h);
+                let t0c = t0.clamp(0.0, h);
+                let t1c = t1.clamp(0.0, h);
 
                 let x_left = 0.0;
                 let x_mid = w / 2.0;
                 let x_right = w;
 
-                // Fill the connected region
+                // Draw filled bezier shape (matching original Meld's LinkMap)
                 cr.set_source_rgba(r, g, b, 0.2);
                 cr.move_to(x_left, y0);
-                cr.curve_to(x_mid, y0, x_mid, t0, x_right, t0);
-                cr.line_to(x_right, t1);
-                cr.curve_to(x_mid, t1, x_mid, y1, x_left, y1);
+                cr.curve_to(x_mid, y0, x_mid, t0c, x_right, t0c);
+                cr.line_to(x_right, t1c);
+                cr.curve_to(x_mid, t1c, x_mid, y1, x_left, y1);
                 cr.close_path();
                 cr.fill().ok();
 
@@ -207,10 +226,10 @@ impl LinkMap {
                 cr.set_source_rgba(r, g, b, 0.5);
                 cr.set_line_width(1.0);
                 cr.move_to(x_left, y0);
-                cr.curve_to(x_mid, y0, x_mid, t0, x_right, t0);
+                cr.curve_to(x_mid, y0, x_mid, t0c, x_right, t0c);
                 cr.stroke().ok();
                 cr.move_to(x_left, y1);
-                cr.curve_to(x_mid, y1, x_mid, t1, x_right, t1);
+                cr.curve_to(x_mid, y1, x_mid, t1c, x_right, t1c);
                 cr.stroke().ok();
             }
 
@@ -319,10 +338,8 @@ impl LinkMap {
 
                     // ONE offset per side: the centre of the character span.
                     // Never iterate over the range; use this single point only.
-                    let left_center =
-                        ((tr.left_offset_start + tr.left_offset_end) / 2) as i32;
-                    let right_center =
-                        ((tr.right_offset_start + tr.right_offset_end) / 2) as i32;
+                    let left_center = ((tr.left_offset_start + tr.left_offset_end) / 2) as i32;
+                    let right_center = ((tr.right_offset_start + tr.right_offset_end) / 2) as i32;
 
                     // ONE iter → ONE rect → ONE layout per side.
                     let left_layout = compute_token_layout(lv, left_center);
@@ -334,8 +351,7 @@ impl LinkMap {
                     //      to the visible height so the dot stays inside the widget.
                     let (lx, ly) = match left_layout {
                         Some(ref l) => {
-                            let y = (left_origin_y + l.center_y - scroll_left)
-                                .clamp(0.0, h);
+                            let y = (left_origin_y + l.center_y - scroll_left).clamp(0.0, h);
                             println!("LEFT:  ({:.1}, {:.1})", 0.0_f64, y);
                             (0.0_f64, y)
                         }
@@ -350,8 +366,7 @@ impl LinkMap {
                     // rx is always the RIGHT edge of the strip (x = w).
                     let (rx, ry) = match right_layout {
                         Some(ref l) => {
-                            let y = (right_origin_y + l.center_y - scroll_right)
-                                .clamp(0.0, h);
+                            let y = (right_origin_y + l.center_y - scroll_right).clamp(0.0, h);
                             println!("RIGHT: ({:.1}, {:.1})", w, y);
                             (w, y)
                         }
