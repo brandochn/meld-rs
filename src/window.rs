@@ -77,7 +77,7 @@ impl MeldWindow {
     pub fn new(app: &gtk::Application) -> Self {
         let window = gtk::ApplicationWindow::new(app);
         window.set_title(Some("Meld-rs"));
-        window.set_default_size(900, 650);
+        window.set_default_size(1280, 720);
 
         // ── Load settings ──
         let settings = Rc::new(MeldSettings::load().unwrap_or_default());

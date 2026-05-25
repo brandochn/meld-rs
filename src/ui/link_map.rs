@@ -403,6 +403,23 @@ impl LinkMap {
     pub fn associate(&self, left: &gsv::View, right: &gsv::View) {
         self.left_view.replace(Some(left.clone()));
         self.right_view.replace(Some(right.clone()));
+
+        // Whenever either text view scrolls, the connector Y positions change.
+        // Queue a redraw so the draw function re-reads vadjustment().value()
+        // and paints the connector at the correct updated position.
+        if let Some(adj) = left.vadjustment() {
+            let da = self.drawing_area.clone();
+            adj.connect_value_changed(move |_| {
+                da.queue_draw();
+            });
+        }
+        if let Some(adj) = right.vadjustment() {
+            let da = self.drawing_area.clone();
+            adj.connect_value_changed(move |_| {
+                da.queue_draw();
+            });
+        }
+
         self.drawing_area.queue_draw();
     }
 

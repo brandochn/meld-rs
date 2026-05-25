@@ -853,21 +853,19 @@ impl FileDiff {
             );
 
             if start < end {
-                // Apply line-level tag per-line.  For import lines, skip the
-                // line-level background entirely — rely on per-token inline
-                // tags for a pure token-identity-based rendering.
+                // Apply line-level tag per-line.  For Replace chunks on import
+                // lines we apply BOTH the line-level background (blue for
+                // Replace) AND per-token inline tags (red/green for individual
+                // identifiers) — matching Meld's original behaviour.  The
+                // inline tags are applied after the loop by apply_inline_diff()
+                // and their per-character backgrounds take visual precedence
+                // over the line-level background for the changed identifiers.
                 for line_num in start..end {
                     let ls = buffer.iter_at_line_offset(line_num as i32, 0);
                     let le = buffer.iter_at_line_offset((line_num + 1) as i32, 0);
                     if let (Some(ls), Some(le)) = (ls, le) {
-                        use crate::diff::engine::InlineDiffer;
-                        let lt = buffer.text(&ls, &le, true).to_string();
-                        let is_import = InlineDiffer::parse_import_line(&lt).is_some();
-                        let skip = chunk.op != DiffOp::Delete && is_import;
-                        if !skip {
-                            if let Some(tag) = tag_table.lookup(tag_name) {
-                                buffer.apply_tag(&tag, &ls, &le);
-                            }
+                        if let Some(tag) = tag_table.lookup(tag_name) {
+                            buffer.apply_tag(&tag, &ls, &le);
                         }
                     }
                 }

@@ -664,9 +664,16 @@ struct RawChange {
 /// Deletes or Inserts (i.e., only one side changed in a gap) remain as their
 /// respective operation types.
 ///
-/// This avoids the adjacency-detection problem where `similar` may produce
-/// interleaved Equal changes that separate Delete/Insert pairs that belong
-/// to the same logical Replace.
+/// Tracks the current A/B context position (`cur_a`, `cur_b`) between gaps
+/// so that standalone Inserts and Deletes receive the correct cross-side
+/// position. Without this, a standalone Insert would incorrectly use
+/// `new_index` for its A-side position, and a standalone Delete would
+/// incorrectly use `old_index` for its B-side position — producing chunks
+/// whose positions overlap or contradict adjacent Equal blocks.
+///
+/// This mirrors difflib's opcode semantics where:
+///   - Insert `(i1, i1, j1, j2)`: `i1` = current old context position
+///   - Delete `(i1, i2, j1, j1)`: `j1` = current new context position
 fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, 'a, str>) -> Vec<Chunk> {
     let raw: Vec<RawChange> = diff
         .iter_all_changes()
@@ -682,19 +689,28 @@ fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, 'a, str>) -> Vec<Chunk> {
     let mut i = 0;
     let n = raw.len();
 
+    // Track the current (end-of-last-Equal) position in both sequences.
+    // These represent the insertion/deletion context: where a standalone
+    // Insert or Delete sits in the *other* side.
+    let mut cur_a = 0usize;
+    let mut cur_b = 0usize;
+
     while i < n {
         match raw[i].tag {
             similar::ChangeTag::Equal => {
                 let ri = &raw[i];
                 let oi = ri.old_index.unwrap();
                 let ni = ri.new_index.unwrap();
+                let len = ri.line_count;
                 chunks.push(Chunk {
                     start_a: oi,
-                    end_a: oi + ri.line_count,
+                    end_a: oi + len,
                     start_b: ni,
-                    end_b: ni + ri.line_count,
+                    end_b: ni + len,
                     op: DiffOp::Equal,
                 });
+                cur_a = oi + len;
+                cur_b = ni + len;
                 i += 1;
             }
             _ => {
@@ -708,6 +724,9 @@ fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, 'a, str>) -> Vec<Chunk> {
                 let has_insert = gap.iter().any(|r| r.tag == similar::ChangeTag::Insert);
 
                 if has_delete && has_insert {
+                    // Mixed gap: Delete + Insert → single Replace chunk.
+                    // A-side positions come from the Delete entries (old_index).
+                    // B-side positions come from the Insert entries (new_index).
                     let start_a = gap
                         .iter()
                         .filter(|r| r.tag == similar::ChangeTag::Delete)
@@ -739,28 +758,48 @@ fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, 'a, str>) -> Vec<Chunk> {
                         end_b,
                         op: DiffOp::Replace,
                     });
+                    cur_a = end_a;
+                    cur_b = end_b;
                 } else if has_delete {
+                    // Standalone Delete gap: lines removed from A.
+                    // A-side positions come from old_index (the deleted lines).
+                    // B-side position is the current context (`cur_b`): where
+                    // in B these deletions are tracked.  This mirrors difflib's
+                    // `('delete', i1, i2, j1, j1)` where `j1` ~ `cur_b`.
                     for r in gap.iter().filter(|r| r.tag == similar::ChangeTag::Delete) {
-                        let idx = r.old_index.unwrap();
+                        let a_idx = r.old_index.unwrap();
+                        let a_len = r.line_count;
                         chunks.push(Chunk {
-                            start_a: idx,
-                            end_a: idx + r.line_count,
-                            start_b: idx,
-                            end_b: idx,
+                            start_a: a_idx,
+                            end_a: a_idx + a_len,
+                            start_b: cur_b,
+                            end_b: cur_b,
                             op: DiffOp::Delete,
                         });
+                        // cur_a advances past the deleted range
+                        cur_a = a_idx + a_len;
                     }
+                    // cur_b stays unchanged (no new lines consumed)
                 } else {
+                    // Standalone Insert gap: lines added to B.
+                    // B-side positions come from new_index (the inserted lines).
+                    // A-side position is the current context (`cur_a`): where
+                    // in A this insertion sits.  This mirrors difflib's
+                    // `('insert', i1, i1, j1, j2)` where `i1` ~ `cur_a`.
                     for r in gap.iter().filter(|r| r.tag == similar::ChangeTag::Insert) {
-                        let idx = r.new_index.unwrap();
+                        let b_idx = r.new_index.unwrap();
+                        let b_len = r.line_count;
                         chunks.push(Chunk {
-                            start_a: idx,
-                            end_a: idx,
-                            start_b: idx,
-                            end_b: idx + r.line_count,
+                            start_a: cur_a,
+                            end_a: cur_a,
+                            start_b: b_idx,
+                            end_b: b_idx + b_len,
                             op: DiffOp::Insert,
                         });
+                        // cur_b advances past the inserted range
+                        cur_b = b_idx + b_len;
                     }
+                    // cur_a stays unchanged (no old lines consumed)
                 }
             }
         }
@@ -1674,37 +1713,41 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
     let b_mid = &text_b[prefix_len..len_b - suffix_len];
 
     // ── Discard unique lines (lines in only one file) ──
-    // Only apply if it would discard more than 10 lines (heuristic from Meld)
+    // Only apply if either side discards more than 10 lines
+    // (heuristic from Meld's MyersSequenceMatcher).
     use std::collections::HashSet;
     let lines_in_b: HashSet<&String> = b_mid.iter().collect();
+    let lines_in_a: HashSet<&String> = a_mid.iter().collect();
 
     let mut filtered_a = Vec::new();
     let mut index_map_a = Vec::new();
     let mut filtered_b = Vec::new();
     let mut index_map_b = Vec::new();
 
-    let mut discarded = 0usize;
+    let mut discarded_a = 0usize;
+    let mut discarded_b = 0usize;
 
     for (i, line) in a_mid.iter().enumerate() {
         if lines_in_b.contains(line) {
             filtered_a.push(line.clone());
             index_map_a.push(prefix_len + i);
         } else {
-            discarded += 1;
+            discarded_a += 1;
         }
     }
 
     for (i, line) in b_mid.iter().enumerate() {
-        // Check if this line exists in A's middle section
-        let in_a = a_mid.iter().any(|a| a == line);
-        if in_a {
+        if lines_in_a.contains(line) {
             filtered_b.push(line.clone());
             index_map_b.push(prefix_len + i);
+        } else {
+            discarded_b += 1;
         }
     }
 
     // Only use the filtered version if enough lines were discarded
-    if discarded <= 10 {
+    // on either side.  Mirrors Python Meld's heuristic.
+    if discarded_a <= 10 && discarded_b <= 10 {
         // Not worth it — return the full middle section (prefix/suffix
         // already stripped so the diff only processes middle lines).
         // Prefix and suffix themselves are re-inserted by `compare()`.
@@ -1712,8 +1755,12 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
         // original (full-text) positions.
         let full_a = text_a[prefix_len..len_a - suffix_len].to_vec();
         let full_b = text_b[prefix_len..len_b - suffix_len].to_vec();
-        let map_a: Vec<usize> = (0..full_a.len()).map(|i| prefix_len + i).collect();
-        let map_b: Vec<usize> = (0..full_b.len()).map(|i| prefix_len + i).collect();
+        // Include one extra sentinel entry so that a chunk referencing
+        // the position just past the last filtered line (e.g., a Delete
+        // whose B-side position equals the length of the filtered B
+        // sequence) can be remapped to the correct original position.
+        let map_a: Vec<usize> = (0..=full_a.len()).map(|i| prefix_len + i).collect();
+        let map_b: Vec<usize> = (0..=full_b.len()).map(|i| prefix_len + i).collect();
         return PreprocessResult {
             filtered_a: full_a,
             filtered_b: full_b,
@@ -1727,8 +1774,19 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
     PreprocessResult {
         filtered_a,
         filtered_b,
-        index_map_a,
-        index_map_b,
+        // Include sentinel entry: position `filtered_a.len()` (one past
+        // the last filtered line) maps to the end of the middle section
+        // in the original A text.
+        index_map_a: {
+            let mut m = index_map_a;
+            m.push(len_a - suffix_len);
+            m
+        },
+        index_map_b: {
+            let mut m = index_map_b;
+            m.push(len_b - suffix_len);
+            m
+        },
         prefix_len,
         suffix_len,
     }
@@ -1992,5 +2050,120 @@ mod tests {
         let differ = ThreeWayDiffer::new(base, local, remote);
         let result = differ.merge();
         assert!(!result.merged.is_empty());
+    }
+
+    /// Reproduce the issue from the user's bug report:
+    /// Left panel has 13 import lines, right panel has 14 import lines
+    /// with `import { useAlert } from 'react-alert';` added.
+    /// Meld Python detects this as an Insert; meld-rs should too.
+    #[test]
+    fn test_detect_inserted_import_line() {
+        let left: Vec<String> = vec![
+            "import { useOidcAccessToken } from '@axa-fr/react-oidc';",
+            "import { isAny } from 'bpmn-js/lib/features/modeling/util/ModelingUtil';",
+            "import { ModdleElement } from 'bpmn-js/lib/model/Types';",
+            "import { getBusinessObject, is } from 'bpmn-js/lib/util/ModelUtil';",
+            "import { IRouteParams } from 'brix-shared';",
+            "import { EnvironmentContext, isViewPermissionOnly, getAccountGuid, useSwallowNotification } from 'brix-ui-shared';",
+            "import BpmnModeler from 'camunda-bpmn-js/lib/camunda-cloud/Modeler';",
+            "import isEmpty from 'lodash/isEmpty';",
+            "import { useBeforeunload } from 'react-beforeunload';",
+            "import { useTranslation } from 'react-i18next';",
+            "import { useHistory, useParams, Prompt, Link } from 'react-router-dom';",
+            "import { useRecoilState, useRecoilValue, useSetRecoilState } from 'recoil';",
+            "import { v4 as uuidv4 } from 'uuid';",
+        ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let right: Vec<String> = vec![
+            "import { useOidcAccessToken } from '@axa-fr/react-oidc';",
+            "import { isAny } from 'bpmn-js/lib/features/modeling/util/ModelingUtil';",
+            "import { ModdleElement } from 'bpmn-js/lib/model/Types';",
+            "import { getBusinessObject, is } from 'bpmn-js/lib/util/ModelUtil';",
+            "import { IRouteParams } from 'brix-shared';",
+            "import { isViewPermissionOnly, notifySuccess, notifyWarning, notifyError, getAccountGuid } from 'brix-ui-shared';",
+            "import { EnvironmentContext } from 'brix-ui-shared';",
+            "import BpmnModeler from 'camunda-bpmn-js/lib/camunda-cloud/Modeler';",
+            "import isEmpty from 'lodash/isEmpty';",
+            "import { useAlert } from 'react-alert';",
+            "import { useBeforeunload } from 'react-beforeunload';",
+            "import { useTranslation } from 'react-i18next';",
+            "import { useHistory, useParams, Prompt, Link } from 'react-router-dom';",
+        ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let differ = Differ::new(left, right);
+        let result = differ.compare();
+
+        // Merge adjacent replace chunks (as done in compute_diff)
+        let merged = merge_adjacent_replace_chunks(&result.chunks);
+
+        // We expect at least one Insert chunk representing the added import line
+        let inserts: Vec<&Chunk> = merged.iter().filter(|c| c.op == DiffOp::Insert).collect();
+
+        assert!(
+            !inserts.is_empty(),
+            "Expected at least one Insert chunk for the added 'useAlert' import line"
+        );
+
+        // The Insert should be at the correct line: right line 9 (0-indexed)
+        // is "import { useAlert } from 'react-alert';"
+        let use_alert_insert = inserts.iter().find(|c| c.start_b == 9 && c.end_b == 10);
+        assert!(
+            use_alert_insert.is_some(),
+            "Expected an Insert chunk at B[9..10) for 'useAlert' line, \
+             got inserts: {:?}",
+            inserts
+                .iter()
+                .map(|c| format!("B[{}..{})", c.start_b, c.end_b))
+                .collect::<Vec<_>>()
+        );
+
+        // Verify the A-side position is correct: the Insert should be
+        // placed AT the position where the insertion occurs in A.
+        // A[7]="isEmpty" = B[8], and A[8]="useBeforeunload" = B[10].
+        // The unique B line B[9]="useAlert" sits between them.
+        // In difflib semantics, Insert(i1, i1, j1, j2) means: at A position
+        // i1, B has extra lines. Here i1=8 (after A[7], before A[8]).
+        // The next Equal block shares the same A start (8), which is the
+        // standard difflib convention for zero-width Insert chunks.
+        if let Some(c) = use_alert_insert {
+            assert!(
+                c.start_a == c.end_a,
+                "Insert chunk should be zero-width on A side, got A[{}..{})",
+                c.start_a,
+                c.end_a
+            );
+            assert_eq!(
+                c.start_a, 8,
+                "Insert start_a should be 8 (between 'isEmpty' L7 and 'useBeforeunload' L8), got {}",
+                c.start_a
+            );
+        }
+
+        // Also verify that the delete of the two remaining left-only lines
+        // (recoil at L11, uuid at L12) are at the correct B-side position.
+        let deletes: Vec<&Chunk> = merged.iter().filter(|c| c.op == DiffOp::Delete).collect();
+        assert_eq!(
+            deletes.len(),
+            2,
+            "Expected 2 Delete chunks for recoil and uuid lines"
+        );
+        // Both deletes should be at the end of B (position 13, after all 13 B lines)
+        for del in &deletes {
+            assert_eq!(
+                del.start_b, 13,
+                "Delete chunks should be at B position 13 (end of B), got B[{}..{})",
+                del.start_b, del.end_b
+            );
+            assert_eq!(
+                del.start_b, del.end_b,
+                "Delete should be zero-width on B side"
+            );
+        }
     }
 }
