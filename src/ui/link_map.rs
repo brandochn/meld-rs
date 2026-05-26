@@ -87,9 +87,9 @@ struct TokenLayout {
 impl LinkMap {
     pub fn new(chunks: &[Chunk], total_lines_a: usize, total_lines_b: usize) -> Self {
         let drawing_area = gtk::DrawingArea::new();
-        drawing_area.set_content_width(40);
+        drawing_area.set_content_width(70);
         drawing_area.set_content_height(100);
-        drawing_area.set_hexpand(true);
+        drawing_area.set_hexpand(false);
         drawing_area.set_vexpand(true);
 
         let chunks_rc = Rc::new(RefCell::new(chunks.to_vec()));
@@ -111,8 +111,6 @@ impl LinkMap {
         let draw_right_view = Rc::clone(&right_view);
 
         drawing_area.set_draw_func(move |da, cr, width, height| {
-            // ── FORCED DEBUG: verify rendering pipeline is active ──
-            eprintln!("LINKMAP DRAW w={} h={}", width, height);
             let da_widget: &gtk::Widget = da.upcast_ref();
 
             let w = width as f64;
@@ -124,7 +122,7 @@ impl LinkMap {
             let max_lines = total_a.max(total_b).max(1);
             let sim_entries: std::cell::Ref<'_, Vec<SimilarityLink>> = draw_similarity.borrow();
             let move_entries: std::cell::Ref<'_, Vec<MoveLink>> = draw_moves.borrow();
-            let token_entries: std::cell::Ref<'_, Vec<TokenRelation>> = draw_tokens.borrow();
+            let _token_entries: std::cell::Ref<'_, Vec<TokenRelation>> = draw_tokens.borrow();
             let left_view_opt = draw_left_view.borrow();
             let right_view_opt = draw_right_view.borrow();
 
@@ -132,108 +130,129 @@ impl LinkMap {
             cr.set_source_rgba(0.95, 0.95, 0.95, 0.6);
             cr.paint().ok();
 
-            // Helper: translate a line number in a text view to a Y
-            // position in LinkMap widget coordinates.  Mirrors Python
-            // Meld's `view_offset_line()`.  Correctly subtracts the
-            // scroll offset so that curves move with the text.
-            let line_to_y = |view_opt: &Option<gsv::View>, line: usize| -> f64 {
-                if let Some(view) = view_opt {
-                    // Scroll offset: how many buffer pixels are above
-                    // the visible viewport.
-                    let scroll = view.vadjustment().map(|a| a.value()).unwrap_or(0.0);
+            // ---- Match Python Meld's do_draw exactly ----
+            //
+            // Compute per-view offsets once so every line lookup is a
+            // simple arithmetic operation, not a full widget-coordinate
+            // translation.
+            //
+            //   pix_start  = vadjustment.value()   = scroll offset
+            //   y_offset   = translate_coordinates = widget Y in LinkMap
+            //   linkmap_y  = buffer_y - pix_start + y_offset
+            let (pix_left, off_left, pix_right, off_right) =
+                if let (Some(lv), Some(rv)) = (left_view_opt.as_ref(), right_view_opt.as_ref()) {
+                    let lw: &gtk::Widget = lv.upcast_ref();
+                    let rw: &gtk::Widget = rv.upcast_ref();
+                    let (_, lo) = lw
+                        .translate_coordinates(da_widget, 0.0, 0.0)
+                        .unwrap_or((0.0, 0.0));
+                    let (_, ro) = rw
+                        .translate_coordinates(da_widget, 0.0, 0.0)
+                        .unwrap_or((0.0, 0.0));
+                    let lp = lv.vadjustment().map(|a| a.value()).unwrap_or(0.0);
+                    let rp = rv.vadjustment().map(|a| a.value()).unwrap_or(0.0);
+                    (lp, lo, rp, ro)
+                } else {
+                    (0.0, 0.0, 0.0, 0.0)
+                };
 
-                    let buffer_y = if line >= view.buffer().line_count() as usize {
-                        // Past-the-end: use the bottom of the last line.
-                        let last = (view.buffer().line_count() - 1).max(0);
-                        if let Some(iter) = view.buffer().iter_at_line(last) {
-                            let rect = view.iter_location(&iter);
-                            rect.y() as f64 + rect.height() as f64
-                        } else {
-                            return (line as f64 / max_lines as f64) * h;
-                        }
-                    } else if let Some(iter) = view.buffer().iter_at_line(line as i32) {
-                        let rect = view.iter_location(&iter);
-                        rect.y() as f64
+            // Python Meld:
+            //   def view_offset_line(view_idx, line_num):
+            //       line_start =
+            //           self.views[view_idx].get_y_for_line_num(line_num)
+            //       return line_start - pix_start[view_idx] +
+            //              y_offset[view_idx]
+            let view_offset_line =
+                |view_opt: &Option<gsv::View>, pix: f64, off: f64, line: usize| -> Option<f64> {
+                    let view = view_opt.as_ref()?;
+                    let buf = view.buffer();
+                    let iter = if line >= buf.line_count() as usize {
+                        let last = (buf.line_count() - 1).max(0);
+                        let i = buf.iter_at_line(last)?;
+                        let rect = view.iter_location(&i);
+                        return Some(rect.y() as f64 + rect.height() as f64 - pix + off);
                     } else {
-                        return (line as f64 / max_lines as f64) * h;
+                        buf.iter_at_line(line as i32)?
                     };
-
-                    // Convert buffer Y to view-relative Y (account for scroll).
-                    let visible_y = buffer_y - scroll;
-
-                    // Translate from the view's widget coordinate system
-                    // to the LinkMap's DrawingArea coordinate system.
-                    let (_, widget_y) = view
-                        .upcast_ref::<gtk::Widget>()
-                        .translate_coordinates(da_widget, 0.0, visible_y)
-                        .unwrap_or((0.0, visible_y));
-                    return widget_y;
-                }
-                (line as f64 / max_lines as f64) * h
-            };
+                    let rect = view.iter_location(&iter);
+                    Some(rect.y() as f64 - pix + off)
+                };
 
             for chunk in chunks.iter() {
                 if chunk.op == DiffOp::Equal {
                     continue;
                 }
 
-                // Get line positions in LinkMap widget coordinates via the
-                // text views' buffer iterators and coordinate translation.
-                // This mirrors Python Meld's `view_offset_line()`, properly
-                // handling scroll offsets and widget layout.
-                let f0 = line_to_y(&left_view_opt, chunk.start_a);
+                // f0, f1 = view_offset_line(0, ...) for start_a, end_a
+                let f0 = view_offset_line(&left_view_opt, pix_left, off_left, chunk.start_a)
+                    .unwrap_or((chunk.start_a as f64 / max_lines as f64) * h);
+                let f1_raw = view_offset_line(&left_view_opt, pix_left, off_left, chunk.end_a)
+                    .unwrap_or((chunk.end_a as f64 / max_lines as f64) * h);
+                // Python: f1 = f1 if f1 == f0 else f1 - 1
                 let f1 = if chunk.end_a == chunk.start_a {
                     f0
                 } else {
-                    line_to_y(&left_view_opt, chunk.end_a.saturating_sub(1))
-                        + (line_to_y(&left_view_opt, chunk.end_a) - f0).max(1.0)
+                    f1_raw - 1.0
                 };
 
-                let t0 = line_to_y(&right_view_opt, chunk.start_b);
+                // t0, t1 = view_offset_line(1, ...) for start_b, end_b
+                let t0 = view_offset_line(&right_view_opt, pix_right, off_right, chunk.start_b)
+                    .unwrap_or((chunk.start_b as f64 / max_lines as f64) * h);
+                let t1_raw = view_offset_line(&right_view_opt, pix_right, off_right, chunk.end_b)
+                    .unwrap_or((chunk.end_b as f64 / max_lines as f64) * h);
                 let t1 = if chunk.end_b == chunk.start_b {
                     t0
                 } else {
-                    line_to_y(&right_view_opt, chunk.end_b.saturating_sub(1))
-                        + (line_to_y(&right_view_opt, chunk.end_b) - t0).max(1.0)
+                    t1_raw - 1.0
                 };
 
-                let (r, g, b) = match chunk.op {
-                    DiffOp::Delete => (1.0, 0.3, 0.3),
-                    DiffOp::Insert => (0.3, 1.0, 0.3),
-                    DiffOp::Replace => (0.3, 0.3, 1.0),
-                    DiffOp::Equal => continue,
-                };
-
+                // Clamp to drawing area height
                 let y0 = f0.clamp(0.0, h);
                 let y1 = f1.clamp(0.0, h);
                 let t0c = t0.clamp(0.0, h);
                 let t1c = t1.clamp(0.0, h);
 
-                let x_left = 0.0;
-                let x_mid = w / 2.0;
-                let x_right = w;
+                // Colours match the line-level diff tag backgrounds from
+                // ensure_diff_tags (filediff.rs), matching Meld's
+                // meld-base.xml style scheme colours.
+                //   diff-insert:  #d0ffa3   diff-replace: #bdddff
+                //   diff-delete:  #cccccc
+                let (r, g, b) = match chunk.op {
+                    DiffOp::Delete => (0.80, 0.80, 0.80),
+                    DiffOp::Insert => (0.816, 1.0, 0.639),
+                    DiffOp::Replace => (0.741, 0.867, 1.0),
+                    DiffOp::Equal => continue,
+                };
 
-                // Draw filled bezier shape (matching original Meld's LinkMap)
-                cr.set_source_rgba(r, g, b, 0.2);
-                cr.move_to(x_left, y0);
-                cr.curve_to(x_mid, y0, x_mid, t0c, x_right, t0c);
-                cr.line_to(x_right, t1c);
-                cr.curve_to(x_mid, t1c, x_mid, y1, x_left, y1);
+                // Python Meld:
+                //   x_steps = [-0.5, allocation.width/2,
+                //              allocation.width + 0.5]
+                let x_left = -0.5;
+                let x_mid = w / 2.0;
+                let x_right = w + 0.5;
+
+                // Filled bezier region (fill_colors from Meld)
+                cr.set_source_rgba(r, g, b, 0.35);
+                // move_to(x_steps[0], f0 - 0.5)
+                cr.move_to(x_left, y0 - 0.5);
+                cr.curve_to(x_mid, y0 - 0.5, x_mid, t0c - 0.5, x_right, t0c - 0.5);
+                cr.line_to(x_right, t1c - 0.5);
+                cr.curve_to(x_mid, t1c - 0.5, x_mid, y1 - 0.5, x_left, y1 - 0.5);
                 cr.close_path();
                 cr.fill().ok();
 
-                // Stroke the outline
-                cr.set_source_rgba(r, g, b, 0.5);
+                // Stroked outline (line_colors from Meld)
+                cr.set_source_rgba(r, g, b, 0.55);
                 cr.set_line_width(1.0);
-                cr.move_to(x_left, y0);
-                cr.curve_to(x_mid, y0, x_mid, t0c, x_right, t0c);
+                cr.move_to(x_left, y0 - 0.5);
+                cr.curve_to(x_mid, y0 - 0.5, x_mid, t0c - 0.5, x_right, t0c - 0.5);
                 cr.stroke().ok();
-                cr.move_to(x_left, y1);
-                cr.curve_to(x_mid, y1, x_mid, t1c, x_right, t1c);
+                cr.move_to(x_left, y1 - 0.5);
+                cr.curve_to(x_mid, y1 - 0.5, x_mid, t1c - 0.5, x_right, t1c - 0.5);
                 cr.stroke().ok();
             }
 
-            // Draw cross-line similarity connectors
+            // ---- Cross-line similarity connectors ----
             cr.set_source_rgba(1.0, 0.75, 0.2, 0.55);
             cr.set_line_width(1.5);
 
@@ -247,11 +266,10 @@ impl LinkMap {
                 let cp_y = (y_left + y_right) / 2.0;
                 cr.curve_to(w * 0.25, cp_y - 3.0, w * 0.75, cp_y + 3.0, w, y_right);
                 cr.stroke().ok();
-
                 cr.set_dash(&[], 0.0);
             }
 
-            // Draw movement connectors (thicker amber curves with dash)
+            // ---- Movement connectors (amber dashed) ----
             cr.set_source_rgba(1.0, 0.55, 0.1, 0.65);
             cr.set_line_width(2.0);
 
@@ -263,7 +281,6 @@ impl LinkMap {
 
                 cr.set_dash(&[6.0, 3.0], 0.0);
 
-                // Top connector
                 cr.move_to(0.0, y_left_start);
                 let cp_y_top = (y_left_start + y_right_start) / 2.0;
                 cr.curve_to(
@@ -276,7 +293,6 @@ impl LinkMap {
                 );
                 cr.stroke().ok();
 
-                // Bottom connector
                 cr.move_to(0.0, y_left_end);
                 let cp_y_bot = (y_left_end + y_right_end) / 2.0;
                 cr.curve_to(
@@ -290,110 +306,6 @@ impl LinkMap {
                 cr.stroke().ok();
 
                 cr.set_dash(&[], 0.0);
-            }
-
-            // Draw token-level moved-identifier connectors.
-            //
-            // Full coordinate pipeline:
-            //   1. translate_coordinates(lv/rv → da) gives the text view's
-            //      top-left corner in DrawingArea space (left_origin / right_origin).
-            //   2. iter_at_offset(center_offset) → iter_location(iter) gives the
-            //      character rectangle in buffer coordinates (buffer space).
-            //   3. Final position = origin + buffer_rect - scroll.
-            //      This correctly handles both horizontal and vertical offsets,
-            //      regardless of widget layout or heading heights.
-
-            let token_count = token_entries.len();
-            if token_count > 0 {
-                eprintln!("LINKMAP token_entries count={}", token_count);
-            }
-
-            if let (Some(lv), Some(rv)) = (left_view_opt.as_ref(), right_view_opt.as_ref()) {
-                let lv_widget: &gtk::Widget = lv.upcast_ref();
-                let rv_widget: &gtk::Widget = rv.upcast_ref();
-
-                // Translate each text view's y-origin into DrawingArea space.
-                // Only the Y component matters: for a link-map strip the left
-                // connector endpoint is always at x=0 (left edge of the strip)
-                // and the right endpoint at x=w (right edge). Adding the text
-                // view's buffer x to a large negative/positive origin_x would
-                // place both endpoints far outside the strip.
-                let (_, left_origin_y) = lv_widget
-                    .translate_coordinates(da_widget, 0.0, 0.0)
-                    .unwrap_or((0.0, 0.0));
-                let (_, right_origin_y) = rv_widget
-                    .translate_coordinates(da_widget, 0.0, 0.0)
-                    .unwrap_or((0.0, 0.0));
-
-                // Scroll offsets: how many buffer pixels are above the viewport.
-                let scroll_left = lv.vadjustment().map(|a| a.value()).unwrap_or(0.0);
-                let scroll_right = rv.vadjustment().map(|a| a.value()).unwrap_or(0.0);
-
-                for (idx, tr) in token_entries.iter().enumerate() {
-                    // ── STEP 1: Validate relation — both sides must be present ──
-                    println!(
-                        "RELATION [{}]: left_line={} → right_line={}",
-                        idx, tr.left_line, tr.right_line
-                    );
-
-                    // ONE offset per side: the centre of the character span.
-                    // Never iterate over the range; use this single point only.
-                    let left_center = ((tr.left_offset_start + tr.left_offset_end) / 2) as i32;
-                    let right_center = ((tr.right_offset_start + tr.right_offset_end) / 2) as i32;
-
-                    // ONE iter → ONE rect → ONE layout per side.
-                    let left_layout = compute_token_layout(lv, left_center);
-                    let right_layout = compute_token_layout(rv, right_center);
-
-                    // ── STEP 2: Resolve left endpoint ──
-                    // lx is always the LEFT edge of the strip (x = 0).
-                    // ly = origin_y_offset + buffer_center_y − scroll, clamped
-                    //      to the visible height so the dot stays inside the widget.
-                    let (lx, ly) = match left_layout {
-                        Some(ref l) => {
-                            let y = (left_origin_y + l.center_y - scroll_left).clamp(0.0, h);
-                            println!("LEFT:  ({:.1}, {:.1})", 0.0_f64, y);
-                            (0.0_f64, y)
-                        }
-                        None => {
-                            let y = (tr.left_line as f64 / max_lines as f64) * h + 2.0;
-                            println!("LEFT:  fallback (0.0, {:.1})", y);
-                            (0.0_f64, y)
-                        }
-                    };
-
-                    // ── STEP 3: Resolve right endpoint ──
-                    // rx is always the RIGHT edge of the strip (x = w).
-                    let (rx, ry) = match right_layout {
-                        Some(ref l) => {
-                            let y = (right_origin_y + l.center_y - scroll_right).clamp(0.0, h);
-                            println!("RIGHT: ({:.1}, {:.1})", w, y);
-                            (w, y)
-                        }
-                        None => {
-                            let y = (tr.right_line as f64 / max_lines as f64) * h + 2.0;
-                            println!("RIGHT: fallback ({:.1}, {:.1})", w, y);
-                            (w, y)
-                        }
-                    };
-
-                    // ── Debug dots at the real endpoints (both inside the strip) ──
-                    cr.set_source_rgb(1.0, 0.0, 0.0);
-                    cr.arc(lx + 4.0, ly, 4.0, 0.0, 2.0 * std::f64::consts::PI);
-                    cr.fill().ok();
-                    cr.set_source_rgb(0.0, 0.7, 0.0);
-                    cr.arc(rx - 4.0, ry, 4.0, 0.0, 2.0 * std::f64::consts::PI);
-                    cr.fill().ok();
-
-                    // ── Exactly ONE connector per relation ──
-                    cr.set_source_rgba(0.27, 0.53, 1.0, 0.9);
-                    cr.set_line_width(2.0);
-                    cr.move_to(lx, ly);
-                    cr.line_to(rx, ry);
-                    cr.stroke().ok();
-                }
-            } else {
-                eprintln!("LINKMAP views not associated — skipping token connectors");
             }
         });
 
