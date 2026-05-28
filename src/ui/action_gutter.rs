@@ -87,7 +87,7 @@ impl ActionGutter {
         direction: GutterDirection,
     ) -> Self {
         let drawing_area = gtk::DrawingArea::new();
-        drawing_area.set_width_request(26);
+        drawing_area.set_width_request(20);
         drawing_area.set_vexpand(true);
         drawing_area.set_can_focus(false);
         drawing_area.add_css_class("action-gutter");

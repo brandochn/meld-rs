@@ -87,10 +87,14 @@ struct TokenLayout {
 impl LinkMap {
     pub fn new(chunks: &[Chunk], total_lines_a: usize, total_lines_b: usize) -> Self {
         let drawing_area = gtk::DrawingArea::new();
-        drawing_area.set_content_width(70);
+        // Match Meld original default width (50 px).  The layout in
+        // filediff.rs will override this to 90 px via set_width_request
+        // so the bezier curves span the full separator area.
+        drawing_area.set_width_request(50);
         drawing_area.set_content_height(100);
         drawing_area.set_hexpand(false);
         drawing_area.set_vexpand(true);
+        drawing_area.set_css_classes(&["link-map"]);
 
         let chunks_rc = Rc::new(RefCell::new(chunks.to_vec()));
         let total_a = Rc::new(RefCell::new(total_lines_a.max(1)));
@@ -126,9 +130,8 @@ impl LinkMap {
             let left_view_opt = draw_left_view.borrow();
             let right_view_opt = draw_right_view.borrow();
 
-            // Background
-            cr.set_source_rgba(0.95, 0.95, 0.95, 0.6);
-            cr.paint().ok();
+            // Background handled by CSS class "link-map"
+            // (matching Meld original: background-color: @theme_bg_color)
 
             // ---- Match Python Meld's do_draw exactly ----
             //

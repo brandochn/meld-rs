@@ -218,17 +218,6 @@ impl FileDiff {
             grid.append(&pane_widgets[1]);
         }
 
-        if num_panes >= 3 {
-            // Gutter 2 (1→2)
-            grid.append(gutters[2].widget());
-            // Link map 1
-            grid.append(link_maps[1].widget());
-            // Gutter 3 (2→1)
-            grid.append(gutters[3].widget());
-            // Pane 2
-            grid.append(&pane_widgets[2]);
-        }
-
         container.append(&grid);
 
         let loading = Rc::new(Cell::new(false));

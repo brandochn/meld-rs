@@ -165,6 +165,28 @@
     font-size: 12px;
 }
 
+/* Make the GtkSourceView gutter (line numbers) transparent so diff
+   paragraph backgrounds extend continuously across the full pane width,
+   visually connecting to the bezier curves in the link-map separator. */
+.diff-view-12px > gutter,
+.diff-view-12px gutter {
+    background-color: transparent;
+    background: transparent;
+}
+
+/* ── Link map (bezier curves between diff panes) ── */
+link-map {
+    border-width: 0 0 1px 0;
+    border-style: solid;
+    border-color: @borders;
+    background-color: @theme_bg_color;
+}
+
+/* ── Bezier curve overlay (transparent DrawingArea on source views) ── */
+.bezier-overlay {
+    background: transparent;
+}
+
 /* ── Action gutter (between diff panes) ── */
 .action-gutter {
     background: transparent;
