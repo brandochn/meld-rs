@@ -1307,7 +1307,7 @@ impl FileDiff {
                 if chunk_idx >= chunks.len() {
                     return;
                 }
-                let chunk = chunks[chunk_idx].clone();
+                let chunk: Chunk = chunks[chunk_idx].clone();
                 drop(chunks);
 
                 // Perform the chunk operation directly on the buffers
