@@ -41,8 +41,6 @@ uuid = { version = "1", features = ["v4"] }
 # Diff engine
 similar = "2"
 
-# Async runtime
-tokio = { version = "1", features = ["full"] }
 
 [profile.release]
 opt-level = 3

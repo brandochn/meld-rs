@@ -9,6 +9,7 @@
 //! lines, restricted to a configurable window to keep performance O(n·w).
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::diff::engine::{DiffOp, InlineChange, InlineDiffer};
 
@@ -54,6 +55,7 @@ impl SimilarityMap {
         matched_right: &HashSet<usize>,
         threshold: f64,
         window: usize,
+        cancel: &AtomicBool,
     ) -> Self {
         let mut map = Self::default();
 
@@ -103,6 +105,9 @@ impl SimilarityMap {
         // Try matching each unmatched left line against right lines within
         // a window centred on the "expected" position (same relative index).
         for li in 0..left_fps.len() {
+            if li % 100 == 0 && cancel.load(Ordering::SeqCst) {
+                return map;
+            }
             let (left_idx, left_fp) = left_fps[li];
             let left_idx = unmatched_left[li];
             // Expected right index: same proportion through the file

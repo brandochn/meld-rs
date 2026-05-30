@@ -7,6 +7,7 @@
 //! Replaces the Python `difflib`/matchers module from the original Meld.
 
 use similar::{ChangeTag, TextDiff};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Operation type for a diff chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -182,6 +183,83 @@ impl Differ {
             line_a: self.text_a.clone(),
             line_b: self.text_b.clone(),
         }
+    }
+
+    pub fn compare_with_cancel(&self, cancel: &AtomicBool) -> Option<LineDiff> {
+        if cancel.load(Ordering::SeqCst) {
+            return None;
+        }
+
+        let pre = preprocess_diff(&self.text_a, &self.text_b);
+
+        if cancel.load(Ordering::SeqCst) {
+            return None;
+        }
+
+        let a_joined = if pre.filtered_a.is_empty() {
+            String::new()
+        } else {
+            pre.filtered_a.join("\n") + "\n"
+        };
+        let b_joined = if pre.filtered_b.is_empty() {
+            String::new()
+        } else {
+            pre.filtered_b.join("\n") + "\n"
+        };
+
+        let diff = TextDiff::from_lines(&a_joined, &b_joined);
+
+        if cancel.load(Ordering::SeqCst) {
+            return None;
+        }
+
+        let mut chunks = build_chunks_from_gaps(&diff);
+
+        unprocess_chunks(&mut chunks, &pre);
+
+        if cancel.load(Ordering::SeqCst) {
+            return None;
+        }
+
+        if pre.prefix_len > 0 {
+            chunks.insert(
+                0,
+                Chunk {
+                    start_a: 0,
+                    end_a: pre.prefix_len,
+                    start_b: 0,
+                    end_b: pre.prefix_len,
+                    op: DiffOp::Equal,
+                },
+            );
+        }
+        if pre.suffix_len > 0 {
+            let suffix_start_a = self.text_a.len() - pre.suffix_len;
+            let suffix_start_b = self.text_b.len() - pre.suffix_len;
+            chunks.push(Chunk {
+                start_a: suffix_start_a,
+                end_a: self.text_a.len(),
+                start_b: suffix_start_b,
+                end_b: self.text_b.len(),
+                op: DiffOp::Equal,
+            });
+        }
+
+        insert_unique_line_chunks(
+            &mut chunks,
+            &self.text_a,
+            &self.text_b,
+            &pre.index_map_a,
+            &pre.index_map_b,
+            pre.prefix_len,
+            pre.suffix_len,
+        );
+
+        Some(LineDiff {
+            chunks,
+            line_a: self.text_a.clone(),
+            line_b: self.text_b.clone(),
+        })
     }
 }
 

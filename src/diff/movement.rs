@@ -12,6 +12,7 @@
 //! the core chunk list, preserving the linear partition invariant.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A detected code movement from one position to another.
 #[derive(Debug, Clone)]
@@ -55,6 +56,7 @@ impl MoveMap {
         matched_right: &HashSet<usize>,
         threshold: f64,
         min_block_lines: usize,
+        cancel: &AtomicBool,
     ) -> Self {
         let mut map = Self::default();
 
@@ -67,7 +69,12 @@ impl MoveMap {
         }
 
         // Try matching each left block against each right block
+        let mut block_count = 0;
         for &(ls, le) in &left_blocks {
+            if block_count % 10 == 0 && cancel.load(Ordering::SeqCst) {
+                return map;
+            }
+            block_count += 1;
             let left_text = &left[ls..le];
             for &(rs, re) in &right_blocks {
                 let right_text = &right[rs..re];
@@ -211,7 +218,7 @@ mod tests {
         ];
         let matched_left: HashSet<usize> = vec![0, 2].into_iter().collect();
         let matched_right: HashSet<usize> = vec![1, 2].into_iter().collect();
-        let map = MoveMap::build(&left, &right, &matched_left, &matched_right, 0.8, 1);
+        let map = MoveMap::build(&left, &right, &matched_left, &matched_right, 0.8, 1, &AtomicBool::new(false));
         assert!(!map.moves.is_empty());
         assert_eq!(map.moves[0].left_start, 1);
         assert_eq!(map.moves[0].left_end, 2);

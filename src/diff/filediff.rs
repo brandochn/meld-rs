@@ -20,8 +20,9 @@ use sourceview5::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use crate::diff::diff_state::{DiffResult, DiffState};
 use crate::diff::engine::{
-    merge_adjacent_replace_chunks, Chunk, DiffOp, Differ, InlineChange, InlineDiffer, LineCache,
+    Chunk, DiffOp, InlineChange, InlineDiffer, LineCache,
 };
 use crate::diff::inline_cache::InlineDiffCache;
 use crate::diff::movement::MoveMap;
@@ -71,6 +72,8 @@ pub struct FileDiff {
     move_map: Rc<RefCell<MoveMap>>,
     /// Token-level relations for moved identifiers (visual connectors).
     token_relations: Rc<RefCell<Vec<crate::ui::link_map::TokenRelation>>>,
+    /// Background diff computation state.
+    diff_state: Rc<RefCell<DiffState>>,
 }
 
 /// Per-pane data bundles the widgets that make up one column.
@@ -228,6 +231,7 @@ impl FileDiff {
         let similarity_map = Rc::new(RefCell::new(SimilarityMap::default()));
         let move_map = Rc::new(RefCell::new(MoveMap::default()));
         let token_relations = Rc::new(RefCell::new(Vec::new()));
+        let diff_state = Rc::new(RefCell::new(DiffState::new()));
 
         let fd = Self {
             container,
@@ -247,6 +251,7 @@ impl FileDiff {
             similarity_map,
             move_map,
             token_relations,
+            diff_state,
         };
 
         // Wire up everything
@@ -294,9 +299,6 @@ impl FileDiff {
         view.set_pixels_below_lines(2);
         view.set_pixels_above_lines(2);
 
-        // Set font size via CSS — matching original Meld's 12px default
-        view.add_css_class("diff-view-12px");
-
         scrolled.set_child(Some(&view));
 
         let msgarea = Rc::new(MsgArea::new());
@@ -330,7 +332,7 @@ impl FileDiff {
         for (i, gfile) in gfiles.iter().enumerate().take(self.num_panes) {
             if let Some(path) = gfile.path() {
                 let path_str = path.to_string_lossy().into_owned();
-                self.load_file(i, &path_str);
+                self.load_file_sync(i, &path_str);
                 if let Some(name) = path.file_name() {
                     let name_str = name.to_string_lossy().into_owned();
                     self.labels.borrow_mut()[i] = name_str.clone();
@@ -340,6 +342,25 @@ impl FileDiff {
         }
         self.loading.set(false);
         self.compute_diff();
+    }
+
+    fn load_file_sync(&self, pane_idx: usize, path: &str) {
+        if pane_idx >= self.panes.len() {
+            return;
+        }
+        let buffer = &self.panes[pane_idx].buffer;
+        let lang_mgr = gsv::LanguageManager::new();
+        if let Some(lang) = lang_mgr.guess_language(Some(path), None) {
+            buffer.set_language(Some(&lang));
+        }
+        match std::fs::read_to_string(path) {
+            Ok(content) => buffer.set_text(&content),
+            Err(e) => {
+                self.panes[pane_idx]
+                    .msgarea
+                    .show_error(&format!("Error loading file: {e}"));
+            }
+        }
     }
 
     /// Set the output file path for merge operations.
@@ -361,26 +382,25 @@ impl FileDiff {
     /// Apply the configured font to all panes.
     ///
     /// When `use_system_font` is true the monospace font is read from the
-    /// system theme.  Otherwise the `custom_font` string (e.g. "Consolas 11")
-    /// is parsed and applied via `override_font`.
+    /// system (Windows: "Consolas 11", Linux: GSettings monospace-font-name).
+    /// Otherwise the `custom_font` string (e.g. "Consolas 12") is applied.
+    /// Font is applied via CSS provider since GTK4 removed `override_font`.
     pub fn set_font(&self, use_system: bool, custom: &str) {
-        let desc = if use_system {
-            None
+        let font_str = if use_system {
+            get_system_monospace_font()
         } else if !custom.is_empty() {
-            Some(pango::FontDescription::from_string(custom))
+            custom.to_string()
         } else {
-            None
+            "monospace 11".to_string()
         };
-        if let Some(ref d) = desc {
-            // GTK4 removed `override_font`; apply via CSS provider instead.
-            let provider = gtk::CssProvider::new();
-            let font_css = format!("textview {{ font: {}; }}", d.to_string());
-            provider.load_from_data(&font_css);
-            for pane in &self.panes {
-                pane.view
-                    .style_context()
-                    .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-            }
+        let desc = pango::FontDescription::from_string(&font_str);
+        let provider = gtk::CssProvider::new();
+        let font_css = format!("textview {{ font: {}; }}", desc.to_string());
+        provider.load_from_data(&font_css);
+        for pane in &self.panes {
+            pane.view
+                .style_context()
+                .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
     }
 
@@ -393,7 +413,30 @@ impl FileDiff {
             log::info!("ignore_blank_lines enabled (not yet wired to engine)");
         }
     }
+}
 
+fn get_system_monospace_font() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return "Consolas 11".to_string();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(src) = gio::SettingsSchemaSource::default() {
+            if src.lookup("org.gnome.desktop.interface", true).is_some() {
+                let settings = gio::Settings::new("org.gnome.desktop.interface");
+                if let Ok(name) = settings.string("monospace-font-name") {
+                    if !name.is_empty() {
+                        return name.to_string();
+                    }
+                }
+            }
+        }
+        "monospace 11".to_string()
+    }
+}
+
+impl FileDiff {
     /// (Re)compute the diff between panes 0 and 1 and update
     /// highlights, gutters, and link maps.
     pub fn compute_diff(&self) {
@@ -404,98 +447,82 @@ impl FileDiff {
         let text_a = buffer_text_lines(&self.panes[0].buffer);
         let text_b = buffer_text_lines(&self.panes[1].buffer);
 
-        log::debug!("compute_diff: text_a={:?}, text_b={:?}", text_a, text_b);
+        let chunks = Rc::clone(&self.chunks);
+        let similarity_map = Rc::clone(&self.similarity_map);
+        let move_map = Rc::clone(&self.move_map);
+        let line_cache = Rc::clone(&self.line_cache);
+        let token_relations = Rc::clone(&self.token_relations);
+        let gutters = self.gutters.clone();
+        let link_maps = self.link_maps.clone();
+        let shared_msgarea = Rc::clone(&self.shared_msgarea);
+        let inline_cache = Rc::clone(&self.inline_cache);
+        let panes: Vec<_> = (0..self.num_panes.min(2))
+            .map(|i| {
+                (
+                    self.panes[i].buffer.clone(),
+                    self.panes[i].buffer.tag_table(),
+                )
+            })
+            .collect();
 
-        let is_empty = text_a.is_empty() && text_b.is_empty();
+        self.diff_state.borrow_mut().schedule_diff(
+            text_a.clone(),
+            text_b.clone(),
+            Box::new(move |result: DiffResult| {
+                clear_diff_tags_single(&panes[0].0, &panes[0].1);
+                clear_diff_tags_single(&panes[1].0, &panes[1].1);
+                ensure_diff_tags(&panes[0].1);
+                ensure_diff_tags(&panes[1].1);
 
-        // Compute line counts before text is moved into Differ
-        let max_lines = text_a.len().max(text_b.len());
+                apply_diff_tags_to_buffer(
+                    &panes[0].0,
+                    &panes[0].1,
+                    0,
+                    &result.chunks,
+                    Some(&panes[1].0),
+                    &inline_cache,
+                );
+                apply_diff_tags_to_buffer(
+                    &panes[1].0,
+                    &panes[1].1,
+                    1,
+                    &result.chunks,
+                    Some(&panes[0].0),
+                    &inline_cache,
+                );
 
-        let differ = Differ::new(text_a.clone(), text_b.clone());
-        let result = differ.compare();
-        let merged = merge_adjacent_replace_chunks(&result.chunks);
-
-        // ── Cross-line similarity matching ──────────────────────────
-        // Build the set of line indices that are already matched by the
-        // line-level diff (Equal chunks). These are NOT candidates for
-        // cross-line similarity matching.
-        let mut matched_left = std::collections::HashSet::new();
-        let mut matched_right = std::collections::HashSet::new();
-        for chunk in &merged {
-            if chunk.op == DiffOp::Equal {
-                for i in chunk.start_a..chunk.end_a {
-                    matched_left.insert(i);
+                for gutter in &gutters {
+                    gutter.set_chunks(&result.chunks);
                 }
-                for i in chunk.start_b..chunk.end_b {
-                    matched_right.insert(i);
+
+                let token_rels = build_token_relations(&result.text_a, &result.text_b);
+                *token_relations.borrow_mut() = token_rels;
+
+                for lm in &link_maps {
+                    lm.update_line_counts(result.text_a.len(), result.text_b.len());
+                    lm.update_chunks(&result.chunks);
+                    lm.update_similarity(&result.similarity);
+                    lm.update_moves(&result.movement);
+                    lm.update_token_relations(&token_relations.borrow());
                 }
-            }
-        }
 
-        // Detect semantically similar lines at different positions
-        // (e.g., same function call with extra parameters).
-        let similarity = SimilarityMap::build(
-            &text_a,
-            &text_b,
-            &matched_left,
-            &matched_right,
-            0.25, // Threshold: allow partial matches (e.g., extra params)
-            50,   // Search window: ±50 lines around expected position
+                *similarity_map.borrow_mut() = result.similarity;
+                *move_map.borrow_mut() = result.movement;
+
+                let max_lines = result.text_a.len().max(result.text_b.len());
+                *line_cache.borrow_mut() = LineCache::new(&result.chunks, max_lines);
+
+                *chunks.borrow_mut() = result.chunks;
+
+                if result.is_empty {
+                    shared_msgarea.show_info("Enter text to compare files");
+                } else if result.is_identical {
+                    shared_msgarea.show_info("Files are identical");
+                } else {
+                    shared_msgarea.hide();
+                }
+            }),
         );
-
-        // Detect moved code blocks (e.g., reordered imports).
-        let movement = MoveMap::build(
-            &text_a,
-            &text_b,
-            &matched_left,
-            &matched_right,
-            0.6, // Higher threshold for movement: blocks should be nearly identical
-            2,   // Minimum 2 consecutive unmatched lines to form a block
-        );
-
-        // Apply tags to each pane
-        self.apply_diff_tags(0, &merged);
-        self.apply_diff_tags(1, &merged);
-
-        // Apply inline diff tags from cross-line similarity matches
-        self.apply_similarity_inline_tags(&similarity);
-
-        // Update gutters
-        for gutter in &self.gutters {
-            gutter.set_chunks(&merged);
-        }
-
-        // Build token-level moved-identifier relations for visual connectors.
-        // Must happen BEFORE the link-map update loop so every link map
-        // receives the freshly computed relations, not stale data from the
-        // previous diff run.
-        *self.token_relations.borrow_mut() = build_token_relations(&text_a, &text_b);
-
-        // Update link maps with chunks, similarity, movement, and token relations
-        for lm in &self.link_maps {
-            lm.update_chunks(&merged);
-            lm.update_similarity(&similarity);
-            lm.update_moves(&movement);
-            lm.update_token_relations(&self.token_relations.borrow());
-        }
-
-        // Store for later use (e.g., tooltips, hover sync)
-        *self.similarity_map.borrow_mut() = similarity;
-        *self.move_map.borrow_mut() = movement;
-
-        // Rebuild line cache for O(1) navigation
-        *self.line_cache.borrow_mut() = LineCache::new(&merged, max_lines);
-
-        *self.chunks.borrow_mut() = merged;
-
-        // Show appropriate message
-        if is_empty {
-            self.shared_msgarea.show_info("Enter text to compare files");
-        } else if self.chunks.borrow().iter().all(|c| c.op == DiffOp::Equal) {
-            self.shared_msgarea.show_info("Files are identical");
-        } else {
-            self.shared_msgarea.hide();
-        }
     }
 
     /// Push the chunk at the given index from source to target pane.
@@ -509,6 +536,18 @@ impl FileDiff {
         drop(chunks);
 
         let (src, dst) = if push_left { (1, 0) } else { (0, 1) };
+
+        let chunk = if src > dst {
+            Chunk {
+                start_a: chunk.start_b,
+                end_a: chunk.end_b,
+                start_b: chunk.start_a,
+                end_b: chunk.end_a,
+                op: chunk.op,
+            }
+        } else {
+            chunk
+        };
 
         if matches!(chunk.op, DiffOp::Delete | DiffOp::Replace) {
             self.replace_chunk(src, dst, &chunk);
@@ -524,13 +563,25 @@ impl FileDiff {
         let chunks = self.chunks.borrow().clone();
         let (src, dst) = if push_left { (1, 0) } else { (0, 1) };
 
-        for (i, chunk) in chunks.iter().enumerate() {
+        for (_i, chunk) in chunks.iter().enumerate() {
+            let chunk = if src > dst {
+                Chunk {
+                    start_a: chunk.start_b,
+                    end_a: chunk.end_b,
+                    start_b: chunk.start_a,
+                    end_b: chunk.end_a,
+                    op: chunk.op,
+                }
+            } else {
+                chunk.clone()
+            };
+
             match chunk.op {
                 DiffOp::Replace | DiffOp::Delete => {
-                    self.replace_chunk(src, dst, chunk);
+                    self.replace_chunk(src, dst, &chunk);
                 }
                 DiffOp::Insert if push_left => {
-                    self.delete_chunk(1, chunk);
+                    self.delete_chunk(1, &chunk);
                 }
                 _ => {}
             }
@@ -784,26 +835,6 @@ impl FileDiff {
     }
 
     // ── Private helpers ───────────────────────────────────────────
-
-    fn load_file(&self, pane_idx: usize, path: &str) {
-        if pane_idx >= self.panes.len() {
-            return;
-        }
-        let buffer = &self.panes[pane_idx].buffer;
-        // Detect language from file name/path for syntax highlighting
-        let lang_mgr = gsv::LanguageManager::new();
-        if let Some(lang) = lang_mgr.guess_language(Some(path), None) {
-            buffer.set_language(Some(&lang));
-        }
-        match std::fs::read_to_string(path) {
-            Ok(content) => buffer.set_text(&content),
-            Err(e) => {
-                self.panes[pane_idx]
-                    .msgarea
-                    .show_error(&format!("Error loading file: {e}"));
-            }
-        }
-    }
 
     fn apply_diff_tags(&self, pane: usize, chunks: &[Chunk]) {
         if pane >= self.panes.len() {
@@ -1165,6 +1196,7 @@ impl FileDiff {
     }
 
     fn connect_buffer_signals(&self, loading: Rc<Cell<bool>>) {
+        let diff_state = Rc::clone(&self.diff_state);
         let chunks = Rc::clone(&self.chunks);
         let gutters = self.gutters.clone();
         let link_maps = self.link_maps.clone();
@@ -1172,14 +1204,17 @@ impl FileDiff {
         let inline_cache = Rc::clone(&self.inline_cache);
         let similarity_map = Rc::clone(&self.similarity_map);
         let move_map = Rc::clone(&self.move_map);
+        let line_cache = Rc::clone(&self.line_cache);
+        let token_relations = Rc::clone(&self.token_relations);
 
         let buffers: Vec<gsv::Buffer> = self.panes.iter().map(|p| p.buffer.clone()).collect();
         let tag_tables: Vec<gtk::TextTagTable> =
             self.panes.iter().map(|p| p.buffer.tag_table()).collect();
 
-        for (pi, pane) in self.panes.iter().enumerate() {
+        for pi in 0..self.num_panes {
             let buffers = buffers.clone();
             let tag_tables = tag_tables.clone();
+            let diff_state = Rc::clone(&diff_state);
             let chunks = Rc::clone(&chunks);
             let gutters = gutters.clone();
             let link_maps = link_maps.clone();
@@ -1188,8 +1223,10 @@ impl FileDiff {
             let inline_cache = Rc::clone(&inline_cache);
             let similarity_map = Rc::clone(&similarity_map);
             let move_map = Rc::clone(&move_map);
+            let line_cache = Rc::clone(&line_cache);
+            let token_relations = Rc::clone(&token_relations);
 
-            pane.buffer.connect_changed(move |_| {
+            self.panes[pi].buffer.connect_changed(move |_| {
                 if loading.get() || buffers.len() < 2 {
                     return;
                 }
@@ -1197,85 +1234,78 @@ impl FileDiff {
                 let text_a = buffer_text_lines(&buffers[0]);
                 let text_b = buffer_text_lines(&buffers[1]);
 
-                log::debug!("changed: text_a={:?}, text_b={:?}", text_a, text_b);
+                let chunks = Rc::clone(&chunks);
+                let similarity_map = Rc::clone(&similarity_map);
+                let move_map = Rc::clone(&move_map);
+                let line_cache = Rc::clone(&line_cache);
+                let token_relations = Rc::clone(&token_relations);
+                let gutters = gutters.clone();
+                let link_maps = link_maps.clone();
+                let shared_msgarea = Rc::clone(&shared_msgarea);
+                let inline_cache = Rc::clone(&inline_cache);
+                let buffers = buffers.clone();
+                let tag_tables = tag_tables.clone();
 
-                let is_empty = text_a.is_empty() && text_b.is_empty();
-                let differ = Differ::new(text_a.clone(), text_b.clone());
-                let result = differ.compare();
-                let merged = merge_adjacent_replace_chunks(&result.chunks);
-
-                // Clear and re-apply tags
-                for (bi, buf) in buffers.iter().enumerate() {
-                    clear_diff_tags_single(buf, &tag_tables[bi]);
-                    ensure_diff_tags(&tag_tables[bi]);
-                }
-
-                apply_diff_tags_to_buffer(
-                    &buffers[0],
-                    &tag_tables[0],
-                    0,
-                    &merged,
-                    Some(&buffers[1]),
-                    &inline_cache,
-                );
-                apply_diff_tags_to_buffer(
-                    &buffers[1],
-                    &tag_tables[1],
-                    1,
-                    &merged,
-                    Some(&buffers[0]),
-                    &inline_cache,
-                );
-
-                for gutter in &gutters {
-                    gutter.set_chunks(&merged);
-                }
-                for lm in &link_maps {
-                    lm.update_chunks(&merged);
-                    lm.update_similarity(&similarity_map.borrow());
-                    lm.update_moves(&move_map.borrow());
-                }
-
-                // Build cross-line similarity map for non-aligned changes
-                {
-                    let mut matched_left = std::collections::HashSet::new();
-                    let mut matched_right = std::collections::HashSet::new();
-                    for chunk in &merged {
-                        if chunk.op != DiffOp::Delete {
-                            for l in chunk.start_a..chunk.end_a {
-                                matched_left.insert(l);
-                            }
+                diff_state.borrow_mut().schedule_diff(
+                    text_a.clone(),
+                    text_b.clone(),
+                    Box::new(move |result: DiffResult| {
+                        for bi in 0..2.min(buffers.len()) {
+                            clear_diff_tags_single(&buffers[bi], &tag_tables[bi]);
+                            ensure_diff_tags(&tag_tables[bi]);
                         }
-                        if chunk.op != DiffOp::Insert {
-                            for l in chunk.start_b..chunk.end_b {
-                                matched_right.insert(l);
-                            }
+
+                        apply_diff_tags_to_buffer(
+                            &buffers[0],
+                            &tag_tables[0],
+                            0,
+                            &result.chunks,
+                            Some(&buffers[1]),
+                            &inline_cache,
+                        );
+                        apply_diff_tags_to_buffer(
+                            &buffers[1],
+                            &tag_tables[1],
+                            1,
+                            &result.chunks,
+                            Some(&buffers[0]),
+                            &inline_cache,
+                        );
+
+                        for gutter in &gutters {
+                            gutter.set_chunks(&result.chunks);
                         }
-                    }
-                    let sim = SimilarityMap::build(
-                        &text_a,
-                        &text_b,
-                        &matched_left,
-                        &matched_right,
-                        0.6,
-                        50,
-                    );
-                    *similarity_map.borrow_mut() = sim;
 
-                    let mov =
-                        MoveMap::build(&text_a, &text_b, &matched_left, &matched_right, 0.8, 1);
-                    *move_map.borrow_mut() = mov;
-                }
+                        let token_rels =
+                            build_token_relations(&result.text_a, &result.text_b);
+                        *token_relations.borrow_mut() = token_rels;
 
-                if is_empty {
-                    shared_msgarea.show_info("Enter text to compare files");
-                } else if merged.iter().all(|c| c.op == DiffOp::Equal) {
-                    shared_msgarea.show_info("Files are identical");
-                } else {
-                    shared_msgarea.hide();
-                }
+                        for lm in &link_maps {
+                            lm.update_line_counts(result.text_a.len(), result.text_b.len());
+                            lm.update_chunks(&result.chunks);
+                            lm.update_similarity(&result.similarity);
+                            lm.update_moves(&result.movement);
+                            lm.update_token_relations(&token_relations.borrow());
+                        }
 
-                *chunks.borrow_mut() = merged;
+                        *similarity_map.borrow_mut() = result.similarity;
+                        *move_map.borrow_mut() = result.movement;
+
+                        let max_lines = result.text_a.len().max(result.text_b.len());
+                        *line_cache.borrow_mut() = LineCache::new(&result.chunks, max_lines);
+
+                        *chunks.borrow_mut() = result.chunks;
+
+                        if result.is_empty {
+                            shared_msgarea
+                                .show_info("Enter text to compare files");
+                        } else if result.is_identical {
+                            shared_msgarea.show_info("Files are identical");
+                        } else {
+                            shared_msgarea.hide();
+                        }
+                    }),
+                );
             });
         }
     }
@@ -1307,8 +1337,13 @@ impl FileDiff {
                 if chunk_idx >= chunks.len() {
                     return;
                 }
-                let chunk: Chunk = chunks[chunk_idx].clone();
+                let mut chunk: Chunk = chunks[chunk_idx].clone();
                 drop(chunks);
+
+                if is_right_to_left {
+                    std::mem::swap(&mut chunk.start_a, &mut chunk.start_b);
+                    std::mem::swap(&mut chunk.end_a, &mut chunk.end_b);
+                }
 
                 // Perform the chunk operation directly on the buffers
                 match action {
@@ -1462,6 +1497,7 @@ impl MeldPage for FileDiff {
     }
 
     fn close(&self) -> gtk::ResponseType {
+        self.diff_state.borrow_mut().cancel_all();
         if let Some(out) = self.merge_output.borrow().as_ref() {
             if self.num_panes >= 3 {
                 let text = buffer_text_lines(&self.panes[self.num_panes - 1].buffer).join("\n");
@@ -1502,6 +1538,7 @@ impl MeldPage for FileDiff {
 
 impl Drop for FileDiff {
     fn drop(&mut self) {
+        self.diff_state.borrow_mut().cancel_all();
         if let Some(out) = self.merge_output.borrow().as_ref() {
             if self.num_panes >= 3 {
                 let text = buffer_text_lines(&self.panes[self.num_panes - 1].buffer).join("\n");

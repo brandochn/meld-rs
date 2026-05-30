@@ -149,13 +149,18 @@ impl ActionGutter {
 
             if let (Some(p), Some(h)) = (pressed, hover) {
                 if p == h {
-                    let chunks = chunks_release.borrow();
-                    if p < chunks.len() {
-                        let chunk = &chunks[p];
-                        let action = classify_action(chunk);
-                        if let Some(cb) = action_release.borrow().as_ref() {
-                            cb(p, action);
+                    let action = {
+                        let chunks = chunks_release.borrow();
+                        if p < chunks.len() {
+                            Some(classify_action(&chunks[p]))
+                        } else {
+                            None
                         }
+                    };
+                    if let (Some(action), Some(cb)) =
+                        (action, action_release.borrow().as_ref())
+                    {
+                        cb(p, action);
                     }
                 }
             }
@@ -208,6 +213,13 @@ impl ActionGutter {
                     continue;
                 }
 
+                if draw_dir == GutterDirection::LeftToRight && chunk.op == DiffOp::Insert {
+                    continue;
+                }
+                if draw_dir == GutterDirection::RightToLeft && chunk.op == DiffOp::Delete {
+                    continue;
+                }
+
                 let (chunk_start, chunk_end) = if draw_dir == GutterDirection::LeftToRight {
                     (chunk.start_a, chunk.end_a.max(chunk.start_a + 1))
                 } else {
@@ -254,15 +266,7 @@ impl ActionGutter {
 
     /// Update displayed chunks (called after a diff recompute).
     pub fn set_chunks(&self, chunks: &[Chunk]) {
-        // Filter out Equal and Insert chunks.
-        // Meld's _classify_change_actions returns None for Insert type
-        // unconditionally, in every gutter direction.
-        let filtered: Vec<Chunk> = chunks
-            .iter()
-            .filter(|c| c.op != DiffOp::Equal && c.op != DiffOp::Insert)
-            .cloned()
-            .collect();
-        self.chunks.replace(filtered);
+        self.chunks.replace(chunks.to_vec());
         self.drawing_area.queue_draw();
     }
 

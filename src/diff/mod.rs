@@ -16,6 +16,10 @@ pub mod movement;
 pub mod inline_cache;
 
 #[cfg(feature = "gui")]
+/// Background diff computation state management.
+pub mod diff_state;
+
+#[cfg(feature = "gui")]
 /// Lazy-cached line access to GtkSourceBuffer.
 pub mod buffer_lines;
 

@@ -12,6 +12,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use crate::window::MeldPage;
 
@@ -59,6 +62,8 @@ pub struct DirDiff {
     entries: Rc<RefCell<Vec<DirDiffEntry>>>,
     state_filter: Rc<RefCell<HashSet<DirDiffState>>>,
     show_identical: Rc<RefCell<bool>>,
+    scan_cancel: Rc<RefCell<Option<std::sync::Arc<AtomicBool>>>>,
+    scan_source: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
 impl DirDiff {
@@ -208,6 +213,8 @@ impl DirDiff {
             entries,
             state_filter,
             show_identical,
+            scan_cancel: Rc::new(RefCell::new(None)),
+            scan_source: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -226,15 +233,67 @@ impl DirDiff {
         if folders.len() < 2 {
             return;
         }
-        let entries = scan_recursive(&folders[0], &folders[1]);
-        *self.entries.borrow_mut() = entries;
+        let dir_a = folders[0].clone();
+        let dir_b = folders[1].clone();
+        drop(folders);
+
+        self.cancel_scan();
+
+        self.entries.borrow_mut().clear();
         for tv in &self.tree_views {
-            repopulate_tree(
-                tv,
-                &self.entries.borrow(),
-                &self.state_filter.borrow(),
-                *self.show_identical.borrow(),
-            );
+            if let Some(model) = tv.model() {
+                if let Ok(store) = model.downcast::<gtk::TreeStore>() {
+                    store.clear();
+                }
+            }
+        }
+
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        *self.scan_cancel.borrow_mut() = Some(std::sync::Arc::clone(&cancel));
+
+        let (tx, rx) = mpsc::channel();
+        let cancel_clone = std::sync::Arc::clone(&cancel);
+
+        std::thread::spawn(move || {
+            let result = scan_recursive(&dir_a, &dir_b);
+            if cancel_clone.load(Ordering::SeqCst) {
+                return;
+            }
+            let _ = tx.send(result);
+        });
+
+        let entries_ref = Rc::clone(&self.entries);
+        let tree_views = self.tree_views.clone();
+        let state_filter = Rc::clone(&self.state_filter);
+        let show_identical = Rc::clone(&self.show_identical);
+
+        let source_id = glib::timeout_add_local(Duration::from_millis(100), move || {
+            match rx.try_recv() {
+                Ok(result) => {
+                    *entries_ref.borrow_mut() = result;
+                    for tv in &tree_views {
+                        repopulate_tree(
+                            tv,
+                            &entries_ref.borrow(),
+                            &state_filter.borrow(),
+                            *show_identical.borrow(),
+                        );
+                    }
+                    glib::ControlFlow::Break
+                }
+                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            }
+        });
+        *self.scan_source.borrow_mut() = Some(source_id);
+    }
+
+    fn cancel_scan(&self) {
+        if let Some(cancel) = self.scan_cancel.borrow_mut().take() {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        if let Some(src) = self.scan_source.borrow_mut().take() {
+            src.remove();
         }
     }
 
@@ -248,6 +307,7 @@ impl MeldPage for DirDiff {
         self.container.upcast_ref()
     }
     fn close(&self) -> gtk::ResponseType {
+        self.cancel_scan();
         gtk::ResponseType::Ok
     }
     fn label(&self) -> String {

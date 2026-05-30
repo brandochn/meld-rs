@@ -108,9 +108,6 @@ impl LinkMap {
         let draw_chunks = Rc::clone(&chunks_rc);
         let draw_total_a = Rc::clone(&total_a);
         let draw_total_b = Rc::clone(&total_b);
-        let draw_similarity = Rc::clone(&similarity);
-        let draw_moves = Rc::clone(&moves);
-        let draw_tokens = Rc::clone(&token_relations);
         let draw_left_view = Rc::clone(&left_view);
         let draw_right_view = Rc::clone(&right_view);
 
@@ -120,13 +117,14 @@ impl LinkMap {
             let w = width as f64;
             let h = height as f64;
 
+            if width < 2 || height < 2 {
+                return;
+            }
+
             let chunks = draw_chunks.borrow();
             let total_a = *draw_total_a.borrow();
             let total_b = *draw_total_b.borrow();
             let max_lines = total_a.max(total_b).max(1);
-            let sim_entries: std::cell::Ref<'_, Vec<SimilarityLink>> = draw_similarity.borrow();
-            let move_entries: std::cell::Ref<'_, Vec<MoveLink>> = draw_moves.borrow();
-            let _token_entries: std::cell::Ref<'_, Vec<TokenRelation>> = draw_tokens.borrow();
             let left_view_opt = draw_left_view.borrow();
             let right_view_opt = draw_right_view.borrow();
 
@@ -256,61 +254,11 @@ impl LinkMap {
                 cr.stroke().ok();
             }
 
-            // ---- Cross-line similarity connectors ----
-            cr.set_source_rgba(1.0, 0.75, 0.2, 0.55);
-            cr.set_line_width(1.5);
-
-            for sim in sim_entries.iter() {
-                let y_left = (sim.left_line as f64 / max_lines as f64) * h + 2.0;
-                let y_right = (sim.right_line as f64 / max_lines as f64) * h + 2.0;
-
-                cr.set_dash(&[3.0, 4.0], 0.0);
-
-                cr.move_to(0.0, y_left);
-                let cp_y = (y_left + y_right) / 2.0;
-                cr.curve_to(w * 0.25, cp_y - 3.0, w * 0.75, cp_y + 3.0, w, y_right);
-                cr.stroke().ok();
-                cr.set_dash(&[], 0.0);
-            }
-
-            // ---- Movement connectors (amber dashed) ----
-            cr.set_source_rgba(1.0, 0.55, 0.1, 0.65);
-            cr.set_line_width(2.0);
-
-            for mv in move_entries.iter() {
-                let y_left_start = (mv.left_start as f64 / max_lines as f64) * h + 2.0;
-                let y_left_end = (mv.left_end as f64 / max_lines as f64) * h;
-                let y_right_start = (mv.right_start as f64 / max_lines as f64) * h + 2.0;
-                let y_right_end = (mv.right_end as f64 / max_lines as f64) * h;
-
-                cr.set_dash(&[6.0, 3.0], 0.0);
-
-                cr.move_to(0.0, y_left_start);
-                let cp_y_top = (y_left_start + y_right_start) / 2.0;
-                cr.curve_to(
-                    w * 0.3,
-                    cp_y_top - 4.0,
-                    w * 0.7,
-                    cp_y_top + 4.0,
-                    w,
-                    y_right_start,
-                );
-                cr.stroke().ok();
-
-                cr.move_to(0.0, y_left_end);
-                let cp_y_bot = (y_left_end + y_right_end) / 2.0;
-                cr.curve_to(
-                    w * 0.3,
-                    cp_y_bot - 4.0,
-                    w * 0.7,
-                    cp_y_bot + 4.0,
-                    w,
-                    y_right_end,
-                );
-                cr.stroke().ok();
-
-                cr.set_dash(&[], 0.0);
-            }
+            // ── Token-level moved-identifier connectors (TODO: port from Meld) ──
+            // Currently disabled — similarity and move connectors use proportional
+            // fallback positioning (line / max_lines * h) instead of pixel-precise
+            // view_offset_line, which produces inaccurate Y positions.  These will
+            // be re-enabled once ported to use real widget geometry.
         });
 
         Self {

@@ -235,6 +235,7 @@ impl MeldWindow {
             return;
         }
         let filediff = FileDiff::new(3);
+        filediff.set_font(self.settings.use_system_font, &self.settings.custom_font);
         filediff.set_files(gfiles);
         if let Some(out) = output {
             filediff.set_merge_output_file(out);
@@ -504,6 +505,7 @@ fn open_comparison_in_notebook(
         // A single file opens alongside a blank pane for editing.
         let num_panes = gfiles.len().max(2);
         let filediff = FileDiff::new(num_panes);
+        filediff.set_font(true, "");
         filediff.set_files(gfiles);
         let label = TabLabel::new("File Comparison");
         notebook.append_page(filediff.widget(), Some(&label.widget));
@@ -561,6 +563,7 @@ fn open_vc_file_comparison(
                     // Fall through to 2-way comparison below
                     let files: Vec<gio::File> = vec![gio::File::for_path(&working_path)];
                     let filediff = FileDiff::new(2);
+                    filediff.set_font(settings.use_system_font, &settings.custom_font);
                     filediff.set_files(&files);
                     filediff.set_labels(&[format!("{} — local", relative_path), String::new()]);
                     let label = TabLabel::new(&format!("{} (working, repository)", relative_path));
@@ -608,6 +611,7 @@ fn open_vc_file_comparison(
         };
 
         let filediff = FileDiff::new(3);
+        filediff.set_font(settings.use_system_font, &settings.custom_font);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
         filediff.set_merge_output_file(&working_path.to_string_lossy().into_owned());
@@ -656,6 +660,7 @@ fn open_vc_file_comparison(
         };
 
         let filediff = FileDiff::new(2);
+        filediff.set_font(settings.use_system_font, &settings.custom_font);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
         let lbl = TabLabel::new(&tab_label);
@@ -711,6 +716,7 @@ fn handle_diff_request(
                 gfiles.len().max(2)
             };
             let fd = FileDiff::new(num_panes);
+            fd.set_font(true, "");
             if !gfiles.is_empty() {
                 fd.set_files(&gfiles);
             }
