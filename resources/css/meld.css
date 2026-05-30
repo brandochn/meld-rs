@@ -175,7 +175,7 @@
 }
 
 /* ── Link map (bezier curves between diff panes) ── */
-link-map {
+.link-map {
     border-width: 0 0 1px 0;
     border-style: solid;
     border-color: @borders;

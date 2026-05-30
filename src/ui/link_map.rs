@@ -141,7 +141,7 @@ impl LinkMap {
             //
             //   pix_start  = vadjustment.value()   = scroll offset
             //   y_offset   = translate_coordinates = widget Y in LinkMap
-            //   linkmap_y  = buffer_y - pix_start + y_offset
+            //   linkmap_y  = buffer_y - pix_start + y_offset + 1  (Meld adds +1)
             let (pix_left, off_left, pix_right, off_right) =
                 if let (Some(lv), Some(rv)) = (left_view_opt.as_ref(), right_view_opt.as_ref()) {
                     let lw: &gtk::Widget = lv.upcast_ref();
@@ -173,32 +173,31 @@ impl LinkMap {
                         let last = (buf.line_count() - 1).max(0);
                         let i = buf.iter_at_line(last)?;
                         let rect = view.iter_location(&i);
-                        return Some(rect.y() as f64 + rect.height() as f64 - pix + off);
+                        // Meld adds +1 to y_offset, so: buffer_y - pix + off + 1
+                        return Some(rect.y() as f64 + rect.height() as f64 - pix + off + 1.0);
                     } else {
                         buf.iter_at_line(line as i32)?
                     };
                     let rect = view.iter_location(&iter);
-                    Some(rect.y() as f64 - pix + off)
+                    Some(rect.y() as f64 - pix + off + 1.0)
                 };
 
+            // ---- Chunk bezier curves (matching Meld's do_draw exactly) ----
             for chunk in chunks.iter() {
                 if chunk.op == DiffOp::Equal {
                     continue;
                 }
-
                 // f0, f1 = view_offset_line(0, ...) for start_a, end_a
                 let f0 = view_offset_line(&left_view_opt, pix_left, off_left, chunk.start_a)
                     .unwrap_or((chunk.start_a as f64 / max_lines as f64) * h);
                 let f1_raw = view_offset_line(&left_view_opt, pix_left, off_left, chunk.end_a)
                     .unwrap_or((chunk.end_a as f64 / max_lines as f64) * h);
-                // Python: f1 = f1 if f1 == f0 else f1 - 1
                 let f1 = if chunk.end_a == chunk.start_a {
                     f0
                 } else {
                     f1_raw - 1.0
                 };
 
-                // t0, t1 = view_offset_line(1, ...) for start_b, end_b
                 let t0 = view_offset_line(&right_view_opt, pix_right, off_right, chunk.start_b)
                     .unwrap_or((chunk.start_b as f64 / max_lines as f64) * h);
                 let t1_raw = view_offset_line(&right_view_opt, pix_right, off_right, chunk.end_b)
@@ -209,49 +208,51 @@ impl LinkMap {
                     t1_raw - 1.0
                 };
 
-                // Clamp to drawing area height
                 let y0 = f0.clamp(0.0, h);
                 let y1 = f1.clamp(0.0, h);
                 let t0c = t0.clamp(0.0, h);
                 let t1c = t1.clamp(0.0, h);
 
-                // Colours match the line-level diff tag backgrounds from
-                // ensure_diff_tags (filediff.rs), matching Meld's
-                // meld-base.xml style scheme colours.
-                //   diff-insert:  #d0ffa3   diff-replace: #bdddff
-                //   diff-delete:  #cccccc
                 let (r, g, b) = match chunk.op {
-                    DiffOp::Delete => (0.80, 0.80, 0.80),
-                    DiffOp::Insert => (0.816, 1.0, 0.639),
+                    // Meld style scheme colors (matching get_common_theme):
+                    //   insert fill=#d0ffa3 stroke=#a5ff4c
+                    //   delete fill=#d0ffa3 stroke=#a5ff4c  (same as insert)
+                    //   replace fill=#bdddff stroke=#65b2ff
+                    // For filled regions we use the "background" color.
+                    DiffOp::Delete | DiffOp::Insert => (0.816, 1.0, 0.639),
                     DiffOp::Replace => (0.741, 0.867, 1.0),
                     DiffOp::Equal => continue,
                 };
 
-                // Python Meld:
-                //   x_steps = [-0.5, allocation.width/2,
-                //              allocation.width + 0.5]
-                let x_left = -0.5;
-                let x_mid = w / 2.0;
-                let x_right = w + 0.5;
+                // Stroke uses "line-background" color (slightly different shade)
+                let (sr, sg, sb) = match chunk.op {
+                    DiffOp::Delete | DiffOp::Insert => (0.647, 1.0, 0.298),
+                    DiffOp::Replace => (0.396, 0.698, 1.0),
+                    _ => continue,
+                };
 
-                // Filled bezier region (fill_colors from Meld)
+                // x_steps = [-0.5, w/2, w + 0.5]
+                let xl = -0.5;
+                let xm = w / 2.0;
+                let xr = w + 0.5;
+
+                // Filled region (Meld's fill_colors)
                 cr.set_source_rgba(r, g, b, 0.35);
-                // move_to(x_steps[0], f0 - 0.5)
-                cr.move_to(x_left, y0 - 0.5);
-                cr.curve_to(x_mid, y0 - 0.5, x_mid, t0c - 0.5, x_right, t0c - 0.5);
-                cr.line_to(x_right, t1c - 0.5);
-                cr.curve_to(x_mid, t1c - 0.5, x_mid, y1 - 0.5, x_left, y1 - 0.5);
+                cr.move_to(xl, y0 - 0.5);
+                cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);
+                cr.line_to(xr, t1c - 0.5);
+                cr.curve_to(xm, t1c - 0.5, xm, y1 - 0.5, xl, y1 - 0.5);
                 cr.close_path();
                 cr.fill().ok();
 
-                // Stroked outline (line_colors from Meld)
-                cr.set_source_rgba(r, g, b, 0.55);
+                // Stroked outline (Meld's line_colors)
+                cr.set_source_rgba(sr, sg, sb, 0.55);
                 cr.set_line_width(1.0);
-                cr.move_to(x_left, y0 - 0.5);
-                cr.curve_to(x_mid, y0 - 0.5, x_mid, t0c - 0.5, x_right, t0c - 0.5);
+                cr.move_to(xl, y0 - 0.5);
+                cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);
                 cr.stroke().ok();
-                cr.move_to(x_left, y1 - 0.5);
-                cr.curve_to(x_mid, y1 - 0.5, x_mid, t1c - 0.5, x_right, t1c - 0.5);
+                cr.move_to(xl, y1 - 0.5);
+                cr.curve_to(xm, y1 - 0.5, xm, t1c - 0.5, xr, t1c - 0.5);
                 cr.stroke().ok();
             }
 

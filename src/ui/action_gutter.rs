@@ -154,7 +154,7 @@ impl ActionGutter {
         let gesture = gtk::GestureClick::new();
         gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
 
-        let chunks_click = Rc::new(RefCell::new(Vec::new()));
+        let chunks_click = Rc::clone(&chunks);
         let hover_click = Rc::clone(&hover_rc);
         let pressed_click = Rc::new(RefCell::new(None::<usize>));
         let action_cb_click = Rc::new(RefCell::new(None::<ActionCallback>));
@@ -202,80 +202,86 @@ impl ActionGutter {
         // ── Draw function ────────────────────────────────────────
         let draw_source = source_view.clone();
         let draw_dir = direction;
-        let draw_chunks = Rc::clone(&chunks_click);
+        let draw_chunks = Rc::clone(&chunks);
         let draw_hover = Rc::clone(&hover_rc);
         let draw_pressed = Rc::clone(&pressed_click);
         let draw_buttons = Rc::clone(&buttons_rc);
 
-        drawing_area.set_draw_func(move |_, cr, width, height| {
+        drawing_area.set_draw_func(move |da, cr, width, height| {
             let chunks = draw_chunks.borrow();
             let hovered = *draw_hover.borrow();
             let pressed = *draw_pressed.borrow();
             let w = width as f64;
             let h = height as f64;
-            let total = chunks.len().max(1);
 
-            // Compute visible range
-            if let Some(vadj) = draw_source.vadjustment() {
-                let upper = vadj.upper().max(1.0);
-                let visible_start = vadj.value() / upper * h;
-                let visible_height = vadj.page_size() / upper * h;
+            let da_w: &gtk::Widget = da.upcast_ref();
+            let src_w: &gtk::Widget = draw_source.upcast_ref();
 
-                // Background fill
-                cr.set_source_rgba(0.96, 0.96, 0.96, 0.9);
-                cr.paint().ok();
+            // Widget Y offset: source view origin in gutter DrawingArea coords
+            let (_, src_off) = src_w
+                .translate_coordinates(da_w, 0.0, 0.0)
+                .unwrap_or((0.0, 0.0));
 
-                let mut new_buttons = Vec::new();
+            // Scroll offset
+            let scroll = draw_source.vadjustment().map(|a| a.value()).unwrap_or(0.0);
 
-                for (i, chunk) in chunks.iter().enumerate() {
-                    let chunk_start = if draw_dir == GutterDirection::LeftToRight {
-                        chunk.start_a
-                    } else {
-                        chunk.start_b
-                    };
-                    let chunk_end = if draw_dir == GutterDirection::LeftToRight {
-                        chunk.end_a.max(chunk.start_a + 1)
-                    } else {
-                        chunk.end_b.max(chunk.start_b + 1)
-                    };
+            // Helper: buffer line → Y in gutter DrawingArea coords
+            let line_to_y = |line: usize| -> f64 {
+                if line >= draw_source.buffer().line_count() as usize {
+                    return 0.0;
+                }
+                if let Some(iter) = draw_source.buffer().iter_at_line(line as i32) {
+                    let rect = draw_source.iter_location(&iter);
+                    return rect.y() as f64 - scroll + src_off;
+                }
+                0.0
+            };
 
-                    let y_start = (chunk_start as f64 / total as f64) * h;
-                    let y_end = (chunk_end as f64 / total as f64) * h;
+            // Background fill
+            cr.set_source_rgba(0.96, 0.96, 0.96, 0.9);
+            cr.paint().ok();
 
-                    // Skip chunks outside visible area
-                    if y_end < visible_start - 30.0
-                        || y_start > visible_start + visible_height + 30.0
-                    {
-                        continue;
-                    }
+            let mut new_buttons = Vec::new();
 
-                    let rect_y = y_start;
-                    let rect_h = (y_end - y_start).max(4.0);
+            for (i, chunk) in chunks.iter().enumerate() {
+                let chunk_start = if draw_dir == GutterDirection::LeftToRight {
+                    chunk.start_a
+                } else {
+                    chunk.start_b
+                };
+                let chunk_end = if draw_dir == GutterDirection::LeftToRight {
+                    chunk.end_a.max(chunk.start_a + 1)
+                } else {
+                    chunk.end_b.max(chunk.start_b + 1)
+                };
 
-                    let is_hovered = hovered == Some(i);
-                    let is_pressed = pressed == Some(i);
+                let y_start = line_to_y(chunk_start);
+                let y_end = line_to_y(chunk_end);
+                let rect_y = y_start;
+                let rect_h = (y_end - y_start).max(4.0);
 
-                    // Determine action type for this chunk
-                    let action = classify_action(chunk, draw_dir);
-                    if action == GutterAction::Replace && chunk.op == DiffOp::Equal {
-                        continue; // Don't draw buttons for equal chunks
-                    }
+                let is_hovered = hovered == Some(i);
+                let is_pressed = pressed == Some(i);
 
-                    draw_chunk_action(
-                        cr, chunk, w, rect_y, rect_h, draw_dir, is_hovered, is_pressed,
-                    );
-
-                    // Track button area for click detection
-                    let btn_x = 1.0;
-                    let btn_w = w - 2.0;
-                    let btn_y = rect_y;
-                    let btn_h = rect_h;
-                    // Adjust for gutter scroll offset (simplified)
-                    new_buttons.push((btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, i));
+                // Determine action type for this chunk
+                let action = classify_action(chunk, draw_dir);
+                if action == GutterAction::Replace && chunk.op == DiffOp::Equal {
+                    continue;
                 }
 
-                *draw_buttons.borrow_mut() = new_buttons;
+                draw_chunk_action(
+                    cr, chunk, w, rect_y, rect_h, draw_dir, is_hovered, is_pressed,
+                );
+
+                // Track button area for click detection
+                let btn_x = 1.0;
+                let btn_w = w - 2.0;
+                let btn_y = rect_y;
+                let btn_h = rect_h;
+                new_buttons.push((btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, i));
             }
+
+            *draw_buttons.borrow_mut() = new_buttons;
         });
 
         Self {

@@ -270,6 +270,7 @@ impl FileDiff {
         scrolled.set_hexpand(true);
 
         let buffer = gsv::Buffer::new(None::<&gtk::TextTagTable>);
+        buffer.set_highlight_syntax(true);
 
         // Apply the default style scheme so that syntax highlighting and
         // theme-aware colours work.  Python Meld uses "classic" as its
@@ -788,8 +789,14 @@ impl FileDiff {
         if pane_idx >= self.panes.len() {
             return;
         }
+        let buffer = &self.panes[pane_idx].buffer;
+        // Detect language from file name/path for syntax highlighting
+        let lang_mgr = gsv::LanguageManager::new();
+        if let Some(lang) = lang_mgr.guess_language(Some(path), None) {
+            buffer.set_language(Some(&lang));
+        }
         match std::fs::read_to_string(path) {
-            Ok(content) => self.panes[pane_idx].buffer.set_text(&content),
+            Ok(content) => buffer.set_text(&content),
             Err(e) => {
                 self.panes[pane_idx]
                     .msgarea
@@ -1538,15 +1545,12 @@ fn clear_diff_tags_single(buffer: &gsv::Buffer, tag_table: &gtk::TextTagTable) {
 
 fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
     // Match the original Meld base style scheme colors exactly.
-    // Insert: green background (#d0ffa3) with dark green text (#008800)
-    // Replace: blue background (#bdddff) with dark blue text (#0044dd)
-    // Delete: white/gray background (#cccccc) with dark red text (#880000)
-    //
-    // Use paragraph_background for edge-to-edge line highlighting (like
-    // line-background in GtkSourceView style schemes).
+    //   meld:insert  bg=#d0ffa3  fg=#008800  line-bg=#a5ff4c
+    //   meld:replace bg=#bdddff  fg=#0044dd  line-bg=#65b2ff
+    //   meld:delete  bg=#ffffff  fg=#880000  line-bg=#cccccc
     ensure_tag_full(tag_table, "diff-insert", "#d0ffa3", "#008800", "#a5ff4c");
     ensure_tag_full(tag_table, "diff-replace", "#bdddff", "#0044dd", "#65b2ff");
-    ensure_tag_full(tag_table, "diff-delete", "#cccccc", "#880000", "#cccccc");
+    ensure_tag_full(tag_table, "diff-delete", "#ffffff", "#880000", "#cccccc");
     // Inline differences within a line — single intense blue for BOTH panes,
     // matching the original Meld "meld:inline" style.
     // Use GtkSource.Tag (not plain GtkTextTag) with draw_spaces = true so
