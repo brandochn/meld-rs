@@ -267,7 +267,7 @@ mod tests {
         let right: Vec<String> = vec!["a".into(), "b".into()];
         let matched_left: HashSet<usize> = (0..left.len()).collect();
         let matched_right: HashSet<usize> = (0..right.len()).collect();
-        let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.6, 50);
+        let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.6, 50, &AtomicBool::new(false));
         assert!(map.matches.is_empty());
     }
 
@@ -277,7 +277,7 @@ mod tests {
         let right: Vec<String> = vec!["notifyEr(x, y);".into()];
         let matched_left = HashSet::new();
         let matched_right = HashSet::new();
-        let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.15, 50);
+        let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.15, 50, &AtomicBool::new(false));
         assert!(
             !map.matches.is_empty(),
             "Should find similarity match for same-prefix lines"
@@ -297,7 +297,7 @@ mod tests {
         // Window [0, 2] includes right[2]... so it would match.
         // Let's test with window=0 to ensure no match across positions.
         let map_restricted =
-            SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.5, 0);
+            SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.5, 0, &AtomicBool::new(false));
         // With window=0, "line X" at left[1] tries to match right[1]="line b" — no match
         assert!(map_restricted.matches.is_empty());
     }

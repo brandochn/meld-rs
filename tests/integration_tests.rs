@@ -137,7 +137,7 @@ fn test_similarity_map_notify_error_scenario() {
     let right = vec!["notifyEr(dx);".into()];
     let matched_left = HashSet::new();
     let matched_right = HashSet::new();
-    let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.15, 50);
+    let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.15, 50, &AtomicBool::new(false));
     assert!(!map.matches.is_empty());
     assert!(map.matches[0].score > 0.15);
 }
@@ -157,7 +157,7 @@ fn test_move_detection_basic() {
     ];
     let matched_left: HashSet<usize> = vec![0, 2].into_iter().collect();
     let matched_right: HashSet<usize> = vec![1, 2].into_iter().collect();
-    let map = MoveMap::build(&left, &right, &matched_left, &matched_right, 0.8, 1);
+    let map = MoveMap::build(&left, &right, &matched_left, &matched_right, 0.8, 1, &AtomicBool::new(false));
     assert!(!map.moves.is_empty());
     assert_eq!(map.moves[0].left_start, 1);
     assert_eq!(map.moves[0].right_start, 0);

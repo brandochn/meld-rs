@@ -21,6 +21,41 @@ use crate::diff::engine::{Chunk, DiffOp};
 use crate::diff::movement::MoveMap;
 use crate::diff::similarity::SimilarityMap;
 
+/// Information about which connector the pointer is hovering over.
+#[derive(Debug, Clone)]
+pub enum HoverInfo {
+    None,
+    Chunk {
+        start_a: usize,
+        end_a: usize,
+        start_b: usize,
+        end_b: usize,
+        op: DiffOp,
+    },
+    Token {
+        left_line: usize,
+        right_line: usize,
+    },
+    Similarity {
+        left_line: usize,
+        right_line: usize,
+    },
+    Move {
+        left_start: usize,
+        left_end: usize,
+        right_start: usize,
+        right_end: usize,
+    },
+}
+
+/// A vertical hit zone recorded during drawing for hover detection.
+#[derive(Debug, Clone)]
+struct HoverZone {
+    y_min: f64,
+    y_max: f64,
+    info: HoverInfo,
+}
+
 pub struct LinkMap {
     drawing_area: gtk::DrawingArea,
     chunks: Rc<RefCell<Vec<Chunk>>>,
@@ -32,6 +67,12 @@ pub struct LinkMap {
     /// Optional references to left/right text views for viewport culling.
     left_view: Rc<RefCell<Option<gsv::View>>>,
     right_view: Rc<RefCell<Option<gsv::View>>>,
+    /// Hit zones recorded during the last draw for hover detection.
+    hover_zones: Rc<RefCell<Vec<HoverZone>>>,
+    /// Currently active hover info.
+    active_hover: Rc<RefCell<HoverInfo>>,
+    /// External callback for hover changes.
+    hover_callback: Rc<RefCell<Option<Box<dyn Fn(&HoverInfo)>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,17 +140,25 @@ impl LinkMap {
         let chunks_rc = Rc::new(RefCell::new(chunks.to_vec()));
         let total_a = Rc::new(RefCell::new(total_lines_a.max(1)));
         let total_b = Rc::new(RefCell::new(total_lines_b.max(1)));
-        let similarity = Rc::new(RefCell::new(Vec::new()));
-        let moves = Rc::new(RefCell::new(Vec::new()));
-        let token_relations = Rc::new(RefCell::new(Vec::new()));
+        let similarity = Rc::new(RefCell::new(Vec::<SimilarityLink>::new()));
+        let moves = Rc::new(RefCell::new(Vec::<MoveLink>::new()));
+        let token_relations = Rc::new(RefCell::new(Vec::<TokenRelation>::new()));
         let left_view: Rc<RefCell<Option<gsv::View>>> = Rc::new(RefCell::new(None));
         let right_view: Rc<RefCell<Option<gsv::View>>> = Rc::new(RefCell::new(None));
+        let hover_zones = Rc::new(RefCell::new(Vec::<HoverZone>::new()));
+        let active_hover = Rc::new(RefCell::new(HoverInfo::None));
+        let hover_callback: Rc<RefCell<Option<Box<dyn Fn(&HoverInfo)>>>> =
+            Rc::new(RefCell::new(None));
 
         let draw_chunks = Rc::clone(&chunks_rc);
         let draw_total_a = Rc::clone(&total_a);
         let draw_total_b = Rc::clone(&total_b);
         let draw_left_view = Rc::clone(&left_view);
         let draw_right_view = Rc::clone(&right_view);
+        let draw_similarity = Rc::clone(&similarity);
+        let draw_moves = Rc::clone(&moves);
+        let draw_token_relations = Rc::clone(&token_relations);
+        let draw_hover_zones = Rc::clone(&hover_zones);
 
         drawing_area.set_draw_func(move |da, cr, width, height| {
             let da_widget: &gtk::Widget = da.upcast_ref();
@@ -177,8 +226,15 @@ impl LinkMap {
                         buf.iter_at_line(line as i32)?
                     };
                     let rect = view.iter_location(&iter);
-                    Some(rect.y() as f64 - pix + off + 1.0)
-                };
+                Some(rect.y() as f64 - pix + off + 1.0)
+            };
+
+            // Bezier control points (x_steps = [-0.5, w/2, w + 0.5])
+            let xl = -0.5;
+            let xm = w / 2.0;
+            let xr = w + 0.5;
+
+            let mut zones: Vec<HoverZone> = Vec::new();
 
             // ---- Chunk bezier curves (matching Meld's do_draw exactly) ----
             for chunk in chunks.iter() {
@@ -229,11 +285,6 @@ impl LinkMap {
                     _ => continue,
                 };
 
-                // x_steps = [-0.5, w/2, w + 0.5]
-                let xl = -0.5;
-                let xm = w / 2.0;
-                let xr = w + 0.5;
-
                 // Filled region (Meld's fill_colors)
                 cr.set_source_rgba(r, g, b, 0.35);
                 cr.move_to(xl, y0 - 0.5);
@@ -252,14 +303,298 @@ impl LinkMap {
                 cr.move_to(xl, y1 - 0.5);
                 cr.curve_to(xm, y1 - 0.5, xm, t1c - 0.5, xr, t1c - 0.5);
                 cr.stroke().ok();
+
+                zones.push(HoverZone {
+                    y_min: y0.min(t0c),
+                    y_max: y1.max(t1c),
+                    info: HoverInfo::Chunk {
+                        start_a: chunk.start_a,
+                        end_a: chunk.end_a,
+                        start_b: chunk.start_b,
+                        end_b: chunk.end_b,
+                        op: chunk.op,
+                    },
+                });
             }
 
-            // ── Token-level moved-identifier connectors (TODO: port from Meld) ──
-            // Currently disabled — similarity and move connectors use proportional
-            // fallback positioning (line / max_lines * h) instead of pixel-precise
-            // view_offset_line, which produces inaccurate Y positions.  These will
-            // be re-enabled once ported to use real widget geometry.
+            // ── Token-level moved-identifier connectors ────────────
+            // Blue dashed bezier curves linking moved identifiers
+            // (e.g. EnvironmentContext split from a combined import).
+            {
+                let token_rels = draw_token_relations.borrow();
+                if !token_rels.is_empty() {
+                    cr.set_source_rgba(0.541, 0.761, 1.0, 0.55);
+                    cr.set_line_width(1.2);
+                    cr.set_dash(&[4.0, 3.0], 0.0);
+
+                    for rel in token_rels.iter() {
+                        let left_y = if let (Some(lv), Some(_rv)) =
+                            (left_view_opt.as_ref(), right_view_opt.as_ref())
+                        {
+                            let center = ((rel.left_offset_start + rel.left_offset_end) / 2)
+                                as i32;
+                            compute_token_layout(lv, center)
+                                .map(|tl| tl.center_y - pix_left + off_left + 1.0)
+                                .unwrap_or_else(|| {
+                                    view_offset_line(
+                                        &left_view_opt,
+                                        pix_left,
+                                        off_left,
+                                        rel.left_line,
+                                    )
+                                    .unwrap_or(
+                                        (rel.left_line as f64 / max_lines as f64) * h,
+                                    )
+                                })
+                        } else {
+                            (rel.left_line as f64 / max_lines as f64) * h
+                        };
+
+                        let right_y =
+                            if let (Some(_lv), Some(rv)) =
+                                (left_view_opt.as_ref(), right_view_opt.as_ref())
+                            {
+                                let center =
+                                    ((rel.right_offset_start + rel.right_offset_end) / 2)
+                                        as i32;
+                                compute_token_layout(rv, center)
+                                    .map(|tl| tl.center_y - pix_right + off_right + 1.0)
+                                    .unwrap_or_else(|| {
+                                        view_offset_line(
+                                            &right_view_opt,
+                                            pix_right,
+                                            off_right,
+                                            rel.right_line,
+                                        )
+                                        .unwrap_or(
+                                            (rel.right_line as f64 / max_lines as f64) * h,
+                                        )
+                                    })
+                            } else {
+                                (rel.right_line as f64 / max_lines as f64) * h
+                            };
+
+                        let ly = left_y.clamp(-10.0, h + 10.0);
+                        let ry = right_y.clamp(-10.0, h + 10.0);
+
+                        if (ly < -5.0 && ry < -5.0)
+                            || (ly > h + 5.0 && ry > h + 5.0)
+                        {
+                            continue;
+                        }
+
+                        cr.move_to(xl, ly);
+                        cr.curve_to(xm, ly, xm, ry, xr, ry);
+                        cr.stroke().ok();
+
+                        zones.push(HoverZone {
+                            y_min: ly.min(ry),
+                            y_max: ly.max(ry),
+                            info: HoverInfo::Token {
+                                left_line: rel.left_line,
+                                right_line: rel.right_line,
+                            },
+                        });
+                    }
+
+                    cr.set_dash(&[], 0.0);
+                }
+            }
+
+            // ── Similarity connectors (amber dotted) ──────────────
+            // Dotted bezier curves for cross-line similarity matches
+            // (lines that aren't aligned but share significant tokens).
+            {
+                let sims = draw_similarity.borrow();
+                if !sims.is_empty() {
+                    for entry in sims.iter() {
+                        let score = entry.score.clamp(0.0, 1.0);
+                        let alpha = 0.15 + score * 0.35;
+                        cr.set_source_rgba(1.0, 0.75, 0.3, alpha);
+                        cr.set_line_width(1.0);
+                        cr.set_dash(&[2.0, 4.0], 0.0);
+
+                        let left_y = view_offset_line(
+                            &left_view_opt, pix_left, off_left, entry.left_line,
+                        )
+                        .unwrap_or(
+                            (entry.left_line as f64 / max_lines as f64) * h,
+                        );
+                        let right_y = view_offset_line(
+                            &right_view_opt,
+                            pix_right,
+                            off_right,
+                            entry.right_line,
+                        )
+                        .unwrap_or(
+                            (entry.right_line as f64 / max_lines as f64) * h,
+                        );
+
+                        let ly = left_y.clamp(-10.0, h + 10.0);
+                        let ry = right_y.clamp(-10.0, h + 10.0);
+
+                        if (ly < -5.0 && ry < -5.0)
+                            || (ly > h + 5.0 && ry > h + 5.0)
+                        {
+                            continue;
+                        }
+
+                        cr.move_to(xl, ly);
+                        cr.curve_to(xm, ly, xm, ry, xr, ry);
+                        cr.stroke().ok();
+
+                        zones.push(HoverZone {
+                            y_min: ly.min(ry),
+                            y_max: ly.max(ry),
+                            info: HoverInfo::Similarity {
+                                left_line: entry.left_line,
+                                right_line: entry.right_line,
+                            },
+                        });
+                    }
+                    cr.set_dash(&[], 0.0);
+                }
+            }
+
+            // ── Move connectors (dashed amber regions) ────────────
+            // Bezier outlines for detected code-block movements.
+            {
+                let moves = draw_moves.borrow();
+                if !moves.is_empty() {
+                    cr.set_source_rgba(1.0, 0.8, 0.3, 0.5);
+                    cr.set_line_width(1.2);
+                    cr.set_dash(&[6.0, 4.0], 0.0);
+
+                    for entry in moves.iter() {
+                        let f0 = view_offset_line(
+                            &left_view_opt, pix_left, off_left, entry.left_start,
+                        )
+                        .unwrap_or(
+                            (entry.left_start as f64 / max_lines as f64) * h,
+                        );
+                        let f1_raw = view_offset_line(
+                            &left_view_opt, pix_left, off_left, entry.left_end,
+                        )
+                        .unwrap_or(
+                            (entry.left_end as f64 / max_lines as f64) * h,
+                        );
+                        let f1 = if entry.left_end == entry.left_start {
+                            f0
+                        } else {
+                            f1_raw - 1.0
+                        };
+
+                        let t0 = view_offset_line(
+                            &right_view_opt,
+                            pix_right,
+                            off_right,
+                            entry.right_start,
+                        )
+                        .unwrap_or(
+                            (entry.right_start as f64 / max_lines as f64) * h,
+                        );
+                        let t1_raw = view_offset_line(
+                            &right_view_opt,
+                            pix_right,
+                            off_right,
+                            entry.right_end,
+                        )
+                        .unwrap_or(
+                            (entry.right_end as f64 / max_lines as f64) * h,
+                        );
+                        let t1 = if entry.right_end == entry.right_start {
+                            t0
+                        } else {
+                            t1_raw - 1.0
+                        };
+
+                        let y0 = f0.clamp(0.0, h);
+                        let y1 = f1.clamp(0.0, h);
+                        let t0c = t0.clamp(0.0, h);
+                        let t1c = t1.clamp(0.0, h);
+
+                        if (t0c < 0.0 && t1c < 0.0 && y0 < 0.0 && y1 < 0.0)
+                            || (t0c > h && t1c > h && y0 > h && y1 > h)
+                        {
+                            continue;
+                        }
+
+                        cr.move_to(xl, y0 - 0.5);
+                        cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);
+                        cr.line_to(xr, t1c - 0.5);
+                        cr.curve_to(xm, t1c - 0.5, xm, y1 - 0.5, xl, y1 - 0.5);
+                        cr.close_path();
+                        cr.stroke().ok();
+
+                        zones.push(HoverZone {
+                            y_min: y0.min(t0c),
+                            y_max: y1.max(t1c),
+                            info: HoverInfo::Move {
+                                left_start: entry.left_start,
+                                left_end: entry.left_end,
+                                right_start: entry.right_start,
+                                right_end: entry.right_end,
+                            },
+                        });
+                    }
+                    cr.set_dash(&[], 0.0);
+                }
+            }
+
+            *draw_hover_zones.borrow_mut() = zones;
         });
+
+        // ── Motion controller for hover detection ──
+        let mc = gtk::EventControllerMotion::new();
+        let hover_zones_mc = Rc::clone(&hover_zones);
+        let active_hover_mc = Rc::clone(&active_hover);
+        let hover_callback_mc = Rc::clone(&hover_callback);
+        let da_mc = drawing_area.clone();
+        mc.connect_motion(move |_, _x, y| {
+            let zones = hover_zones_mc.borrow();
+            let mut found = HoverInfo::None;
+            for zone in zones.iter() {
+                if y >= zone.y_min - 4.0 && y <= zone.y_max + 4.0 {
+                    found = zone.info.clone();
+                    break;
+                }
+            }
+            let changed = {
+                let current = active_hover_mc.borrow();
+                match (&*current, &found) {
+                    (HoverInfo::None, HoverInfo::None) => false,
+                    _ => true,
+                }
+            };
+            if changed {
+                *active_hover_mc.borrow_mut() = found;
+                let cb = hover_callback_mc.borrow();
+                if let Some(ref cb) = *cb {
+                    cb(&active_hover_mc.borrow());
+                }
+            }
+            let _ = &da_mc;
+        });
+        let active_hover_leave = Rc::clone(&active_hover);
+        let hover_callback_leave = Rc::clone(&hover_callback);
+        mc.connect_leave(move |_| {
+            let found = HoverInfo::None;
+            let changed = {
+                let current = active_hover_leave.borrow();
+                match (&*current, &found) {
+                    (HoverInfo::None, HoverInfo::None) => false,
+                    _ => true,
+                }
+            };
+            if changed {
+                *active_hover_leave.borrow_mut() = HoverInfo::None;
+                let cb = hover_callback_leave.borrow();
+                if let Some(ref cb) = *cb {
+                    cb(&active_hover_leave.borrow());
+                }
+            }
+        });
+        drawing_area.add_controller(mc);
 
         Self {
             drawing_area,
@@ -271,6 +606,9 @@ impl LinkMap {
             token_relations,
             left_view,
             right_view,
+            hover_zones,
+            active_hover,
+            hover_callback,
         }
     }
 
@@ -300,6 +638,11 @@ impl LinkMap {
         }
 
         self.drawing_area.queue_draw();
+    }
+
+    /// Register a callback for hover events over link-map connectors.
+    pub fn connect_hover<F: Fn(&HoverInfo) + 'static>(&self, callback: F) {
+        self.hover_callback.replace(Some(Box::new(callback)));
     }
 
     /// Underlying widget.
@@ -355,6 +698,14 @@ impl LinkMap {
     /// Update token-level moved-identifier relations for blue connectors.
     pub fn update_token_relations(&self, relations: &[TokenRelation]) {
         self.token_relations.replace(relations.to_vec());
+        self.drawing_area.queue_draw();
+    }
+
+    /// Clear similarity, movement, and token-relation overlay data.
+    pub fn clear_overlays(&self) {
+        self.similarity.replace(Vec::new());
+        self.moves.replace(Vec::new());
+        self.token_relations.replace(Vec::new());
         self.drawing_area.queue_draw();
     }
 }

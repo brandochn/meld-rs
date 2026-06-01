@@ -62,6 +62,8 @@ pub trait MeldPage {
     fn go_prev_conflict(&self) {}
     /// Called by the window to inject a callback for creating diffs.
     fn set_diff_created_callback(&self, _cb: DiffCreatedCallback) {}
+    /// Re-apply settings after preferences dialog is closed.
+    fn apply_settings(&self, _settings: &MeldSettings) {}
 }
 
 /// Payload sent from `NewDiffTab` when the user requests a comparison.
@@ -193,6 +195,7 @@ impl MeldWindow {
         w.setup_signals(&new_btn, &recent_btn);
         w.setup_accels();
         w.setup_drag_drop();
+        w.setup_preferences_action();
         w
     }
 
@@ -222,6 +225,7 @@ impl MeldWindow {
                 gfiles,
                 auto_compare,
                 auto_merge,
+                &self.settings,
             );
             if focus {
                 let n = (self.notebook.n_pages() as i32 - 1).max(0) as u32;
@@ -236,6 +240,10 @@ impl MeldWindow {
         }
         let filediff = FileDiff::new(3);
         filediff.set_font(self.settings.use_system_font, &self.settings.custom_font);
+        filediff.set_ignore_blanks(self.settings.ignore_blank_lines);
+        filediff.set_detect_moved_lines(self.settings.detect_moved_lines);
+        filediff.set_show_connectors(self.settings.show_connectors);
+        filediff.set_inline_diff_mode(&self.settings.inline_diff_mode);
         filediff.set_files(gfiles);
         if let Some(out) = output {
             filediff.set_merge_output_file(out);
@@ -289,6 +297,7 @@ impl MeldWindow {
                     &[gfile.clone()],
                     false,
                     false,
+                    &self.settings,
                 );
             }
             if focus {
@@ -312,10 +321,11 @@ impl MeldWindow {
     fn wire_new_diff_tab(&self, tab: &dyn MeldPage) {
         let nb = self.notebook.clone();
         let pages = self.pages.clone();
+        let settings = Rc::clone(&self.settings);
         tab.set_diff_created_callback(Box::new(move |req: DiffRequest| {
             let auto_compare = false;
             let auto_merge = false;
-            handle_diff_request(&nb, &pages, &req, auto_compare, auto_merge);
+            handle_diff_request(&nb, &pages, &req, auto_compare, auto_merge, &settings);
 
             // Remove NewDiffTab on the next idle cycle
             let p_clone = Rc::clone(&pages);
@@ -345,10 +355,11 @@ impl MeldWindow {
     fn setup_signals(&self, new_btn: &gtk::Button, recent_btn: &gtk::MenuButton) {
         let nb = self.notebook.clone();
         let pages = self.pages.clone();
+        let settings = Rc::clone(&self.settings);
         new_btn.connect_clicked(move |_| {
             let tab = crate::ui::new_diff_tab();
             let label = TabLabel::new("New comparison");
-            wire_new_diff_tab_standalone(&tab, &nb, &pages);
+            wire_new_diff_tab_standalone(&tab, &nb, &pages, &settings);
             nb.append_page(tab.widget(), Some(&label.widget));
             pages.borrow_mut().push(Box::new(tab));
         });
@@ -433,11 +444,12 @@ impl MeldWindow {
     fn setup_accels(&self) {
         let nb = self.notebook.clone();
         let pages = self.pages.clone();
+        let settings = Rc::clone(&self.settings);
         let new_action = gio::SimpleAction::new("new-tab", None);
         new_action.connect_activate(move |_, _| {
             let tab = crate::ui::new_diff_tab();
             let label = TabLabel::new("New comparison");
-            wire_new_diff_tab_standalone(&tab, &nb, &pages);
+            wire_new_diff_tab_standalone(&tab, &nb, &pages, &settings);
             nb.append_page(tab.widget(), Some(&label.widget));
             pages.borrow_mut().push(Box::new(tab));
         });
@@ -468,15 +480,43 @@ impl MeldWindow {
 
         let nb = self.notebook.clone();
         let p = self.pages.clone();
+        let settings = Rc::clone(&self.settings);
         drop_target.connect_drop(move |_, value, _x, _y| {
             if let Ok(gfile) = value.get::<gio::File>() {
-                open_comparison_in_notebook(&nb, &p, &[gfile], false, false);
+                open_comparison_in_notebook(&nb, &p, &[gfile], false, false, &settings);
                 true
             } else {
                 false
             }
         });
         self.window.add_controller(drop_target);
+    }
+
+    fn setup_preferences_action(&self) {
+        let nb = self.notebook.clone();
+        let pages = self.pages.clone();
+        let settings = Rc::clone(&self.settings);
+
+        let prefs_action = gio::SimpleAction::new("preferences", None);
+        prefs_action.connect_activate(move |_, _| {
+            let dialog = crate::ui::preferences::PreferencesDialog::new();
+            let nb = nb.clone();
+            let pages = pages.clone();
+            let settings = settings.clone();
+            dialog.dialog().connect_response(move |_, resp| {
+                if resp == gtk::ResponseType::Ok {
+                    if let Ok(reloaded) = MeldSettings::load() {
+                        for page in pages.borrow().iter() {
+                            page.apply_settings(&reloaded);
+                        }
+                    }
+                }
+                let _ = &nb;
+                let _ = &settings;
+            });
+            dialog.present();
+        });
+        self.window.add_action(&prefs_action);
     }
 }
 
@@ -488,6 +528,7 @@ fn open_comparison_in_notebook(
     gfiles: &[gio::File],
     auto_compare: bool,
     _auto_merge: bool,
+    settings: &MeldSettings,
 ) {
     if is_directory_comparison(gfiles) {
         let num_panes = gfiles.len().max(2);
@@ -505,7 +546,14 @@ fn open_comparison_in_notebook(
         // A single file opens alongside a blank pane for editing.
         let num_panes = gfiles.len().max(2);
         let filediff = FileDiff::new(num_panes);
-        filediff.set_font(true, "");
+        filediff.set_font(
+            settings.use_system_font,
+            &settings.custom_font,
+        );
+        filediff.set_ignore_blanks(settings.ignore_blank_lines);
+        filediff.set_detect_moved_lines(settings.detect_moved_lines);
+        filediff.set_show_connectors(settings.show_connectors);
+        filediff.set_inline_diff_mode(&settings.inline_diff_mode);
         filediff.set_files(gfiles);
         let label = TabLabel::new("File Comparison");
         notebook.append_page(filediff.widget(), Some(&label.widget));
@@ -564,6 +612,10 @@ fn open_vc_file_comparison(
                     let files: Vec<gio::File> = vec![gio::File::for_path(&working_path)];
                     let filediff = FileDiff::new(2);
                     filediff.set_font(settings.use_system_font, &settings.custom_font);
+                    filediff.set_ignore_blanks(settings.ignore_blank_lines);
+                    filediff.set_detect_moved_lines(settings.detect_moved_lines);
+                    filediff.set_show_connectors(settings.show_connectors);
+                    filediff.set_inline_diff_mode(&settings.inline_diff_mode);
                     filediff.set_files(&files);
                     filediff.set_labels(&[format!("{} — local", relative_path), String::new()]);
                     let label = TabLabel::new(&format!("{} (working, repository)", relative_path));
@@ -612,6 +664,10 @@ fn open_vc_file_comparison(
 
         let filediff = FileDiff::new(3);
         filediff.set_font(settings.use_system_font, &settings.custom_font);
+        filediff.set_ignore_blanks(settings.ignore_blank_lines);
+        filediff.set_detect_moved_lines(settings.detect_moved_lines);
+        filediff.set_show_connectors(settings.show_connectors);
+        filediff.set_inline_diff_mode(&settings.inline_diff_mode);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
         filediff.set_merge_output_file(&working_path.to_string_lossy().into_owned());
@@ -661,6 +717,10 @@ fn open_vc_file_comparison(
 
         let filediff = FileDiff::new(2);
         filediff.set_font(settings.use_system_font, &settings.custom_font);
+        filediff.set_ignore_blanks(settings.ignore_blank_lines);
+        filediff.set_detect_moved_lines(settings.detect_moved_lines);
+        filediff.set_show_connectors(settings.show_connectors);
+        filediff.set_inline_diff_mode(&settings.inline_diff_mode);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
         let lbl = TabLabel::new(&tab_label);
@@ -698,6 +758,7 @@ fn handle_diff_request(
     req: &DiffRequest,
     auto_compare: bool,
     auto_merge: bool,
+    settings: &MeldSettings,
 ) {
     // Collect valid file paths, filtering out None entries (blank slots)
     let gfiles: Vec<gio::File> = req
@@ -716,7 +777,14 @@ fn handle_diff_request(
                 gfiles.len().max(2)
             };
             let fd = FileDiff::new(num_panes);
-            fd.set_font(true, "");
+            fd.set_font(
+                settings.use_system_font,
+                &settings.custom_font,
+            );
+            fd.set_ignore_blanks(settings.ignore_blank_lines);
+            fd.set_detect_moved_lines(settings.detect_moved_lines);
+            fd.set_show_connectors(settings.show_connectors);
+            fd.set_inline_diff_mode(&settings.inline_diff_mode);
             if !gfiles.is_empty() {
                 fd.set_files(&gfiles);
             }
@@ -798,13 +866,15 @@ fn wire_new_diff_tab_standalone(
     tab: &dyn MeldPage,
     notebook: &gtk::Notebook,
     pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    settings: &MeldSettings,
 ) {
     let nb = notebook.clone();
     let p = Rc::clone(pages);
+    let s = Rc::new(settings.clone());
     tab.set_diff_created_callback(Box::new(move |req: DiffRequest| {
         let auto_compare = false;
         let auto_merge = false;
-        handle_diff_request(&nb, &p, &req, auto_compare, auto_merge);
+        handle_diff_request(&nb, &p, &req, auto_compare, auto_merge, &s);
 
         // Remove NewDiffTab on the next idle cycle
         let p_clone = Rc::clone(&p);

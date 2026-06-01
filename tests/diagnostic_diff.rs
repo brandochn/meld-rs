@@ -81,7 +81,7 @@ fn diagnostic_left_vs_right() {
         }
     }
     let sim_map = meld_rs::diff::similarity::SimilarityMap::build(
-        &left_lines, &right_lines, &matched_left, &matched_right, 0.6, 50,
+        &left_lines, &right_lines, &matched_left, &matched_right, 0.6, 50, &AtomicBool::new(false),
     );
     eprintln!(
         "\nSimilarity matches found: {}",
@@ -89,7 +89,7 @@ fn diagnostic_left_vs_right() {
     );
 
     let move_map = meld_rs::diff::movement::MoveMap::build(
-        &left_lines, &right_lines, &matched_left, &matched_right, 0.8, 1,
+        &left_lines, &right_lines, &matched_left, &matched_right, 0.8, 1, &AtomicBool::new(false),
     );
     eprintln!(
         "Movement entries found: {}",

@@ -202,9 +202,9 @@ impl ActionGutter {
                 0.0
             };
 
-            // Background
-            cr.set_source_rgba(0.96, 0.96, 0.96, 0.9);
-            cr.paint().ok();
+            // Background is handled by CSS (.action-gutter { background: transparent })
+            // so paragraph backgrounds from the text view can visually bridge
+            // across the gutter to the link-map bezier curves.
 
             let mut new_buttons = Vec::new();
 
@@ -213,9 +213,6 @@ impl ActionGutter {
                     continue;
                 }
 
-                if draw_dir == GutterDirection::LeftToRight && chunk.op == DiffOp::Insert {
-                    continue;
-                }
                 if draw_dir == GutterDirection::RightToLeft && chunk.op == DiffOp::Delete {
                     continue;
                 }
@@ -316,12 +313,12 @@ fn draw_chunk_action(
         DiffOp::Equal => return,
     };
 
-    // Fill the chunk region
-    if chunk.op != DiffOp::Insert {
-        cr.set_source_rgba(r, g, b, 0.18);
-        cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
-        cr.fill().ok();
-    }
+    // Fill the chunk region (matching link_map bezier fill alpha).
+    // Insert chunks are filled only on the side that has content
+    // (RightToLeft gutter uses start_b..end_b which has span).
+    cr.set_source_rgba(r, g, b, 0.35);
+    cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
+    cr.fill().ok();
 
     // Border (Meld's line_colors)
     let (lr, lg, lb) = match chunk.op {
@@ -333,6 +330,12 @@ fn draw_chunk_action(
     cr.set_line_width(1.0);
     cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
     cr.stroke().ok();
+
+    // LeftToRight Insert has no content on the source side —
+    // skip action button, matching Meld's _classify_change_actions → None.
+    if chunk.op == DiffOp::Insert && direction == GutterDirection::LeftToRight {
+        return;
+    }
 
     // Pressed highlight
     if pressed {

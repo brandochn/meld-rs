@@ -61,6 +61,11 @@ impl PreferencesDialog {
     pub fn present(&self) {
         self.dialog.present();
     }
+
+    /// Expose the underlying dialog for connecting external response handlers.
+    pub fn dialog(&self) -> &gtk::Dialog {
+        &self.dialog
+    }
 }
 
 fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
@@ -134,6 +139,53 @@ fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
     let font_btn = gtk::Button::with_label("Choose Font...");
     font_btn.set_halign(gtk::Align::Start);
     page.append(&font_btn);
+
+    // ── Diff section separator ──
+    let diff_section = gtk::Label::new(Some("Diff Visualization"));
+    diff_section.set_halign(gtk::Align::Start);
+    diff_section.set_xalign(0.0);
+    diff_section.set_margin_top(8);
+    diff_section.add_css_class("heading");
+    page.append(&diff_section);
+
+    // Inline diff mode dropdown
+    let id_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let id_label = gtk::Label::new(Some("Inline highlighting:"));
+    id_label.set_halign(gtk::Align::Start);
+    id_label.set_hexpand(true);
+    id_row.append(&id_label);
+    let modes = gtk::StringList::new(&["None", "Characters", "Tokens"]);
+    let id_dropdown = gtk::DropDown::new(Some(modes), None::<&gtk::Expression>);
+    let current_mode = settings.borrow().inline_diff_mode.clone();
+    let selected = match current_mode.as_str() {
+        "characters" => 1u32,
+        "tokens" => 2u32,
+        _ => 0u32,
+    };
+    id_dropdown.set_selected(selected);
+    id_row.append(&id_dropdown);
+    page.append(&id_row);
+    let s_id = Rc::clone(settings);
+    id_dropdown.connect_selected_notify(move |dd| {
+        let mode = match dd.selected() {
+            1 => "characters",
+            2 => "tokens",
+            _ => "none",
+        };
+        s_id.borrow_mut().inline_diff_mode = mode.to_string();
+    });
+
+    // Ignore blank lines
+    let bl_row = labeled_switch(
+        "Ignore blank lines in diffs",
+        settings.borrow().ignore_blank_lines,
+    );
+    let s_bl = Rc::clone(settings);
+    bl_row.1.connect_state_set(move |_, state| {
+        s_bl.borrow_mut().ignore_blank_lines = state;
+        glib::Propagation::Proceed
+    });
+    page.append(&bl_row.0);
 
     page
 }

@@ -27,6 +27,7 @@ use crate::diff::engine::{
 use crate::diff::inline_cache::InlineDiffCache;
 use crate::diff::movement::MoveMap;
 use crate::diff::similarity::{SimilarityEntry, SimilarityMap};
+use crate::config::settings::MeldSettings;
 use crate::ui::action_gutter::{ActionGutter, GutterAction, GutterDirection};
 use crate::ui::link_map::LinkMap;
 use crate::ui::msgarea::MsgArea;
@@ -74,6 +75,14 @@ pub struct FileDiff {
     token_relations: Rc<RefCell<Vec<crate::ui::link_map::TokenRelation>>>,
     /// Background diff computation state.
     diff_state: Rc<RefCell<DiffState>>,
+    /// Flag: trim blank lines from diff chunk boundaries.
+    ignore_blank_lines: Rc<Cell<bool>>,
+    /// Flag: compute similarity/movement overlays.
+    detect_moved_lines: Rc<Cell<bool>>,
+    /// Flag: show link-map bezier connectors between panes.
+    show_connectors: Rc<Cell<bool>>,
+    /// Inline diff mode: "characters", "tokens", or "none".
+    inline_diff_mode: Rc<RefCell<String>>,
 }
 
 /// Per-pane data bundles the widgets that make up one column.
@@ -85,6 +94,8 @@ struct PaneData {
     statusbar: Rc<StatusBar>,
     save_button: gtk::Button,
     file_label: gtk::Label,
+    /// Transparent DrawingArea overlay that draws Insert boundary markers.
+    insert_overlay: gtk::DrawingArea,
 }
 
 impl FileDiff {
@@ -203,7 +214,11 @@ impl FileDiff {
                 // Status bar
                 vbox.append(p.statusbar.widget());
 
-                vbox.upcast::<gtk::Widget>()
+                let overlay_stack = gtk::Overlay::new();
+                overlay_stack.set_child(Some(&vbox));
+                overlay_stack.add_overlay(&p.insert_overlay);
+
+                overlay_stack.upcast::<gtk::Widget>()
             })
             .collect();
 
@@ -232,6 +247,10 @@ impl FileDiff {
         let move_map = Rc::new(RefCell::new(MoveMap::default()));
         let token_relations = Rc::new(RefCell::new(Vec::new()));
         let diff_state = Rc::new(RefCell::new(DiffState::new()));
+        let ignore_blank_lines = Rc::new(Cell::new(false));
+        let detect_moved_lines = Rc::new(Cell::new(true));
+        let show_connectors = Rc::new(Cell::new(true));
+        let inline_diff_mode = Rc::new(RefCell::new("tokens".to_string()));
 
         let fd = Self {
             container,
@@ -252,6 +271,10 @@ impl FileDiff {
             move_map,
             token_relations,
             diff_state,
+            ignore_blank_lines,
+            detect_moved_lines,
+            show_connectors,
+            inline_diff_mode,
         };
 
         // Wire up everything
@@ -262,6 +285,8 @@ impl FileDiff {
         fd.connect_focus_tracking();
         fd.connect_cursor_tracking();
         fd.connect_hover_sync();
+        fd.connect_link_map_hover();
+        fd.setup_insert_overlays();
         fd.compute_diff();
 
         fd
@@ -301,6 +326,12 @@ impl FileDiff {
 
         scrolled.set_child(Some(&view));
 
+        let insert_overlay = gtk::DrawingArea::new();
+        insert_overlay.set_css_classes(&["bezier-overlay"]);
+        insert_overlay.set_can_target(false);
+        insert_overlay.set_vexpand(true);
+        insert_overlay.set_hexpand(true);
+
         let msgarea = Rc::new(MsgArea::new());
         let statusbar = Rc::new(StatusBar::new());
 
@@ -321,6 +352,7 @@ impl FileDiff {
             statusbar,
             save_button: save_btn,
             file_label,
+            insert_overlay,
         }
     }
 
@@ -406,12 +438,25 @@ impl FileDiff {
 
     /// Enable or disable blank-line ignoring during diff computation.
     pub fn set_ignore_blanks(&self, ignore: bool) {
-        // Store the flag for use by compute_diff (and buffer-change handler)
-        // This is a minimal implementation; a full solution would pass the
-        // flag into the Differ engine itself.
-        if ignore {
-            log::info!("ignore_blank_lines enabled (not yet wired to engine)");
+        self.ignore_blank_lines.set(ignore);
+    }
+
+    /// Enable or disable similarity/movement detection overlays.
+    pub fn set_detect_moved_lines(&self, detect: bool) {
+        self.detect_moved_lines.set(detect);
+    }
+
+    /// Show or hide the link-map bezier connectors between panes.
+    pub fn set_show_connectors(&self, show: bool) {
+        self.show_connectors.set(show);
+        for lm in &self.link_maps {
+            lm.widget().set_visible(show);
         }
+    }
+
+    /// Set the inline diff mode ("characters", "tokens", or "none").
+    pub fn set_inline_diff_mode(&self, mode: &str) {
+        self.inline_diff_mode.replace(mode.to_string());
     }
 }
 
@@ -456,6 +501,11 @@ impl FileDiff {
         let link_maps = self.link_maps.clone();
         let shared_msgarea = Rc::clone(&self.shared_msgarea);
         let inline_cache = Rc::clone(&self.inline_cache);
+        let ignore_blank_lines = Rc::clone(&self.ignore_blank_lines);
+        let detect_moved_lines = Rc::clone(&self.detect_moved_lines);
+        let inline_diff_mode = Rc::clone(&self.inline_diff_mode);
+        let overlays: Vec<gtk::DrawingArea> =
+            self.panes.iter().map(|p| p.insert_overlay.clone()).collect();
         let panes: Vec<_> = (0..self.num_panes.min(2))
             .map(|i| {
                 (
@@ -469,54 +519,94 @@ impl FileDiff {
             text_a.clone(),
             text_b.clone(),
             Box::new(move |result: DiffResult| {
+                let DiffResult {
+                    chunks: raw_chunks,
+                    similarity,
+                    movement,
+                    text_a,
+                    text_b,
+                    is_empty,
+                    is_identical,
+                } = result;
+
                 clear_diff_tags_single(&panes[0].0, &panes[0].1);
                 clear_diff_tags_single(&panes[1].0, &panes[1].1);
                 ensure_diff_tags(&panes[0].1);
                 ensure_diff_tags(&panes[1].1);
 
+                let mut final_chunks = raw_chunks;
+                if ignore_blank_lines.get() {
+                    crate::diff::engine::consume_blank_lines(
+                        &mut final_chunks,
+                        &text_a,
+                        &text_b,
+                    );
+                }
+
+                let mode = inline_diff_mode.borrow();
                 apply_diff_tags_to_buffer(
                     &panes[0].0,
                     &panes[0].1,
                     0,
-                    &result.chunks,
+                    &final_chunks,
                     Some(&panes[1].0),
                     &inline_cache,
+                    &mode,
                 );
                 apply_diff_tags_to_buffer(
                     &panes[1].0,
                     &panes[1].1,
                     1,
-                    &result.chunks,
+                    &final_chunks,
                     Some(&panes[0].0),
                     &inline_cache,
+                    &mode,
                 );
+                drop(mode);
 
                 for gutter in &gutters {
-                    gutter.set_chunks(&result.chunks);
+                    gutter.set_chunks(&final_chunks);
                 }
 
-                let token_rels = build_token_relations(&result.text_a, &result.text_b);
+                let token_rels = if detect_moved_lines.get() {
+                    build_token_relations(&text_a, &text_b)
+                } else {
+                    Vec::new()
+                };
                 *token_relations.borrow_mut() = token_rels;
 
                 for lm in &link_maps {
-                    lm.update_line_counts(result.text_a.len(), result.text_b.len());
-                    lm.update_chunks(&result.chunks);
-                    lm.update_similarity(&result.similarity);
-                    lm.update_moves(&result.movement);
-                    lm.update_token_relations(&token_relations.borrow());
+                    lm.update_line_counts(text_a.len(), text_b.len());
+                    lm.update_chunks(&final_chunks);
+                    if detect_moved_lines.get() {
+                        lm.update_similarity(&similarity);
+                        lm.update_moves(&movement);
+                        lm.update_token_relations(&token_relations.borrow());
+                    } else {
+                        lm.clear_overlays();
+                    }
                 }
 
-                *similarity_map.borrow_mut() = result.similarity;
-                *move_map.borrow_mut() = result.movement;
+                if detect_moved_lines.get() {
+                    *similarity_map.borrow_mut() = similarity;
+                    *move_map.borrow_mut() = movement;
+                } else {
+                    *similarity_map.borrow_mut() = SimilarityMap::default();
+                    *move_map.borrow_mut() = MoveMap::default();
+                }
 
-                let max_lines = result.text_a.len().max(result.text_b.len());
-                *line_cache.borrow_mut() = LineCache::new(&result.chunks, max_lines);
+                let max_lines = text_a.len().max(text_b.len());
+                *line_cache.borrow_mut() = LineCache::new(&final_chunks, max_lines);
 
-                *chunks.borrow_mut() = result.chunks;
+                *chunks.borrow_mut() = final_chunks;
 
-                if result.is_empty {
+                for ov in &overlays {
+                    ov.queue_draw();
+                }
+
+                if is_empty {
                     shared_msgarea.show_info("Enter text to compare files");
-                } else if result.is_identical {
+                } else if is_identical {
                     shared_msgarea.show_info("Files are identical");
                 } else {
                     shared_msgarea.hide();
@@ -900,6 +990,7 @@ impl FileDiff {
                 // For Replace chunks, also apply inline diff
                 if chunk.op == DiffOp::Replace {
                     if let Some(other_buf) = other_buffer {
+                        let mode = self.inline_diff_mode.borrow();
                         apply_inline_diff(
                             buffer,
                             other_buf,
@@ -907,6 +998,7 @@ impl FileDiff {
                             &chunk,
                             pane,
                             &self.inline_cache,
+                            &mode,
                         );
                     }
                 }
@@ -1206,6 +1298,11 @@ impl FileDiff {
         let move_map = Rc::clone(&self.move_map);
         let line_cache = Rc::clone(&self.line_cache);
         let token_relations = Rc::clone(&self.token_relations);
+        let ignore_blank_lines = Rc::clone(&self.ignore_blank_lines);
+        let detect_moved_lines = Rc::clone(&self.detect_moved_lines);
+        let inline_diff_mode = Rc::clone(&self.inline_diff_mode);
+        let overlays: Vec<gtk::DrawingArea> =
+            self.panes.iter().map(|p| p.insert_overlay.clone()).collect();
 
         let buffers: Vec<gsv::Buffer> = self.panes.iter().map(|p| p.buffer.clone()).collect();
         let tag_tables: Vec<gtk::TextTagTable> =
@@ -1225,6 +1322,10 @@ impl FileDiff {
             let move_map = Rc::clone(&move_map);
             let line_cache = Rc::clone(&line_cache);
             let token_relations = Rc::clone(&token_relations);
+            let ignore_blank_lines_f = Rc::clone(&ignore_blank_lines);
+            let detect_moved_lines_f = Rc::clone(&detect_moved_lines);
+            let inline_diff_mode_f = Rc::clone(&inline_diff_mode);
+            let overlays_f = overlays.clone();
 
             self.panes[pi].buffer.connect_changed(move |_| {
                 if loading.get() || buffers.len() < 2 {
@@ -1245,61 +1346,104 @@ impl FileDiff {
                 let inline_cache = Rc::clone(&inline_cache);
                 let buffers = buffers.clone();
                 let tag_tables = tag_tables.clone();
+                let ignore_bl = Rc::clone(&ignore_blank_lines_f);
+                let detect_mv = Rc::clone(&detect_moved_lines_f);
+                let inline_mode = Rc::clone(&inline_diff_mode_f);
+                let overlays_inner = overlays_f.clone();
 
                 diff_state.borrow_mut().schedule_diff(
                     text_a.clone(),
                     text_b.clone(),
                     Box::new(move |result: DiffResult| {
+                        let DiffResult {
+                            chunks: raw_chunks,
+                            similarity,
+                            movement,
+                            text_a,
+                            text_b,
+                            is_empty,
+                            is_identical,
+                        } = result;
+
                         for bi in 0..2.min(buffers.len()) {
                             clear_diff_tags_single(&buffers[bi], &tag_tables[bi]);
                             ensure_diff_tags(&tag_tables[bi]);
                         }
 
+                        let mut final_chunks = raw_chunks;
+                        if ignore_bl.get() {
+                            crate::diff::engine::consume_blank_lines(
+                                &mut final_chunks,
+                                &text_a,
+                                &text_b,
+                            );
+                        }
+
+                        let mode = inline_mode.borrow();
                         apply_diff_tags_to_buffer(
                             &buffers[0],
                             &tag_tables[0],
                             0,
-                            &result.chunks,
+                            &final_chunks,
                             Some(&buffers[1]),
                             &inline_cache,
+                            &mode,
                         );
                         apply_diff_tags_to_buffer(
                             &buffers[1],
                             &tag_tables[1],
                             1,
-                            &result.chunks,
+                            &final_chunks,
                             Some(&buffers[0]),
                             &inline_cache,
+                            &mode,
                         );
+                        drop(mode);
 
                         for gutter in &gutters {
-                            gutter.set_chunks(&result.chunks);
+                            gutter.set_chunks(&final_chunks);
                         }
 
-                        let token_rels =
-                            build_token_relations(&result.text_a, &result.text_b);
+                        let token_rels = if detect_mv.get() {
+                            build_token_relations(&text_a, &text_b)
+                        } else {
+                            Vec::new()
+                        };
                         *token_relations.borrow_mut() = token_rels;
 
                         for lm in &link_maps {
-                            lm.update_line_counts(result.text_a.len(), result.text_b.len());
-                            lm.update_chunks(&result.chunks);
-                            lm.update_similarity(&result.similarity);
-                            lm.update_moves(&result.movement);
-                            lm.update_token_relations(&token_relations.borrow());
+                            lm.update_line_counts(text_a.len(), text_b.len());
+                            lm.update_chunks(&final_chunks);
+                            if detect_mv.get() {
+                                lm.update_similarity(&similarity);
+                                lm.update_moves(&movement);
+                                lm.update_token_relations(&token_relations.borrow());
+                            } else {
+                                lm.clear_overlays();
+                            }
                         }
 
-                        *similarity_map.borrow_mut() = result.similarity;
-                        *move_map.borrow_mut() = result.movement;
+                        if detect_mv.get() {
+                            *similarity_map.borrow_mut() = similarity;
+                            *move_map.borrow_mut() = movement;
+                        } else {
+                            *similarity_map.borrow_mut() = SimilarityMap::default();
+                            *move_map.borrow_mut() = MoveMap::default();
+                        }
 
-                        let max_lines = result.text_a.len().max(result.text_b.len());
-                        *line_cache.borrow_mut() = LineCache::new(&result.chunks, max_lines);
+                        let max_lines = text_a.len().max(text_b.len());
+                        *line_cache.borrow_mut() = LineCache::new(&final_chunks, max_lines);
 
-                        *chunks.borrow_mut() = result.chunks;
+                        *chunks.borrow_mut() = final_chunks;
 
-                        if result.is_empty {
+                        for ov in &overlays_inner {
+                            ov.queue_draw();
+                        }
+
+                        if is_empty {
                             shared_msgarea
                                 .show_info("Enter text to compare files");
-                        } else if result.is_identical {
+                        } else if is_identical {
                             shared_msgarea.show_info("Files are identical");
                         } else {
                             shared_msgarea.hide();
@@ -1473,6 +1617,142 @@ impl FileDiff {
         }
     }
 
+    /// Link map hover: when the cursor hovers over a connector in the
+    /// link map, highlight the corresponding lines in both panes.
+    fn connect_link_map_hover(&self) {
+        if self.link_maps.is_empty() || self.panes.len() < 2 {
+            return;
+        }
+
+        let buffers: Vec<gsv::Buffer> =
+            self.panes.iter().map(|p| p.buffer.clone()).collect();
+
+        for lm in &self.link_maps {
+            let b0 = buffers[0].clone();
+            let b1 = buffers[1].clone();
+            lm.connect_hover(move |info| {
+                let tag_name = "meld-link-hover";
+                for buf in [&b0, &b1] {
+                    let tag_table = buf.tag_table();
+                    if tag_table.lookup(tag_name).is_none() {
+                        let tag = gsv::Tag::new(Some(tag_name));
+                        tag.set_background(Some("rgba(255,200,0,0.25)"));
+                        tag.set_draw_spaces(true);
+                        tag_table.add(&tag);
+                    }
+                    let os = buf.start_iter();
+                    let oe = buf.end_iter();
+                    if let Some(tag) = tag_table.lookup(tag_name) {
+                        buf.remove_tag(&tag, &os, &oe);
+                    }
+                }
+
+                match info {
+                    crate::ui::link_map::HoverInfo::None => {}
+                    crate::ui::link_map::HoverInfo::Chunk {
+                        start_a,
+                        end_a,
+                        start_b,
+                        end_b,
+                        ..
+                    } => {
+                        highlight_range(&b0, tag_name, *start_a, *end_a);
+                        highlight_range(&b1, tag_name, *start_b, *end_b);
+                    }
+                    crate::ui::link_map::HoverInfo::Token {
+                        left_line,
+                        right_line,
+                    } => {
+                        highlight_range(&b0, tag_name, *left_line, *left_line + 1);
+                        highlight_range(&b1, tag_name, *right_line, *right_line + 1);
+                    }
+                    crate::ui::link_map::HoverInfo::Similarity {
+                        left_line,
+                        right_line,
+                    } => {
+                        highlight_range(&b0, tag_name, *left_line, *left_line + 1);
+                        highlight_range(&b1, tag_name, *right_line, *right_line + 1);
+                    }
+                    crate::ui::link_map::HoverInfo::Move {
+                        left_start,
+                        left_end,
+                        right_start,
+                        right_end,
+                    } => {
+                        highlight_range(&b0, tag_name, *left_start, *left_end);
+                        highlight_range(&b1, tag_name, *right_start, *right_end);
+                    }
+                }
+            });
+        }
+    }
+
+    /// Set up transparent DrawingArea overlays on each pane that draw
+    /// 1px Insert boundary markers at the correct inter-line position.
+    fn setup_insert_overlays(&self) {
+        for pi in 0..self.panes.len() {
+            let scrolled = self.panes[pi].scrolled.clone();
+            let view = self.panes[pi].view.clone();
+            let overlay = self.panes[pi].insert_overlay.clone();
+            let chunks = Rc::clone(&self.chunks);
+
+            // Redraw overlay when text view scrolls
+            if let Some(vadj) = view.vadjustment() {
+                let ov = overlay.clone();
+                vadj.connect_value_changed(move |_| {
+                    ov.queue_draw();
+                });
+            }
+
+            overlay.set_draw_func(move |da, cr, width, height| {
+                if width < 2 || height < 2 {
+                    return;
+                }
+                let w = width as f64;
+
+                let da_w: &gtk::Widget = da.upcast_ref();
+                let scr_w: &gtk::Widget = scrolled.upcast_ref();
+                let (scr_x, scr_y) = scr_w
+                    .translate_coordinates(da_w, 0.0, 0.0)
+                    .unwrap_or((0.0, 0.0));
+                let scroll_val =
+                    view.vadjustment().map(|a| a.value()).unwrap_or(0.0);
+
+                let buf = view.buffer();
+                let line_to_y = |line: usize| -> Option<f64> {
+                    if line >= buf.line_count() as usize {
+                        return None;
+                    }
+                    let iter = buf.iter_at_line(line as i32)?;
+                    let rect = view.iter_location(&iter);
+                    Some(rect.y() as f64 - scroll_val + scr_y)
+                };
+
+                let chunks = chunks.borrow();
+                for chunk in chunks.iter() {
+                    if chunk.op != DiffOp::Insert {
+                        continue;
+                    }
+                    let insert_line = if pi == 0 {
+                        chunk.start_a
+                    } else {
+                        chunk.start_b
+                    };
+                    if let Some(y) = line_to_y(insert_line) {
+                        if y < -1.0 || y > height as f64 + 1.0 {
+                            continue;
+                        }
+                        cr.set_source_rgba(0.647, 1.0, 0.298, 0.6);
+                        cr.set_line_width(1.0);
+                        cr.move_to(scr_x, y + 0.5);
+                        cr.line_to(scr_x + w, y + 0.5);
+                        cr.stroke().ok();
+                    }
+                }
+            });
+        }
+    }
+
     /// Update status bar with cursor position.
     fn connect_cursor_tracking(&self) {
         for pane in &self.panes {
@@ -1534,6 +1814,13 @@ impl MeldPage for FileDiff {
     fn go_prev_conflict(&self) {
         self.go_to_conflict(-1);
     }
+
+    fn apply_settings(&self, settings: &MeldSettings) {
+        self.set_ignore_blanks(settings.ignore_blank_lines);
+        self.set_detect_moved_lines(settings.detect_moved_lines);
+        self.set_show_connectors(settings.show_connectors);
+        self.set_inline_diff_mode(&settings.inline_diff_mode);
+    }
 }
 
 impl Drop for FileDiff {
@@ -1550,6 +1837,21 @@ impl Drop for FileDiff {
 
 // ─── Tag helpers ────────────────────────────────────────────────────
 
+fn highlight_range(buffer: &gsv::Buffer, tag_name: &str, start_line: usize, end_line: usize) {
+    if start_line >= end_line {
+        return;
+    }
+    let tag_table = buffer.tag_table();
+    if let (Some(s), Some(e)) = (
+        buffer.iter_at_line_offset(start_line as i32, 0),
+        buffer.iter_at_line_offset(end_line as i32, 0),
+    ) {
+        if let Some(tag) = tag_table.lookup(tag_name) {
+            buffer.apply_tag(&tag, &s, &e);
+        }
+    }
+}
+
 /// Extract text from a GtkSourceBuffer as a Vec of line strings.
 pub fn buffer_text_lines(buffer: &gsv::Buffer) -> Vec<String> {
     let start = buffer.start_iter();
@@ -1562,6 +1864,7 @@ fn diff_tag_names() -> Vec<&'static str> {
     vec![
         "diff-delete",
         "diff-insert",
+        "diff-insert-marker",
         "diff-replace",
         "diff-inline",
         "diff-inline-delete",
@@ -1624,6 +1927,13 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
         tag.set_draw_spaces(true);
         tag_table.add(&tag);
     }
+    if tag_table.lookup("diff-insert-marker").is_none() {
+        let tag = gtk::TextTag::builder()
+            .name("diff-insert-marker")
+            .paragraph_background("#a5ff4c")
+            .build();
+        tag_table.add(&tag);
+    }
 }
 
 fn apply_diff_tags_to_buffer(
@@ -1633,6 +1943,7 @@ fn apply_diff_tags_to_buffer(
     chunks: &[Chunk],
     other_buffer: Option<&gsv::Buffer>,
     inline_cache: &InlineDiffCache,
+    inline_diff_mode: &str,
 ) {
     for chunk in chunks {
         let (start, end, tag_name) = match (&chunk.op, pane) {
@@ -1656,7 +1967,7 @@ fn apply_diff_tags_to_buffer(
         // For Replace chunks, apply inline (word-level) diff
         if chunk.op == DiffOp::Replace {
             if let Some(other_buf) = other_buffer {
-                apply_inline_diff(buffer, other_buf, tag_table, chunk, pane, inline_cache);
+                apply_inline_diff(buffer, other_buf, tag_table, chunk, pane, inline_cache, inline_diff_mode);
             }
         }
     }
@@ -1937,6 +2248,7 @@ fn apply_inline_diff(
     chunk: &Chunk,
     pane: usize,
     cache: &InlineDiffCache,
+    inline_diff_mode: &str,
 ) {
     let (start_a, end_a, start_b, end_b) = (chunk.start_a, chunk.end_a, chunk.start_b, chunk.end_b);
 
@@ -2007,7 +2319,11 @@ fn apply_inline_diff(
         if inline_changes.is_empty() {
             let is_import = InlineDiffer::parse_import_line(this_line).is_some();
             if !is_import {
-                inline_changes = (*cache.compare_line_tokens(&text_a, &text_b)).clone();
+                inline_changes = match inline_diff_mode {
+                    "characters" => InlineDiffer::compare_line(&text_a, &text_b),
+                    "tokens" => (*cache.compare_line_tokens(&text_a, &text_b)).clone(),
+                    _ => Vec::new(),
+                };
             }
         }
         if inline_changes.is_empty() {
