@@ -41,12 +41,11 @@ impl DiffState {
             flag.store(true, Ordering::SeqCst);
         }
         self.cancel_flag = None;
-        if let Some(src) = self.debounce_source.take() {
-            src.remove();
-        }
-        if let Some(src) = self.poll_source.take() {
-            src.remove();
-        }
+        // Drop SourceIds without calling remove() — GLib auto-removes
+        // timeout sources when the callback returns ControlFlow::Break.
+        // Calling remove() on an already-removed source panics.
+        self.debounce_source = None;
+        self.poll_source = None;
     }
 
     pub fn schedule_diff(

@@ -1708,13 +1708,17 @@ impl FileDiff {
                 if width < 2 || height < 2 {
                     return;
                 }
-                let w = width as f64;
 
                 let da_w: &gtk::Widget = da.upcast_ref();
                 let scr_w: &gtk::Widget = scrolled.upcast_ref();
+                let view_w: &gtk::Widget = view.upcast_ref();
                 let (scr_x, scr_y) = scr_w
                     .translate_coordinates(da_w, 0.0, 0.0)
                     .unwrap_or((0.0, 0.0));
+                let (view_x, _) = view_w
+                    .translate_coordinates(da_w, 0.0, 0.0)
+                    .unwrap_or((0.0, 0.0));
+                let view_w_px = view_w.allocated_width() as f64;
                 let scroll_val =
                     view.vadjustment().map(|a| a.value()).unwrap_or(0.0);
 
@@ -1744,8 +1748,8 @@ impl FileDiff {
                         }
                         cr.set_source_rgba(0.647, 1.0, 0.298, 0.6);
                         cr.set_line_width(1.0);
-                        cr.move_to(scr_x, y + 0.5);
-                        cr.line_to(scr_x + w, y + 0.5);
+                        cr.move_to(view_x, y + 0.5);
+                        cr.line_to(view_x + view_w_px, y + 0.5);
                         cr.stroke().ok();
                     }
                 }
