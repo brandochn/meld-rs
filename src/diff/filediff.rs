@@ -1892,7 +1892,16 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
     //   meld:insert  bg=#d0ffa3  fg=#008800  line-bg=#a5ff4c
     //   meld:replace bg=#bdddff  fg=#0044dd  line-bg=#65b2ff
     //   meld:delete  bg=#ffffff  fg=#880000  line-bg=#cccccc
-    ensure_tag_full(tag_table, "diff-insert", "#d0ffa3", "#008800", "#a5ff4c");
+    // diff-insert uses only paragraph_background (no background) for a
+    // uniform full-line bar matching Meld's single-rectangle behavior.
+    if tag_table.lookup("diff-insert").is_none() {
+        let tag = gtk::TextTag::builder()
+            .name("diff-insert")
+            .foreground("#008800")
+            .paragraph_background("#a5ff4c")
+            .build();
+        tag_table.add(&tag);
+    }
     ensure_tag_full(tag_table, "diff-replace", "#bdddff", "#0044dd", "#65b2ff");
     ensure_tag_full(tag_table, "diff-delete", "#ffffff", "#880000", "#cccccc");
     // Inline differences within a line — single intense blue for BOTH panes,
