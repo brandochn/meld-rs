@@ -272,7 +272,7 @@ impl Default for MeldSettings {
             ignore_blank_lines: false,
             detect_moved_lines: true,
             show_connectors: true,
-            inline_diff_mode: "characters".into(),
+            inline_diff_mode: "tokens".into(),
             similarity_threshold: 0.6,
             use_system_editor: true,
             custom_editor_command: String::new(),

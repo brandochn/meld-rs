@@ -284,7 +284,6 @@ impl FileDiff {
         fd.connect_gutter_signals();
         fd.connect_focus_tracking();
         fd.connect_cursor_tracking();
-        fd.connect_hover_sync();
         fd.connect_link_map_hover();
         fd.setup_insert_overlays();
         fd.compute_diff();
@@ -1531,92 +1530,6 @@ impl FileDiff {
         }
     }
 
-    /// Hover sync: when the cursor hovers over a line in one pane, briefly
-    /// highlight the corresponding line in the other pane.
-    ///
-    /// Uses EventControllerMotion for cross-pane cursor tracking.
-    fn connect_hover_sync(&self) {
-        if self.panes.len() < 2 {
-            return;
-        }
-
-        let chunks = Rc::clone(&self.chunks);
-        let buffers: Vec<gsv::Buffer> = self.panes.iter().map(|p| p.buffer.clone()).collect();
-
-        for (pi, pane) in self.panes.iter().enumerate() {
-            let other_pi = if pi == 0 { 1 } else { 0 };
-            if other_pi >= self.panes.len() {
-                continue;
-            }
-
-            let chunks = Rc::clone(&chunks);
-            let other_buffer = buffers[other_pi].clone();
-            let this_view_for_motion = pane.view.clone();
-            let this_view = pane.view.clone();
-
-            let motion = gtk::EventControllerMotion::new();
-            motion.connect_motion(move |_controller, _x, y| {
-                let truncated = y as i32;
-                if truncated < 0 {
-                    return;
-                }
-
-                // Approximate line from y coordinate using simple proportion
-                let buffer = this_view_for_motion.buffer();
-                let line_count = buffer.line_count().max(1) as f64;
-                let view_height = this_view_for_motion.height() as f64;
-                let line = if view_height > 0.0 {
-                    (y / view_height * line_count) as usize
-                } else {
-                    0
-                };
-
-                let chunks = chunks.borrow();
-                for chunk in chunks.iter() {
-                    let pane_line = if pi == 0 {
-                        chunk.start_a
-                    } else {
-                        chunk.start_b
-                    };
-                    let pane_end = if pi == 0 { chunk.end_a } else { chunk.end_b };
-
-                    if line >= pane_line && line < pane_end && chunk.op != DiffOp::Equal {
-                        let other_line = if pi == 0 {
-                            chunk.start_b
-                        } else {
-                            chunk.start_a
-                        };
-                        let other_end = if pi == 0 { chunk.end_b } else { chunk.end_a };
-
-                        if other_line < other_end {
-                            let tag_name = "meld-hover-sync";
-                            let tag_table = other_buffer.tag_table();
-                            if tag_table.lookup(tag_name).is_none() {
-                                let tag = gsv::Tag::new(Some(tag_name));
-                                tag.set_background(Some("rgba(255,255,0,0.3)"));
-                                tag.set_draw_spaces(true);
-                                tag_table.add(&tag);
-                            }
-                            if let (Some(s), Some(e)) = (
-                                other_buffer.iter_at_line_offset(other_line as i32, 0),
-                                other_buffer.iter_at_line_offset(other_end as i32, 0),
-                            ) {
-                                if let Some(tag) = tag_table.lookup(tag_name) {
-                                    let os = other_buffer.start_iter();
-                                    let oe = other_buffer.end_iter();
-                                    other_buffer.remove_tag(&tag, &os, &oe);
-                                    other_buffer.apply_tag(&tag, &s, &e);
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            });
-            this_view.add_controller(motion);
-        }
-    }
-
     /// Link map hover: when the cursor hovers over a connector in the
     /// link map, highlight the corresponding lines in both panes.
     fn connect_link_map_hover(&self) {
@@ -1757,17 +1670,69 @@ impl FileDiff {
         }
     }
 
-    /// Update status bar with cursor position.
+    /// Update status bar with cursor position and apply current-chunk highlight.
     fn connect_cursor_tracking(&self) {
+        let chunks = Rc::clone(&self.chunks);
+        let line_cache = Rc::clone(&self.line_cache);
+        let current_chunk_idx = Rc::clone(&self.current_chunk_idx);
+
         for pane in &self.panes {
             let buffer = pane.buffer.clone();
             let statusbar = Rc::clone(&pane.statusbar);
+            let chunks = Rc::clone(&chunks);
+            let line_cache = Rc::clone(&line_cache);
+            let current_chunk_idx = Rc::clone(&current_chunk_idx);
+            let tag_table = buffer.tag_table();
+
             buffer.connect_cursor_position_notify(move |buf| {
                 let pos = buf.cursor_position() as u32;
                 let iter = buf.iter_at_offset(pos as i32);
                 let line = iter.line().max(0) as u32 + 1;
                 let line_offset = iter.line_offset().max(0) as u32 + 1;
                 statusbar.set_position(line, line_offset);
+
+                let line_usize = (line - 1) as usize;
+                let new_idx = line_cache.borrow().locate_chunk(line_usize);
+
+                if current_chunk_idx.get() != new_idx {
+                    // Ensure highlight tag exists
+                    let hl_tag = "meld-current-chunk-highlight";
+                    if tag_table.lookup(hl_tag).is_none() {
+                        let tag = gtk::TextTag::builder()
+                            .name(hl_tag)
+                            .paragraph_background("rgba(255,255,255,0.5)")
+                            .build();
+                        tag_table.add(&tag);
+                    }
+
+                    // Remove old highlight
+                    let os = buf.start_iter();
+                    let oe = buf.end_iter();
+                    if let Some(tag) = tag_table.lookup(hl_tag) {
+                        buf.remove_tag(&tag, &os, &oe);
+                    }
+
+                    // Apply to new chunk (non-Equal only, matching Meld)
+                    if let Some(idx) = new_idx {
+                        let chunks = chunks.borrow();
+                        if idx < chunks.len() && chunks[idx].op != DiffOp::Equal {
+                            let (start, end) = if chunks[idx].op == DiffOp::Insert {
+                                (chunks[idx].start_b, chunks[idx].end_b)
+                            } else {
+                                (chunks[idx].start_a, chunks[idx].end_a)
+                            };
+                            if let (Some(s), Some(e)) = (
+                                buf.iter_at_line_offset(start as i32, 0),
+                                buf.iter_at_line_offset(end as i32, 0),
+                            ) {
+                                if let Some(tag) = tag_table.lookup(hl_tag) {
+                                    buf.apply_tag(&tag, &s, &e);
+                                }
+                            }
+                        }
+                    }
+                    current_chunk_idx.set(new_idx);
+                }
             });
         }
     }
@@ -1902,8 +1867,27 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
             .build();
         tag_table.add(&tag);
     }
-    ensure_tag_full(tag_table, "diff-replace", "#bdddff", "#0044dd", "#65b2ff");
-    ensure_tag_full(tag_table, "diff-delete", "#ffffff", "#880000", "#cccccc");
+    // diff-replace uses only paragraph_background (no background) for a
+    // uniform light-blue fill — dark-blue accent is applied per-word via
+    // diff-inline-replace tags on changed tokens only.
+    if tag_table.lookup("diff-replace").is_none() {
+        let tag = gtk::TextTag::builder()
+            .name("diff-replace")
+            .foreground("#0044dd")
+            .paragraph_background("#bdddff")
+            .build();
+        tag_table.add(&tag);
+    }
+    // diff-delete uses only paragraph_background (no background or
+    // foreground) — preserves syntax highlighting with a full-width
+    // gray fill, matching Meld's behavior for unmatched lines.
+    if tag_table.lookup("diff-delete").is_none() {
+        let tag = gtk::TextTag::builder()
+            .name("diff-delete")
+            .paragraph_background("#cccccc")
+            .build();
+        tag_table.add(&tag);
+    }
     // Inline differences within a line — single intense blue for BOTH panes,
     // matching the original Meld "meld:inline" style.
     // Use GtkSource.Tag (not plain GtkTextTag) with draw_spaces = true so
@@ -2365,11 +2349,19 @@ fn apply_inline_diff(
             if !apply {
                 continue;
             }
-            let tag_name = match change.op {
-                DiffOp::Delete => "diff-inline-delete",
-                DiffOp::Insert => "diff-inline-insert",
-                DiffOp::Replace => "diff-inline-replace",
-                DiffOp::Equal => continue,
+            // For Replace chunks, all inline changes use the unified
+            // dark-blue tag (matching Meld's single "inline" color).
+            // The coordinate-space filter above ensures each pane only
+            // sees changes with its own buffer's offsets.
+            let tag_name = if chunk.op == DiffOp::Replace {
+                "diff-inline-replace"
+            } else {
+                match change.op {
+                    DiffOp::Delete => "diff-inline-delete",
+                    DiffOp::Insert => "diff-inline-insert",
+                    DiffOp::Replace => "diff-inline-replace",
+                    DiffOp::Equal => continue,
+                }
             };
 
             if let Some(tag) = tag_table.lookup(tag_name) {

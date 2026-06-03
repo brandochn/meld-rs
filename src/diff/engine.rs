@@ -1394,49 +1394,10 @@ impl InlineDiffer {
             }
         }
 
-        // Merge consecutive Delete+Insert runs into Replace chunks.
-        // Handles patterns like Delete, Delete, Insert, Insert → one Replace.
-        Self::_postprocess_multi(&mut changes);
+        // Delete and Insert changes use coordinates from different
+        // buffers — merging them into a single Replace produces wrong
+        // bounds on one pane.  Keep them separate for per-pane accuracy.
         changes
-    }
-
-    /// Merge all consecutive runs of Delete and Insert (in any order)
-    /// into a single Replace chunk, matching the line-level gap-based
-    /// logic used by `merge_adjacent_replace_chunks`.
-    fn _postprocess_multi(changes: &mut Vec<InlineChange>) {
-        let mut i = 0;
-        while i < changes.len() {
-            let mut j = i;
-            let mut has_delete = false;
-            let mut has_insert = false;
-            while j < changes.len() {
-                match changes[j].op {
-                    DiffOp::Delete => {
-                        has_delete = true;
-                    }
-                    DiffOp::Insert => {
-                        has_insert = true;
-                    }
-                    _ => break,
-                }
-                j += 1;
-            }
-            if has_delete && has_insert {
-                // Merge [i..j) into a single Replace spanning the full range
-                let start = changes[i].start;
-                let end = changes[j - 1].end;
-                changes.drain(i..j);
-                changes.insert(
-                    i,
-                    InlineChange {
-                        start,
-                        end,
-                        op: DiffOp::Replace,
-                    },
-                );
-            }
-            i += 1;
-        }
     }
 
     /// Compare two lines at the token (word) level.
