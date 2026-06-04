@@ -1647,15 +1647,18 @@ impl FileDiff {
 
                 let chunks = chunks.borrow();
                 for chunk in chunks.iter() {
-                    if chunk.op != DiffOp::Insert {
-                        continue;
-                    }
-                    let insert_line = if pi == 0 {
-                        chunk.start_a
+                    // Draw a marker on the pane where the chunk has zero
+                    // content (Insert on left, Delete on right).  This
+                    // matches Meld's do_draw_layer 1px stroke.
+                    let marker_line = if chunk.start_a == chunk.end_a && pi == 0 {
+                        Some(chunk.start_a)
+                    } else if chunk.start_b == chunk.end_b && pi == 1 {
+                        Some(chunk.start_b)
                     } else {
-                        chunk.start_b
+                        None
                     };
-                    if let Some(y) = line_to_y(insert_line) {
+                    let Some(line) = marker_line else { continue };
+                    if let Some(y) = line_to_y(line) {
                         if y < -1.0 || y > height as f64 + 1.0 {
                             continue;
                         }
@@ -1857,12 +1860,13 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
     //   meld:insert  bg=#d0ffa3  fg=#008800  line-bg=#a5ff4c
     //   meld:replace bg=#bdddff  fg=#0044dd  line-bg=#65b2ff
     //   meld:delete  bg=#ffffff  fg=#880000  line-bg=#cccccc
-    // diff-insert uses only paragraph_background (no background) for a
-    // uniform full-line bar matching Meld's single-rectangle behavior.
+    // All three use only paragraph_background — no foreground override
+    // so syntax highlighting is preserved. Meld's style-scheme foreground
+    // interacts with the syntax engine; GtkTextTag.foreground overrides it.
+    // diff-insert: paragraph_background only — green full-line bar.
     if tag_table.lookup("diff-insert").is_none() {
         let tag = gtk::TextTag::builder()
             .name("diff-insert")
-            .foreground("#008800")
             .paragraph_background("#a5ff4c")
             .build();
         tag_table.add(&tag);
@@ -1873,18 +1877,16 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
     if tag_table.lookup("diff-replace").is_none() {
         let tag = gtk::TextTag::builder()
             .name("diff-replace")
-            .foreground("#0044dd")
             .paragraph_background("#bdddff")
             .build();
         tag_table.add(&tag);
     }
-    // diff-delete uses only paragraph_background (no background or
-    // foreground) — preserves syntax highlighting with a full-width
-    // gray fill, matching Meld's behavior for unmatched lines.
+    // diff-delete uses the same green fill as diff-insert — matching
+    // Meld's get_common_theme where delete → insert color lookup.
     if tag_table.lookup("diff-delete").is_none() {
         let tag = gtk::TextTag::builder()
             .name("diff-delete")
-            .paragraph_background("#cccccc")
+            .paragraph_background("#a5ff4c")
             .build();
         tag_table.add(&tag);
     }

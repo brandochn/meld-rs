@@ -285,11 +285,8 @@ impl ActionGutter {
 
 /// Classify the appropriate action for a chunk (matching Meld's
 /// `_classify_change_actions` simplified for Replace-only mode).
-fn classify_action(chunk: &Chunk) -> GutterAction {
-    match chunk.op {
-        DiffOp::Delete => GutterAction::Delete,
-        _ => GutterAction::Replace,
-    }
+fn classify_action(_chunk: &Chunk) -> GutterAction {
+    GutterAction::Replace
 }
 
 // ─── Drawing ──────────────────────────────────────────────────────────
