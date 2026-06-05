@@ -2554,62 +2554,52 @@ fn add_fading_highlight(buffer: &gsv::Buffer, start: &gtk::TextIter, end: &gtk::
 
 /// Execute a replace operation: copy text from src to dst at the chunk position.
 fn execute_replace(src_buffer: &gsv::Buffer, dst_buffer: &gsv::Buffer, chunk: &Chunk) {
-    // Get source text
-    let src_start = src_buffer.iter_at_line_offset(chunk.start_a as i32, 0);
-    let src_end = src_buffer.iter_at_line_offset(chunk.end_a as i32, 0);
+    let src_start = iter_at_line_or_end(src_buffer, chunk.start_a as i32);
+    let src_end = iter_at_line_or_end(src_buffer, chunk.end_a as i32);
 
-    let src_text = if let (Some(s), Some(e)) = (src_start, src_end) {
-        if s.offset() < e.offset() {
-            src_buffer.text(&s, &e, true).to_string()
-        } else {
-            String::new()
-        }
+    let mut src_text = if src_start.offset() < src_end.offset() {
+        src_buffer.text(&src_start, &src_end, true).to_string()
     } else {
         String::new()
     };
+    // Trailing empty lines produce zero visible text between the
+    // chunk-start iter and the buffer-end iter — include the newline.
+    if chunk.end_a == src_buffer.line_count() as usize && src_text.is_empty() {
+        src_text.push('\n');
+    }
 
-    // Replace in destination
     dst_buffer.begin_user_action();
 
-    let dst_start = dst_buffer.iter_at_line_offset(chunk.start_b as i32, 0);
-    let dst_end = dst_buffer.iter_at_line_offset(chunk.end_b as i32, 0);
+    let dst_start = iter_at_line_or_end(dst_buffer, chunk.start_b as i32);
+    let dst_end = iter_at_line_or_end(dst_buffer, chunk.end_b as i32);
 
-    if let (Some(ds), Some(de)) = (dst_start, dst_end) {
-        if ds.offset() < de.offset() {
-            dst_buffer.delete(&mut ds.clone(), &mut de.clone());
-        }
-        let insert_pos = dst_buffer.iter_at_line_offset(chunk.start_b as i32, 0);
-        if let Some(pos) = insert_pos {
-            dst_buffer.insert(&mut pos.clone(), &src_text);
-        }
+    if dst_start.offset() < dst_end.offset() {
+        dst_buffer.delete(&mut dst_start.clone(), &mut dst_end.clone());
     }
+    let insert_pos = iter_at_line_or_end(dst_buffer, chunk.start_b as i32);
+    dst_buffer.insert(&mut insert_pos.clone(), &src_text);
 
     dst_buffer.end_user_action();
 
-    // Fading highlight at the inserted position
-    if let Some(ins) = dst_buffer.iter_at_line_offset(chunk.start_b as i32, 0) {
-        let line_count = src_text.lines().count().max(1);
-        if let Some(end) = dst_buffer.iter_at_line_offset((chunk.start_b + line_count) as i32, 0) {
-            add_fading_highlight(dst_buffer, &ins, &end);
-        }
-    }
+    let ins = iter_at_line_or_end(dst_buffer, chunk.start_b as i32);
+    let line_count = src_text.lines().count().max(1);
+    let end = iter_at_line_or_end(dst_buffer, (chunk.start_b + line_count) as i32);
+    add_fading_highlight(dst_buffer, &ins, &end);
 }
 
 /// Execute a delete operation: remove text from the source buffer.
 fn execute_delete(buffer: &gsv::Buffer, chunk: &Chunk) {
     buffer.begin_user_action();
 
-    let start_iter = buffer.iter_at_line_offset(chunk.start_a.max(0) as i32, 0);
+    let start_iter = iter_at_line_or_end(buffer, chunk.start_a.max(0) as i32);
     let end_iter = if chunk.end_a > chunk.start_a {
-        buffer.iter_at_line_offset(chunk.end_a as i32, 0)
+        iter_at_line_or_end(buffer, chunk.end_a as i32)
     } else {
-        buffer.iter_at_line_offset(chunk.start_a as i32, 0)
+        start_iter.clone()
     };
 
-    if let (Some(start), Some(end)) = (start_iter, end_iter) {
-        if start.offset() < end.offset() {
-            buffer.delete(&mut start.clone(), &mut end.clone());
-        }
+    if start_iter.offset() < end_iter.offset() {
+        buffer.delete(&mut start_iter.clone(), &mut end_iter.clone());
     }
 
     buffer.end_user_action();

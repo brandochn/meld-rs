@@ -192,14 +192,24 @@ impl ActionGutter {
             let scroll = draw_source.vadjustment().map(|a| a.value()).unwrap_or(0.0);
 
             let line_to_y = |line: usize| -> f64 {
-                if line >= draw_source.buffer().line_count() as usize {
+                let buf = draw_source.buffer();
+                if line > buf.line_count() as usize {
                     return 0.0;
                 }
-                if let Some(iter) = draw_source.buffer().iter_at_line(line as i32) {
-                    let rect = draw_source.iter_location(&iter);
-                    return rect.y() as f64 - scroll + src_off;
+                let is_end = line == buf.line_count() as usize;
+                let iter = if is_end {
+                    buf.end_iter()
+                } else if let Some(iter) = buf.iter_at_line(line as i32) {
+                    iter
+                } else {
+                    return 0.0;
+                };
+                let rect = draw_source.iter_location(&iter);
+                if is_end {
+                    rect.y() as f64 + rect.height() as f64 - scroll + src_off
+                } else {
+                    rect.y() as f64 - scroll + src_off
                 }
-                0.0
             };
 
             // Background is handled by CSS (.action-gutter { background: transparent })
