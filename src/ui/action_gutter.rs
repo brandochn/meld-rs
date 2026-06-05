@@ -365,11 +365,10 @@ fn draw_chunk_action(
         cr.stroke().ok();
     }
 
-    // Action icon (centered)
-    let margin = 2.0;
+    // Action icon (centered) — fixed size matching Meld's ActionIcons (16px)
     let cx = width / 2.0;
     let cy = y + h / 2.0;
-    let half = (h.min(width) / 2.0 - margin - 2.0).max(3.0);
+    let half = 8.0;
     let action = classify_action(chunk);
 
     match action {

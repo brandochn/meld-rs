@@ -76,10 +76,12 @@ impl BufferLines {
 
         // Fetch from buffer
         let start = self.buffer.iter_at_line_offset(index as i32, 0);
-        let end = self.buffer.iter_at_line_offset((index + 1) as i32, 0);
+        let end = crate::diff::filediff::iter_at_line_or_end(
+            &self.buffer, (index + 1) as i32,
+        );
 
-        if let (Some(s), Some(e)) = (start, end) {
-            let raw = self.buffer.text(&s, &e, true).to_string();
+        if let Some(s) = start {
+            let raw = self.buffer.text(&s, &end, true).to_string();
             let text = if let Some(ref filter) = *self.filter.borrow() {
                 filter(&raw)
             } else {

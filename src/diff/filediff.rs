@@ -1647,9 +1647,7 @@ impl FileDiff {
 
                 let chunks = chunks.borrow();
                 for chunk in chunks.iter() {
-                    // Draw a marker on the pane where the chunk has zero
-                    // content (Insert on left, Delete on right).  This
-                    // matches Meld's do_draw_layer 1px stroke.
+                    // ── Marker line on the zero-span pane ──────────────────
                     let marker_line = if chunk.start_a == chunk.end_a && pi == 0 {
                         Some(chunk.start_a)
                     } else if chunk.start_b == chunk.end_b && pi == 1 {
@@ -1657,16 +1655,54 @@ impl FileDiff {
                     } else {
                         None
                     };
-                    let Some(line) = marker_line else { continue };
-                    if let Some(y) = line_to_y(line) {
-                        if y < -1.0 || y > height as f64 + 1.0 {
-                            continue;
+                    if let Some(line) = marker_line {
+                        if let Some(y) = line_to_y(line) {
+                            if y >= -1.0 && y <= height as f64 + 1.0 {
+                                cr.set_source_rgba(0.647, 1.0, 0.298, 0.6);
+                                cr.set_line_width(1.0);
+                                cr.move_to(view_x, y + 0.5);
+                                cr.line_to(view_x + view_w_px, y + 0.5);
+                                cr.stroke().ok();
+                            }
                         }
-                        cr.set_source_rgba(0.647, 1.0, 0.298, 0.6);
-                        cr.set_line_width(1.0);
-                        cr.move_to(view_x, y + 0.5);
-                        cr.line_to(view_x + view_w_px, y + 0.5);
-                        cr.stroke().ok();
+                    }
+
+                    // ── Fill full-width green for content-bearing chunks ──
+                    // GTK4 paragraph_background doesn't render on empty
+                    // paragraphs.  Draw a matching fill for the full
+                    // chunk range (harmless double-render on non-empty
+                    // lines — same alpha as action gutter).
+                    let (fill_start, fill_end) = if chunk.op == DiffOp::Insert
+                        && pi == 1
+                        && chunk.end_b > chunk.start_b
+                    {
+                        (chunk.start_b, chunk.end_b)
+                    } else if chunk.op == DiffOp::Delete
+                        && pi == 0
+                        && chunk.end_a > chunk.start_a
+                    {
+                        (chunk.start_a, chunk.end_a)
+                    } else {
+                        continue;
+                    };
+                    let y0 = line_to_y(fill_start);
+                    let y1 = if fill_end < view.buffer().line_count() as usize {
+                        line_to_y(fill_end)
+                    } else {
+                        let end_iter = view.buffer().end_iter();
+                        let rect = view.iter_location(&end_iter);
+                        Some(rect.y() as f64 + rect.height() as f64 - scroll_val + scr_y)
+                    };
+                    if let (Some(y0), Some(y1)) = (y0, y1)
+                    {
+                        if y1 > y0
+                            && y1 >= -1.0
+                            && y0 <= height as f64 + 1.0
+                        {
+                            cr.set_source_rgba(0.816, 1.0, 0.639, 0.35);
+                            cr.rectangle(view_x, y0, view_w_px, y1 - y0);
+                            cr.fill().ok();
+                        }
                     }
                 }
             });
@@ -1724,16 +1760,13 @@ impl FileDiff {
                             } else {
                                 (chunks[idx].start_a, chunks[idx].end_a)
                             };
-                            if let (Some(s), Some(e)) = (
-                                buf.iter_at_line_offset(start as i32, 0),
-                                buf.iter_at_line_offset(end as i32, 0),
-                            ) {
-                                if let Some(tag) = tag_table.lookup(hl_tag) {
-                                    buf.apply_tag(&tag, &s, &e);
-                                }
+                            let s = iter_at_line_or_end(buf, start as i32);
+                            let e = iter_at_line_or_end(buf, end as i32);
+                            if let Some(tag) = tag_table.lookup(hl_tag) {
+                                buf.apply_tag(&tag, &s, &e);
+                            }
                             }
                         }
-                    }
                     current_chunk_idx.set(new_idx);
                 }
             });
@@ -1814,13 +1847,10 @@ fn highlight_range(buffer: &gsv::Buffer, tag_name: &str, start_line: usize, end_
         return;
     }
     let tag_table = buffer.tag_table();
-    if let (Some(s), Some(e)) = (
-        buffer.iter_at_line_offset(start_line as i32, 0),
-        buffer.iter_at_line_offset(end_line as i32, 0),
-    ) {
-        if let Some(tag) = tag_table.lookup(tag_name) {
-            buffer.apply_tag(&tag, &s, &e);
-        }
+    let s = iter_at_line_or_end(buffer, start_line as i32);
+    let e = iter_at_line_or_end(buffer, end_line as i32);
+    if let Some(tag) = tag_table.lookup(tag_name) {
+        buffer.apply_tag(&tag, &s, &e);
     }
 }
 
@@ -1829,7 +1859,24 @@ pub fn buffer_text_lines(buffer: &gsv::Buffer) -> Vec<String> {
     let start = buffer.start_iter();
     let end = buffer.end_iter();
     let text = buffer.text(&start, &end, true);
-    text.as_str().lines().map(|l| l.to_owned()).collect()
+    let mut lines: Vec<String> = text.as_str().lines().map(|l| l.to_owned()).collect();
+    // GtkBuffer counts a trailing \n as an extra line.  str::lines()
+    // drops it.  Pad to match the buffer's line count so diffs see
+    // trailing-empty-line insertions/deletions.
+    let expected = buffer.line_count().max(0) as usize;
+    if lines.len() < expected {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Get an iterator at the given line, or the buffer end iterator if
+/// the line equals `line_count()`.  `iter_at_line_offset` returns
+/// `None` in gtk4-rs when the C call returns the end iter.
+pub fn iter_at_line_or_end(buffer: &gsv::Buffer, line: i32) -> gtk::TextIter {
+    buffer
+        .iter_at_line_offset(line, 0)
+        .unwrap_or_else(|| buffer.end_iter())
 }
 
 fn diff_tag_names() -> Vec<&'static str> {
@@ -1953,13 +2000,10 @@ fn apply_diff_tags_to_buffer(
             _ => continue,
         };
         if start < end {
-            if let (Some(s), Some(e)) = (
-                buffer.iter_at_line_offset(start as i32, 0),
-                buffer.iter_at_line_offset(end as i32, 0),
-            ) {
-                if let Some(tag) = tag_table.lookup(tag_name) {
-                    buffer.apply_tag(&tag, &s, &e);
-                }
+            let s = iter_at_line_or_end(buffer, start as i32);
+            let e = iter_at_line_or_end(buffer, end as i32);
+            if let Some(tag) = tag_table.lookup(tag_name) {
+                buffer.apply_tag(&tag, &s, &e);
             }
         }
 

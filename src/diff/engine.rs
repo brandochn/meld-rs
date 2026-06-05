@@ -1767,7 +1767,7 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
     let mut discarded_b = 0usize;
 
     for (i, line) in a_mid.iter().enumerate() {
-        if lines_in_b.contains(line) {
+        if lines_in_b.contains(line) || line.is_empty() {
             filtered_a.push(line.clone());
             index_map_a.push(prefix_len + i);
         } else {
@@ -1776,7 +1776,7 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
     }
 
     for (i, line) in b_mid.iter().enumerate() {
-        if lines_in_a.contains(line) {
+        if lines_in_a.contains(line) || line.is_empty() {
             filtered_b.push(line.clone());
             index_map_b.push(prefix_len + i);
         } else {
