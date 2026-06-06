@@ -24,7 +24,7 @@ comparison, 3-way merge, and version control integration (Git, SVN, Mercurial).
 
 ## Requirements
 
-- **Rust** 1.75 or later
+- **Rust** 1.81 or later
 - **GTK 4** runtime (4.16+ recommended)
 - **GtkSourceView 5**
 - **libadwaita**
@@ -63,26 +63,44 @@ cargo build --release
 
 # Or use the provided scripts
 ./scripts/build.sh        # Linux/macOS
-scripts\build.bat         # Windows
+./scripts/run.sh          # Linux/macOS (build & run)
+scripts\build.ps1         # Windows (PowerShell, detects MSYS2)
+scripts\build.bat         # Windows (CMD)
+scripts\run.ps1           # Windows (PowerShell, build & run)
 ```
 
 ## Running
 
 ```bash
-# From Cargo
-cargo run -- <file1> <file2>
-
 # Compare two files
 meld-rs file_a.txt file_b.txt
 
 # Compare two directories
 meld-rs dir_a/ dir_b/
 
-# 3-way merge
+# 3-way comparison
+meld-rs left.txt middle.txt right.txt
+
+# 3-way auto-merge
 meld-rs base.txt local.txt remote.txt --auto-merge -o merged.txt
 
-# Open version control view for a directory
+# Open a new tab in an existing instance
+meld-rs --newtab file_a.txt file_b.txt
+
+# Auto-compare all differing files in directories
+meld-rs dir_a/ dir_b/ --auto-compare
+
+# Open version control view for a repository
 meld-rs /path/to/repo/
+
+# Show help
+meld-rs --help
+```
+
+When running from source without installing:
+
+```bash
+cargo run -- <file1> <file2>
 ```
 
 ## Running Tests
@@ -112,5 +130,8 @@ See [LICENSE](LICENSE) for the full text.
 
 Contributions are welcome. Please ensure your code:
 - Passes `cargo fmt` and `cargo clippy`
+- Passes `cargo test --no-default-features`
 - Includes tests for new functionality
 - Follows the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
+
+See `scripts/test.sh` for a quick test runner.
