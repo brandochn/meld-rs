@@ -5,4 +5,17 @@
 .vscode/
 .idea/
 opencode.json
-Instructions/rust.instructions.md
+Instructions/
+
+# Sensitive files — never commit
+.env
+.env.*
+*.log
+*.pem
+*.key
+*.crt
+*.pfx
+credentials*
+secrets*
+*.local
+scripts/copy-dlls.ps1

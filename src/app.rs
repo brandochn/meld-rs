@@ -229,15 +229,16 @@ fn show_about_dialog() {
     dialog.set_program_name(Some(APP_NAME));
     dialog.set_version(Some(VERSION));
     dialog.set_comments(Some(
-        "Visual diff and merge tool — rewritten in Rust with gtk-rs",
+        "Visual diff and merge tool — rewritten in Rust with gtk-rs\nby Hildebrando Chávez Núñez",
     ));
     dialog.set_license_type(gtk::License::Gpl20);
-    dialog.set_website(Some("https://github.com/tu-usuario/meld-rs"));
-    dialog.set_copyright(Some("Copyright © 2002-2009 Stephen Kennedy\nCopyright © 2009-2022 Kai Willadsen\nCopyright © 2024 meld-rs contributors"));
+    dialog.set_website(Some("https://github.com/brandochn/meld-rs"));
+    dialog.set_copyright(Some("Copyright © 2002-2009 Stephen Kennedy\nCopyright © 2009-2022 Kai Willadsen\nCopyright © 2024 meld-rs contributors\nCopyright © 2026 Hildebrando Chávez Núñez (Rust rewrite)"));
     dialog.set_authors(&[
         "Stephen Kennedy",
         "Kai Willadsen",
         "Vincent Legoll",
+        "Hildebrando Chávez Núñez (Rust rewrite)",
         "meld-rs contributors",
     ]);
     dialog.set_artists(&["GNOME Project", "Josef Vybíral"]);

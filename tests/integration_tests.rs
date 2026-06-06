@@ -3,6 +3,7 @@
 use meld_rs::diff::engine::{DiffOp, Differ, LineCache};
 use meld_rs::diff::matchers::CachedSequenceMatcher;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
 
 #[test]
 fn test_diff_empty_files() {
@@ -137,7 +138,15 @@ fn test_similarity_map_notify_error_scenario() {
     let right = vec!["notifyEr(dx);".into()];
     let matched_left = HashSet::new();
     let matched_right = HashSet::new();
-    let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.15, 50, &AtomicBool::new(false));
+    let map = SimilarityMap::build(
+        &left,
+        &right,
+        &matched_left,
+        &matched_right,
+        0.15,
+        50,
+        &AtomicBool::new(false),
+    );
     assert!(!map.matches.is_empty());
     assert!(map.matches[0].score > 0.15);
 }
@@ -145,19 +154,19 @@ fn test_similarity_map_notify_error_scenario() {
 #[test]
 fn test_move_detection_basic() {
     use meld_rs::diff::movement::MoveMap;
-    let left: Vec<String> = vec![
-        "a".into(),
-        "import { X } from 'm';".into(),
-        "b".into(),
-    ];
-    let right: Vec<String> = vec![
-        "import { X } from 'm';".into(),
-        "a".into(),
-        "b".into(),
-    ];
+    let left: Vec<String> = vec!["a".into(), "import { X } from 'm';".into(), "b".into()];
+    let right: Vec<String> = vec!["import { X } from 'm';".into(), "a".into(), "b".into()];
     let matched_left: HashSet<usize> = vec![0, 2].into_iter().collect();
     let matched_right: HashSet<usize> = vec![1, 2].into_iter().collect();
-    let map = MoveMap::build(&left, &right, &matched_left, &matched_right, 0.8, 1, &AtomicBool::new(false));
+    let map = MoveMap::build(
+        &left,
+        &right,
+        &matched_left,
+        &matched_right,
+        0.8,
+        1,
+        &AtomicBool::new(false),
+    );
     assert!(!map.moves.is_empty());
     assert_eq!(map.moves[0].left_start, 1);
     assert_eq!(map.moves[0].right_start, 0);
@@ -180,10 +189,7 @@ fn test_pair_changes_filtered() {
 fn test_tokenize_with_offsets_camelcase() {
     // The tokenizer is private, but compare_line_tokens exercises it
     use meld_rs::diff::engine::InlineDiffer;
-    let changes = InlineDiffer::compare_line_tokens(
-        "fooBarBaz",
-        "fooBarQux",
-    );
+    let changes = InlineDiffer::compare_line_tokens("fooBarBaz", "fooBarQux");
     // Should find the differing token at the end
     assert!(!changes.is_empty());
 }

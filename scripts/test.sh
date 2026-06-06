@@ -1,5 +1,5 @@
 #!/bin/bash
 set -e
 echo "Running tests..."
-cargo test -- --test-threads=1
+cargo test --no-default-features
 echo "All tests passed"

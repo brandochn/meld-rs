@@ -4,6 +4,11 @@
 and merge tool in **Rust** using **gtk-rs** (GTK 4). It provides side-by-side file and directory
 comparison, 3-way merge, and version control integration (Git, SVN, Mercurial).
 
+> [!WARNING]
+> This project is in an **early experimental phase** and under active development.
+> Expect bugs, incomplete features, and breaking changes. Use with caution —
+> do not rely on it for production or critical workflows yet.
+
 ## Features
 
 - 2-way and 3-way file comparison with syntax highlighting
@@ -81,6 +86,16 @@ meld-rs /path/to/repo/
 ```
 
 ## Running Tests
+
+The `gui` feature is enabled by default, which links against GTK 4 and requires
+the GTK runtime libraries to be available. To run the diff engine and integration
+tests without GUI dependencies:
+
+```bash
+cargo test --no-default-features
+```
+
+To also run GUI-related tests (requires GTK 4 runtime installed):
 
 ```bash
 cargo test

@@ -1,0 +1,43 @@
+{
+    // ── Rust language overrides ─────────────────────────────────────
+    "languages": {
+        "Rust": {
+            "language_servers": ["rust-analyzer"],
+            "format_on_save": "on",
+            "formatter": "language_server",
+            "tab_size": 4,
+            "hard_tabs": false,
+        },
+    },
+
+    // ── LSP: rust-analyzer ──────────────────────────────────────────
+    "lsp": {
+        "rust-analyzer": {
+            "initialization_options": {
+                // Use clippy instead of cargo check for richer diagnostics
+                "check": {
+                    "command": "clippy",
+                },
+                // Pass Cargo features matching the project defaults
+                "cargo": {
+                    "features": ["gui"],
+                    "noDefaultFeatures": false,
+                },
+            },
+        },
+    },
+
+    // ── Inlay hints ─────────────────────────────────────────────────
+    "inlay_hints": {
+        "enabled": true,
+        "show_type_hints": true,
+        "show_parameter_hints": true,
+        "show_other_hints": true,
+    },
+
+    // ── General editor defaults ─────────────────────────────────────
+    "tab_size": 4,
+    "hard_tabs": false,
+    "ensure_final_newline": true,
+    "remove_trailing_whitespace_on_save": true,
+}
