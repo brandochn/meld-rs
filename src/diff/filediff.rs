@@ -11,6 +11,7 @@
 //! Action gutters sit between panes and display per-chunk action buttons
 //! (push/replace, delete, copy-up, copy-down).
 
+use gdk4 as gdk;
 use gio::prelude::*;
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -20,14 +21,10 @@ use sourceview5::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::diff::diff_state::{DiffResult, DiffState};
-use crate::diff::engine::{
-    Chunk, DiffOp, InlineChange, InlineDiffer, LineCache,
-};
-use crate::diff::inline_cache::InlineDiffCache;
-use crate::diff::movement::MoveMap;
-use crate::diff::similarity::{SimilarityEntry, SimilarityMap};
 use crate::config::settings::MeldSettings;
+use crate::diff::diff_state::{DiffResult, DiffState};
+use crate::diff::engine::{Chunk, DiffOp, InlineDiffer, LineCache};
+use crate::diff::inline_cache::InlineDiffCache;
 use crate::ui::action_gutter::{ActionGutter, GutterAction, GutterDirection};
 use crate::ui::link_map::LinkMap;
 use crate::ui::msgarea::MsgArea;
@@ -67,22 +64,20 @@ pub struct FileDiff {
     line_cache: Rc<RefCell<LineCache>>,
     /// LRU cache for inline (character-level) diff results to avoid recomputation.
     inline_cache: Rc<InlineDiffCache>,
-    /// Cross-line similarity matches for non-aligned changes.
-    similarity_map: Rc<RefCell<SimilarityMap>>,
-    /// Detected code movements (relocated blocks).
-    move_map: Rc<RefCell<MoveMap>>,
-    /// Token-level relations for moved identifiers (visual connectors).
-    token_relations: Rc<RefCell<Vec<crate::ui::link_map::TokenRelation>>>,
     /// Background diff computation state.
     diff_state: Rc<RefCell<DiffState>>,
     /// Flag: trim blank lines from diff chunk boundaries.
     ignore_blank_lines: Rc<Cell<bool>>,
-    /// Flag: compute similarity/movement overlays.
-    detect_moved_lines: Rc<Cell<bool>>,
     /// Flag: show link-map bezier connectors between panes.
     show_connectors: Rc<Cell<bool>>,
     /// Inline diff mode: "characters", "tokens", or "none".
     inline_diff_mode: Rc<RefCell<String>>,
+    /// Cached compiled text-filter patterns for visual dimming.
+    text_filter_patterns: Rc<RefCell<Vec<regex::bytes::Regex>>>,
+    /// File monitors for detecting external file changes.
+    file_monitors: Rc<RefCell<Vec<Option<gio::FileMonitor>>>>,
+    /// Tracked file paths for each pane.
+    file_paths: Rc<RefCell<Vec<Option<gio::File>>>>,
 }
 
 /// Per-pane data bundles the widgets that make up one column.
@@ -243,14 +238,13 @@ impl FileDiff {
         let focused_pane = Rc::new(Cell::new(0usize));
         let line_cache = Rc::new(RefCell::new(LineCache::new(&[], 1)));
         let inline_cache = Rc::new(InlineDiffCache::new());
-        let similarity_map = Rc::new(RefCell::new(SimilarityMap::default()));
-        let move_map = Rc::new(RefCell::new(MoveMap::default()));
-        let token_relations = Rc::new(RefCell::new(Vec::new()));
         let diff_state = Rc::new(RefCell::new(DiffState::new()));
         let ignore_blank_lines = Rc::new(Cell::new(false));
-        let detect_moved_lines = Rc::new(Cell::new(true));
         let show_connectors = Rc::new(Cell::new(true));
         let inline_diff_mode = Rc::new(RefCell::new("tokens".to_string()));
+        let text_filter_patterns = Rc::new(RefCell::new(Vec::new()));
+        let file_monitors = Rc::new(RefCell::new(vec![None, None, None]));
+        let file_paths = Rc::new(RefCell::new(vec![None, None, None]));
 
         let fd = Self {
             container,
@@ -267,14 +261,13 @@ impl FileDiff {
             focused_pane,
             line_cache,
             inline_cache,
-            similarity_map,
-            move_map,
-            token_relations,
             diff_state,
             ignore_blank_lines,
-            detect_moved_lines,
             show_connectors,
             inline_diff_mode,
+            text_filter_patterns,
+            file_monitors,
+            file_paths,
         };
 
         // Wire up everything
@@ -440,9 +433,66 @@ impl FileDiff {
         self.ignore_blank_lines.set(ignore);
     }
 
-    /// Enable or disable similarity/movement detection overlays.
-    pub fn set_detect_moved_lines(&self, detect: bool) {
-        self.detect_moved_lines.set(detect);
+    /// Compile text filter patterns from user settings.
+    pub fn set_text_filter_patterns(&self, patterns: &[String]) {
+        use regex::bytes::Regex;
+        let mut compiled = Vec::new();
+        for p in patterns {
+            if let Ok(re) = Regex::new(p) {
+                compiled.push(re);
+            }
+        }
+        self.text_filter_patterns.replace(compiled);
+        self.apply_text_dimming();
+    }
+
+    /// Apply dimming tags to matching text regions in all panes.
+    ///
+    /// Uses the cached compiled regex patterns to find matching byte ranges
+    /// and applies the "dimmed" text tag for visual feedback.
+    fn apply_text_dimming(&self) {
+        let patterns = self.text_filter_patterns.borrow();
+        if patterns.is_empty() {
+            return;
+        }
+
+        for pane in &self.panes {
+            let buffer = &pane.buffer;
+            let tag_table = buffer.tag_table();
+
+            // Ensure the dimmed tag exists
+            if tag_table.lookup("dimmed").is_none() {
+                let tag = gtk::TextTag::builder()
+                    .name("dimmed")
+                    .foreground_rgba(&gdk::RGBA::new(0.5, 0.5, 0.5, 0.4))
+                    .build();
+                tag_table.add(&tag);
+            }
+
+            // Clear existing dimmed tags
+            let start_iter = buffer.start_iter();
+            let end_iter = buffer.end_iter();
+            if let Some(tag) = tag_table.lookup("dimmed") {
+                buffer.remove_tag(&tag, &start_iter, &end_iter);
+            }
+
+            // Get full buffer content as bytes and compute dim ranges
+            let text = buffer.text(&start_iter, &end_iter, false).to_string();
+            let content = text.as_bytes();
+            let (_filtered, dim_ranges) =
+                crate::utils::text_filter::apply_text_filters(content, &patterns);
+
+            // Apply dimmed tags to matching ranges
+            if let Some(tag) = tag_table.lookup("dimmed") {
+                for range in &dim_ranges {
+                    let s = buffer.iter_at_offset(range.start as i32);
+                    let e = buffer.iter_at_offset(range.end as i32);
+                    if s.offset() < e.offset() {
+                        buffer.apply_tag(&tag, &s, &e);
+                    }
+                }
+            }
+        }
     }
 
     /// Show or hide the link-map bezier connectors between panes.
@@ -456,6 +506,64 @@ impl FileDiff {
     /// Set the inline diff mode ("characters", "tokens", or "none").
     pub fn set_inline_diff_mode(&self, mode: &str) {
         self.inline_diff_mode.replace(mode.to_string());
+    }
+
+    /// Start monitoring files for external changes.
+    ///
+    /// When a monitored file changes on disk, shows a reload prompt
+    /// in the corresponding pane's message area.
+    pub fn start_file_monitoring(&self) {
+        for (pi, path) in self.file_paths.borrow().iter().enumerate() {
+            if let Some(gfile) = path {
+                self.monitor_pane_file(pi, gfile);
+            }
+        }
+    }
+
+    /// Stop all active file monitors.
+    pub fn stop_file_monitoring(&self) {
+        for monitor_opt in self.file_monitors.borrow_mut().iter_mut() {
+            if let Some(m) = monitor_opt.take() {
+                m.cancel();
+            }
+        }
+    }
+
+    /// Set file paths and restart monitoring.
+    pub fn set_monitored_files(&self, files: &[Option<gio::File>]) {
+        self.stop_file_monitoring();
+        let mut paths = self.file_paths.borrow_mut();
+        for (i, f) in files.iter().enumerate() {
+            if i < paths.len() {
+                paths[i] = f.clone();
+            }
+        }
+        drop(paths);
+        self.start_file_monitoring();
+    }
+
+    fn monitor_pane_file(&self, pane: usize, gfile: &gio::File) {
+        let Ok(monitor) = gfile.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        else {
+            return;
+        };
+        let msgarea = Rc::clone(&self.panes[pane].msgarea);
+        let file_name = gfile
+            .basename()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        self.file_monitors.borrow_mut()[pane] = Some(monitor.clone());
+
+        let msgarea_weak = Rc::downgrade(&msgarea);
+        monitor.connect_changed(move |_monitor, _f, _other, event| {
+            if let Some(msgarea) = msgarea_weak.upgrade() {
+                if event == gio::FileMonitorEvent::ChangesDoneHint {
+                    let msg = format!("File {} has changed on disk. Reload to update.", file_name);
+                    msgarea.show_warning(&msg);
+                }
+            }
+        });
     }
 }
 
@@ -492,19 +600,18 @@ impl FileDiff {
         let text_b = buffer_text_lines(&self.panes[1].buffer);
 
         let chunks = Rc::clone(&self.chunks);
-        let similarity_map = Rc::clone(&self.similarity_map);
-        let move_map = Rc::clone(&self.move_map);
         let line_cache = Rc::clone(&self.line_cache);
-        let token_relations = Rc::clone(&self.token_relations);
         let gutters = self.gutters.clone();
         let link_maps = self.link_maps.clone();
         let shared_msgarea = Rc::clone(&self.shared_msgarea);
         let inline_cache = Rc::clone(&self.inline_cache);
         let ignore_blank_lines = Rc::clone(&self.ignore_blank_lines);
-        let detect_moved_lines = Rc::clone(&self.detect_moved_lines);
         let inline_diff_mode = Rc::clone(&self.inline_diff_mode);
-        let overlays: Vec<gtk::DrawingArea> =
-            self.panes.iter().map(|p| p.insert_overlay.clone()).collect();
+        let overlays: Vec<gtk::DrawingArea> = self
+            .panes
+            .iter()
+            .map(|p| p.insert_overlay.clone())
+            .collect();
         let panes: Vec<_> = (0..self.num_panes.min(2))
             .map(|i| {
                 (
@@ -520,12 +627,11 @@ impl FileDiff {
             Box::new(move |result: DiffResult| {
                 let DiffResult {
                     chunks: raw_chunks,
-                    similarity,
-                    movement,
                     text_a,
                     text_b,
                     is_empty,
                     is_identical,
+                    ..
                 } = result;
 
                 clear_diff_tags_single(&panes[0].0, &panes[0].1);
@@ -535,11 +641,7 @@ impl FileDiff {
 
                 let mut final_chunks = raw_chunks;
                 if ignore_blank_lines.get() {
-                    crate::diff::engine::consume_blank_lines(
-                        &mut final_chunks,
-                        &text_a,
-                        &text_b,
-                    );
+                    crate::diff::engine::consume_blank_lines(&mut final_chunks, &text_a, &text_b);
                 }
 
                 let mode = inline_diff_mode.borrow();
@@ -567,31 +669,9 @@ impl FileDiff {
                     gutter.set_chunks(&final_chunks);
                 }
 
-                let token_rels = if detect_moved_lines.get() {
-                    build_token_relations(&text_a, &text_b)
-                } else {
-                    Vec::new()
-                };
-                *token_relations.borrow_mut() = token_rels;
-
                 for lm in &link_maps {
                     lm.update_line_counts(text_a.len(), text_b.len());
                     lm.update_chunks(&final_chunks);
-                    if detect_moved_lines.get() {
-                        lm.update_similarity(&similarity);
-                        lm.update_moves(&movement);
-                        lm.update_token_relations(&token_relations.borrow());
-                    } else {
-                        lm.clear_overlays();
-                    }
-                }
-
-                if detect_moved_lines.get() {
-                    *similarity_map.borrow_mut() = similarity;
-                    *move_map.borrow_mut() = movement;
-                } else {
-                    *similarity_map.borrow_mut() = SimilarityMap::default();
-                    *move_map.borrow_mut() = MoveMap::default();
                 }
 
                 let max_lines = text_a.len().max(text_b.len());
@@ -612,6 +692,9 @@ impl FileDiff {
                 }
             }),
         );
+
+        // Apply text filter dimming (runs immediately; doesn't block diff)
+        self.apply_text_dimming();
     }
 
     /// Push the chunk at the given index from source to target pane.
@@ -886,13 +969,36 @@ impl FileDiff {
 
         if (new_idx as usize) < chunks.len() {
             let chunk = &chunks[new_idx as usize];
-            let target_line = if fp == 0 {
-                chunk.start_a
-            } else {
-                chunk.start_b
-            };
-            self.scroll_to_line(fp, target_line);
             self.current_chunk_idx.set(Some(new_idx as usize));
+
+            // Propagate current chunk to link maps for visual highlight
+            for lm in &self.link_maps {
+                lm.set_current_chunk(Some(new_idx as usize));
+            }
+
+            // Scroll all panes to the chunk for synchronized context.
+            // Use the focused pane's chunk coordinates as the primary target.
+            let focused_pane = self.focused_pane.get().min(self.num_panes - 1);
+            for pi in 0..self.num_panes {
+                let target_line = if pi == 0 {
+                    chunk.start_a
+                } else {
+                    chunk.start_b
+                };
+                self.scroll_to_line(pi, target_line);
+            }
+
+            // Brief fading highlight for visual orientation (mirrors Meld's go_to_chunk)
+            {
+                let buffer = &self.panes[focused_pane].buffer;
+                let hl_start = iter_at_line_or_end(buffer, chunk.start_a as i32);
+                let hl_end = if chunk.end_a > chunk.start_a {
+                    iter_at_line_or_end(buffer, chunk.end_a as i32)
+                } else {
+                    iter_at_line_or_end(buffer, (chunk.start_a + 1) as i32)
+                };
+                add_fading_highlight(buffer, &hl_start, &hl_end);
+            }
         }
     }
 
@@ -923,6 +1029,24 @@ impl FileDiff {
         }
     }
 
+    /// Navigate to a specific line number in the focused pane.
+    pub fn go_to_line(&self, line: u32) {
+        let fp = self
+            .focused_pane
+            .get()
+            .min(self.num_panes.saturating_sub(1));
+        let line = line.saturating_sub(1) as usize; // Convert 1-based to 0-based
+        self.scroll_to_line(fp, line);
+    }
+
+    /// Toggle read-only mode for a pane.
+    pub fn set_pane_editable(&self, pane: usize, editable: bool) {
+        if pane >= self.num_panes {
+            return;
+        }
+        self.panes[pane].view.set_editable(editable);
+    }
+
     // ── Private helpers ───────────────────────────────────────────
 
     fn apply_diff_tags(&self, pane: usize, chunks: &[Chunk]) {
@@ -938,16 +1062,13 @@ impl FileDiff {
         // Ensure tags exist
         ensure_diff_tags(&tag_table);
 
-        // Get the other pane's buffer for inline diff and import checks
+        // Get the other pane's buffer for inline diff
         let other_pane = if pane == 0 { 1 } else { 0 };
         let other_buffer = if other_pane < self.panes.len() {
             Some(&self.panes[other_pane].buffer)
         } else {
             None
         };
-        let other_import_sets = other_buffer
-            .map(|buf| build_import_sets(buf))
-            .unwrap_or_default();
 
         // Apply tags for this pane
         for chunk in chunks {
@@ -1006,96 +1127,6 @@ impl FileDiff {
     }
 
     /// Apply inline diff tags for cross-line similarity matches.
-    ///
-    /// When [`SimilarityMap`] detects semantically similar lines at different
-    /// positions (e.g., the same function call with extra parameters), this
-    /// method applies token-level inline diff tags to both sides. This lets
-    /// users see *what changed* within matched lines even when they are not
-    /// aligned by the line-level diff.
-    fn apply_similarity_inline_tags(&self, similarity: &SimilarityMap) {
-        if similarity.matches.is_empty() {
-            return;
-        }
-
-        for entry in &similarity.matches {
-            // Apply inline diff on the left (A) pane
-            self.apply_single_similarity_inline(0, entry);
-            // Apply inline diff on the right (B) pane
-            self.apply_single_similarity_inline(1, entry);
-        }
-    }
-
-    /// Apply the inline diff from a single similarity entry to one pane.
-    fn apply_single_similarity_inline(&self, pane: usize, entry: &SimilarityEntry) {
-        if pane >= self.panes.len() {
-            return;
-        }
-
-        let buffer = &self.panes[pane].buffer;
-        let tag_table = buffer.tag_table();
-
-        // Get the line number in this pane
-        let base_line = if pane == 0 {
-            entry.left_line
-        } else {
-            entry.right_line
-        };
-
-        let base_iter = match buffer.iter_at_line_offset(base_line as i32, 0) {
-            Some(iter) => iter,
-            None => return,
-        };
-
-        // Use precomputed inline diff from the similarity entry
-        let changes = &entry.inline_diff;
-        if changes.is_empty() {
-            return;
-        }
-
-        // Ensure inline tags exist
-        ensure_diff_tags(&tag_table);
-
-        // Apply differentiated inline tags at the correct character offsets.
-        // Filter by pane: Delete offsets refer to left line, Insert to right.
-        for change in changes.iter() {
-            let apply = match (pane, change.op) {
-                (0, DiffOp::Delete | DiffOp::Replace) => true,
-                (0, DiffOp::Insert) => false,
-                (1, DiffOp::Insert | DiffOp::Replace) => true,
-                (1, DiffOp::Delete) => false,
-                _ => false,
-            };
-            if !apply {
-                continue;
-            }
-            let tag_name = match change.op {
-                DiffOp::Delete => "diff-inline-delete",
-                DiffOp::Insert => "diff-inline-insert",
-                DiffOp::Replace => "diff-inline-replace",
-                DiffOp::Equal => continue,
-            };
-
-            if let Some(tag) = tag_table.lookup(tag_name) {
-                let start_offset = base_iter.offset() as usize + change.start;
-                let end_offset = base_iter.offset() as usize + change.end;
-                let mut s = buffer.iter_at_offset(start_offset as i32);
-                let mut e = buffer.iter_at_offset(end_offset as i32);
-                // Adjust iterators to valid cursor positions so that
-                // combining characters (Unicode diacritics) are not split
-                // by the tag boundary.
-                if !s.is_cursor_position() {
-                    s.backward_cursor_position();
-                }
-                if !e.is_cursor_position() {
-                    e.forward_cursor_position();
-                }
-                if s.offset() < e.offset() {
-                    buffer.apply_tag(&tag, &s, &e);
-                }
-            }
-        }
-    }
-
     fn map_scroll_proportionally(
         master_view: &gsv::View,
         slave_view: &gsv::View,
@@ -1293,15 +1324,14 @@ impl FileDiff {
         let link_maps = self.link_maps.clone();
         let shared_msgarea = Rc::clone(&self.shared_msgarea);
         let inline_cache = Rc::clone(&self.inline_cache);
-        let similarity_map = Rc::clone(&self.similarity_map);
-        let move_map = Rc::clone(&self.move_map);
         let line_cache = Rc::clone(&self.line_cache);
-        let token_relations = Rc::clone(&self.token_relations);
         let ignore_blank_lines = Rc::clone(&self.ignore_blank_lines);
-        let detect_moved_lines = Rc::clone(&self.detect_moved_lines);
         let inline_diff_mode = Rc::clone(&self.inline_diff_mode);
-        let overlays: Vec<gtk::DrawingArea> =
-            self.panes.iter().map(|p| p.insert_overlay.clone()).collect();
+        let overlays: Vec<gtk::DrawingArea> = self
+            .panes
+            .iter()
+            .map(|p| p.insert_overlay.clone())
+            .collect();
 
         let buffers: Vec<gsv::Buffer> = self.panes.iter().map(|p| p.buffer.clone()).collect();
         let tag_tables: Vec<gtk::TextTagTable> =
@@ -1317,12 +1347,8 @@ impl FileDiff {
             let loading = Rc::clone(&loading);
             let shared_msgarea = Rc::clone(&shared_msgarea);
             let inline_cache = Rc::clone(&inline_cache);
-            let similarity_map = Rc::clone(&similarity_map);
-            let move_map = Rc::clone(&move_map);
             let line_cache = Rc::clone(&line_cache);
-            let token_relations = Rc::clone(&token_relations);
             let ignore_blank_lines_f = Rc::clone(&ignore_blank_lines);
-            let detect_moved_lines_f = Rc::clone(&detect_moved_lines);
             let inline_diff_mode_f = Rc::clone(&inline_diff_mode);
             let overlays_f = overlays.clone();
 
@@ -1335,10 +1361,7 @@ impl FileDiff {
                 let text_b = buffer_text_lines(&buffers[1]);
 
                 let chunks = Rc::clone(&chunks);
-                let similarity_map = Rc::clone(&similarity_map);
-                let move_map = Rc::clone(&move_map);
                 let line_cache = Rc::clone(&line_cache);
-                let token_relations = Rc::clone(&token_relations);
                 let gutters = gutters.clone();
                 let link_maps = link_maps.clone();
                 let shared_msgarea = Rc::clone(&shared_msgarea);
@@ -1346,7 +1369,6 @@ impl FileDiff {
                 let buffers = buffers.clone();
                 let tag_tables = tag_tables.clone();
                 let ignore_bl = Rc::clone(&ignore_blank_lines_f);
-                let detect_mv = Rc::clone(&detect_moved_lines_f);
                 let inline_mode = Rc::clone(&inline_diff_mode_f);
                 let overlays_inner = overlays_f.clone();
 
@@ -1356,12 +1378,11 @@ impl FileDiff {
                     Box::new(move |result: DiffResult| {
                         let DiffResult {
                             chunks: raw_chunks,
-                            similarity,
-                            movement,
                             text_a,
                             text_b,
                             is_empty,
                             is_identical,
+                            ..
                         } = result;
 
                         for bi in 0..2.min(buffers.len()) {
@@ -1403,31 +1424,9 @@ impl FileDiff {
                             gutter.set_chunks(&final_chunks);
                         }
 
-                        let token_rels = if detect_mv.get() {
-                            build_token_relations(&text_a, &text_b)
-                        } else {
-                            Vec::new()
-                        };
-                        *token_relations.borrow_mut() = token_rels;
-
                         for lm in &link_maps {
                             lm.update_line_counts(text_a.len(), text_b.len());
                             lm.update_chunks(&final_chunks);
-                            if detect_mv.get() {
-                                lm.update_similarity(&similarity);
-                                lm.update_moves(&movement);
-                                lm.update_token_relations(&token_relations.borrow());
-                            } else {
-                                lm.clear_overlays();
-                            }
-                        }
-
-                        if detect_mv.get() {
-                            *similarity_map.borrow_mut() = similarity;
-                            *move_map.borrow_mut() = movement;
-                        } else {
-                            *similarity_map.borrow_mut() = SimilarityMap::default();
-                            *move_map.borrow_mut() = MoveMap::default();
                         }
 
                         let max_lines = text_a.len().max(text_b.len());
@@ -1440,8 +1439,7 @@ impl FileDiff {
                         }
 
                         if is_empty {
-                            shared_msgarea
-                                .show_info("Enter text to compare files");
+                            shared_msgarea.show_info("Enter text to compare files");
                         } else if is_identical {
                             shared_msgarea.show_info("Files are identical");
                         } else {
@@ -1537,8 +1535,7 @@ impl FileDiff {
             return;
         }
 
-        let buffers: Vec<gsv::Buffer> =
-            self.panes.iter().map(|p| p.buffer.clone()).collect();
+        let buffers: Vec<gsv::Buffer> = self.panes.iter().map(|p| p.buffer.clone()).collect();
 
         for lm in &self.link_maps {
             let b0 = buffers[0].clone();
@@ -1571,29 +1568,6 @@ impl FileDiff {
                     } => {
                         highlight_range(&b0, tag_name, *start_a, *end_a);
                         highlight_range(&b1, tag_name, *start_b, *end_b);
-                    }
-                    crate::ui::link_map::HoverInfo::Token {
-                        left_line,
-                        right_line,
-                    } => {
-                        highlight_range(&b0, tag_name, *left_line, *left_line + 1);
-                        highlight_range(&b1, tag_name, *right_line, *right_line + 1);
-                    }
-                    crate::ui::link_map::HoverInfo::Similarity {
-                        left_line,
-                        right_line,
-                    } => {
-                        highlight_range(&b0, tag_name, *left_line, *left_line + 1);
-                        highlight_range(&b1, tag_name, *right_line, *right_line + 1);
-                    }
-                    crate::ui::link_map::HoverInfo::Move {
-                        left_start,
-                        left_end,
-                        right_start,
-                        right_end,
-                    } => {
-                        highlight_range(&b0, tag_name, *left_start, *left_end);
-                        highlight_range(&b1, tag_name, *right_start, *right_end);
                     }
                 }
             });
@@ -1632,8 +1606,7 @@ impl FileDiff {
                     .translate_coordinates(da_w, 0.0, 0.0)
                     .unwrap_or((0.0, 0.0));
                 let view_w_px = view_w.allocated_width() as f64;
-                let scroll_val =
-                    view.vadjustment().map(|a| a.value()).unwrap_or(0.0);
+                let scroll_val = view.vadjustment().map(|a| a.value()).unwrap_or(0.0);
 
                 let buf = view.buffer();
                 let line_to_y = |line: usize| -> Option<f64> {
@@ -1677,10 +1650,7 @@ impl FileDiff {
                         && chunk.end_b > chunk.start_b
                     {
                         (chunk.start_b, chunk.end_b)
-                    } else if chunk.op == DiffOp::Delete
-                        && pi == 0
-                        && chunk.end_a > chunk.start_a
-                    {
+                    } else if chunk.op == DiffOp::Delete && pi == 0 && chunk.end_a > chunk.start_a {
                         (chunk.start_a, chunk.end_a)
                     } else {
                         continue;
@@ -1693,12 +1663,8 @@ impl FileDiff {
                         let rect = view.iter_location(&end_iter);
                         Some(rect.y() as f64 + rect.height() as f64 - scroll_val + scr_y)
                     };
-                    if let (Some(y0), Some(y1)) = (y0, y1)
-                    {
-                        if y1 > y0
-                            && y1 >= -1.0
-                            && y0 <= height as f64 + 1.0
-                        {
+                    if let (Some(y0), Some(y1)) = (y0, y1) {
+                        if y1 > y0 && y1 >= -1.0 && y0 <= height as f64 + 1.0 {
                             cr.set_source_rgba(0.816, 1.0, 0.639, 0.35);
                             cr.rectangle(view_x, y0, view_w_px, y1 - y0);
                             cr.fill().ok();
@@ -1714,6 +1680,7 @@ impl FileDiff {
         let chunks = Rc::clone(&self.chunks);
         let line_cache = Rc::clone(&self.line_cache);
         let current_chunk_idx = Rc::clone(&self.current_chunk_idx);
+        let link_maps = self.link_maps.clone();
 
         for pane in &self.panes {
             let buffer = pane.buffer.clone();
@@ -1721,6 +1688,7 @@ impl FileDiff {
             let chunks = Rc::clone(&chunks);
             let line_cache = Rc::clone(&line_cache);
             let current_chunk_idx = Rc::clone(&current_chunk_idx);
+            let link_maps = link_maps.clone();
             let tag_table = buffer.tag_table();
 
             buffer.connect_cursor_position_notify(move |buf| {
@@ -1765,9 +1733,13 @@ impl FileDiff {
                             if let Some(tag) = tag_table.lookup(hl_tag) {
                                 buf.apply_tag(&tag, &s, &e);
                             }
-                            }
                         }
+                    }
                     current_chunk_idx.set(new_idx);
+                    // Propagate current chunk to link maps for visual highlight
+                    for lm in &link_maps {
+                        lm.set_current_chunk(new_idx);
+                    }
                 }
             });
         }
@@ -1822,15 +1794,21 @@ impl MeldPage for FileDiff {
 
     fn apply_settings(&self, settings: &MeldSettings) {
         self.set_ignore_blanks(settings.ignore_blank_lines);
-        self.set_detect_moved_lines(settings.detect_moved_lines);
         self.set_show_connectors(settings.show_connectors);
         self.set_inline_diff_mode(&settings.inline_diff_mode);
+        let active_patterns: Vec<String> = settings
+            .active_text_filters()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        self.set_text_filter_patterns(&active_patterns);
     }
 }
 
 impl Drop for FileDiff {
     fn drop(&mut self) {
         self.diff_state.borrow_mut().cancel_all();
+        self.stop_file_monitoring();
         if let Some(out) = self.merge_output.borrow().as_ref() {
             if self.num_panes >= 3 {
                 let text = buffer_text_lines(&self.panes[self.num_panes - 1].buffer).join("\n");
@@ -2010,7 +1988,15 @@ fn apply_diff_tags_to_buffer(
         // For Replace chunks, apply inline (word-level) diff
         if chunk.op == DiffOp::Replace {
             if let Some(other_buf) = other_buffer {
-                apply_inline_diff(buffer, other_buf, tag_table, chunk, pane, inline_cache, inline_diff_mode);
+                apply_inline_diff(
+                    buffer,
+                    other_buf,
+                    tag_table,
+                    chunk,
+                    pane,
+                    inline_cache,
+                    inline_diff_mode,
+                );
             }
         }
     }
@@ -2021,269 +2007,6 @@ fn apply_diff_tags_to_buffer(
 /// For each line in the Replace chunk, computes character-level diff between
 /// the corresponding lines in both buffers and applies differentiated inline
 /// tags to highlight the specific characters that changed:
-///   - `diff-inline-delete`: characters removed from the left side
-///   - `diff-inline-insert`: characters added to the right side
-///   - `diff-inline-replace`: contiguous delete+insert merged as a single change
-
-fn build_import_sets(
-    buffer: &gsv::Buffer,
-) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
-    use crate::diff::engine::InlineDiffer;
-    let mut map = std::collections::HashMap::new();
-    let line_count = buffer.line_count().max(0) as usize;
-    for i in 0..line_count {
-        let start = buffer.iter_at_line_offset(i as i32, 0);
-        let end = buffer.iter_at_line_offset((i + 1) as i32, 0);
-        if let (Some(s), Some(e)) = (start, end) {
-            let line = buffer.text(&s, &e, true).to_string();
-            if let Some((module, ids)) = InlineDiffer::parse_import_line(&line) {
-                let entry = map
-                    .entry(module)
-                    .or_insert_with(std::collections::HashSet::new);
-                for (id, _) in ids {
-                    entry.insert(id);
-                }
-            }
-        }
-    }
-    map
-}
-
-fn build_token_relations(
-    left: &[String],
-    right: &[String],
-) -> Vec<crate::ui::link_map::TokenRelation> {
-    use crate::diff::engine::InlineDiffer;
-    use crate::ui::link_map::TokenRelation;
-    use std::collections::HashMap;
-
-    let left_lines = build_import_line_sets_from_text(left);
-    let right_lines = build_import_line_sets_from_text(right);
-
-    let mut relations = Vec::new();
-
-    // Precompute the character offset of the start of each line.
-    let left_line_offsets = compute_line_char_offsets(left);
-    let right_line_offsets = compute_line_char_offsets(right);
-
-    // ── Build a 1-to-1 lookup map for right-side tokens ──
-    // Maps identifier name → (line, col_start, col_end).
-    // Each right-side token can be matched at most once.
-    let mut right_token_map: HashMap<String, (usize, usize, usize)> = HashMap::new();
-    for (r_line, r_ids) in &right_lines {
-        for id in r_ids {
-            let (cs, ce) = find_identifier_col(right, *r_line, id);
-            right_token_map.insert(id.clone(), (*r_line, cs, ce));
-        }
-    }
-
-    // Convert byte positions to character positions.
-    let byte_to_char_col =
-        |line: &str, byte_pos: usize| -> usize { line[..byte_pos.min(line.len())].chars().count() };
-
-    // ── Match each left token to exactly ONE right token ──
-    for (l_line, l_ids) in &left_lines {
-        for id in l_ids {
-            // Only match if the identifier exists on the right AND
-            // hasn't already been consumed by a previous match.
-            let Some(&(r_line, r_cs, r_ce)) = right_token_map.get(id) else {
-                continue;
-            };
-
-            // Check whether this identifier *moved* (changed grouping
-            // between left and right), mirroring the original Meld logic.
-            let is_alone_left = l_ids.len() == 1;
-            let right_ids_for_line = right_lines.get(&r_line);
-            let is_alone_right = right_ids_for_line.map(|s| s.len() == 1).unwrap_or(true);
-            let moved = (!is_alone_left && is_alone_right) || (is_alone_left && !is_alone_right);
-
-            if !moved {
-                continue;
-            }
-
-            // Consume the right token so it cannot be matched again.
-            right_token_map.remove(id);
-
-            // Get column positions for the left token.
-            let (l_cs, l_ce) = find_identifier_col(left, *l_line, id);
-
-            // Compute buffer character offsets.
-            let left_line_base = left_line_offsets.get(*l_line).copied().unwrap_or(0);
-            let right_line_base = right_line_offsets.get(r_line).copied().unwrap_or(0);
-            let l_start = left_line_base + byte_to_char_col(&left[*l_line], l_cs);
-            let l_end = left_line_base + byte_to_char_col(&left[*l_line], l_ce);
-            let r_start = right_line_base + byte_to_char_col(&right[r_line], r_cs);
-            let r_end = right_line_base + byte_to_char_col(&right[r_line], r_ce);
-
-            relations.push(TokenRelation {
-                left_line: *l_line,
-                left_col_start: l_cs,
-                left_col_end: l_ce,
-                right_line: r_line,
-                right_col_start: r_cs,
-                right_col_end: r_ce,
-                left_offset_start: l_start,
-                left_offset_end: l_end,
-                right_offset_start: r_start,
-                right_offset_end: r_end,
-            });
-        }
-    }
-
-    let left_total: usize = left_lines.values().map(|s| s.len()).sum();
-    let right_total: usize = right_lines.values().map(|s| s.len()).sum();
-    eprintln!(
-        "build_token_relations: {} relations ({} left ids, {} right ids)",
-        relations.len(),
-        left_total,
-        right_total,
-    );
-
-    relations
-}
-
-/// Compute the cumulative character offset at the start of each line.
-///
-/// GtkTextBuffer uses character (not byte) offsets. For each line we count
-/// `line.chars().count()` characters plus 1 for the terminating newline.
-fn compute_line_char_offsets(lines: &[String]) -> Vec<usize> {
-    let mut offsets = Vec::with_capacity(lines.len());
-    let mut running = 0usize;
-    for line in lines {
-        offsets.push(running);
-        running += line.chars().count() + 1; // +1 for newline
-    }
-    offsets
-}
-
-fn find_identifier_col(lines: &[String], line_num: usize, id: &str) -> (usize, usize) {
-    use crate::diff::engine::InlineDiffer;
-    let line = &lines[line_num];
-    if let Some((_module, ids)) = InlineDiffer::parse_import_line(line) {
-        for (parsed_id, (start, end)) in &ids {
-            if parsed_id == id {
-                return (*start, *end);
-            }
-        }
-    }
-    (10, 20)
-}
-
-#[allow(dead_code)]
-fn build_import_sets_from_text(
-    lines: &[String],
-) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
-    use crate::diff::engine::InlineDiffer;
-    let mut map = std::collections::HashMap::new();
-    for line in lines {
-        if let Some((module, ids)) = InlineDiffer::parse_import_line(line) {
-            let entry = map
-                .entry(module)
-                .or_insert_with(std::collections::HashSet::new);
-            for (id, _) in ids {
-                entry.insert(id);
-            }
-        }
-    }
-    map
-}
-
-fn build_import_line_sets_from_text(
-    lines: &[String],
-) -> std::collections::HashMap<usize, std::collections::HashSet<String>> {
-    use crate::diff::engine::InlineDiffer;
-    let mut map = std::collections::HashMap::new();
-    for (i, line) in lines.iter().enumerate() {
-        if let Some((_module, ids)) = InlineDiffer::parse_import_line(line) {
-            let set: std::collections::HashSet<String> =
-                ids.into_iter().map(|(id, _)| id).collect();
-            map.insert(i, set);
-        }
-    }
-    map
-}
-
-fn build_import_line_sets(
-    buffer: &gsv::Buffer,
-) -> std::collections::HashMap<usize, std::collections::HashSet<String>> {
-    use crate::diff::engine::InlineDiffer;
-    let mut map = std::collections::HashMap::new();
-    let line_count = buffer.line_count().max(0) as usize;
-    for i in 0..line_count {
-        let s = buffer.iter_at_line_offset(i as i32, 0);
-        let e = buffer.iter_at_line_offset((i + 1) as i32, 0);
-        if let (Some(si), Some(ei)) = (s, e) {
-            let line = buffer.text(&si, &ei, true).to_string();
-            if let Some((_module, ids)) = InlineDiffer::parse_import_line(&line) {
-                let set: std::collections::HashSet<String> =
-                    ids.into_iter().map(|(id, _)| id).collect();
-                map.insert(i, set);
-            }
-        }
-    }
-    map
-}
-
-fn compute_import_changes(
-    line_this: &str,
-    other_aggr_sets: &std::collections::HashMap<String, std::collections::HashSet<String>>,
-    missing_op: DiffOp,
-    other_line_sets: &std::collections::HashMap<usize, std::collections::HashSet<String>>,
-) -> Vec<InlineChange> {
-    use crate::diff::engine::{InlineChange, InlineDiffer};
-    let (module, ids_this) = match InlineDiffer::parse_import_line(line_this) {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-    let empty_set = std::collections::HashSet::new();
-    let other_ids = other_aggr_sets.get(&module).unwrap_or(&empty_set);
-    let mut changes = Vec::new();
-    for (id, (start, end)) in &ids_this {
-        if !other_ids.contains(id) {
-            changes.push(InlineChange {
-                start: *start,
-                end: *end,
-                op: missing_op,
-            });
-        } else {
-            let is_alone_here = ids_this.len() == 1;
-            let alone_there = other_line_sets
-                .iter()
-                .any(|(_, l)| l.len() == 1 && l.contains(id));
-            let merged_here = !is_alone_here && alone_there;
-            let extracted_there = is_alone_here
-                && other_line_sets
-                    .iter()
-                    .any(|(_, l)| l.len() > 1 && l.contains(id));
-            if merged_here || extracted_there {
-                changes.push(InlineChange {
-                    start: *start,
-                    end: *end,
-                    op: DiffOp::Replace,
-                });
-            }
-        }
-    }
-    changes
-}
-
-fn is_all_unchanged_import_line(
-    buffer: &gsv::Buffer,
-    start: &gtk::TextIter,
-    end: &gtk::TextIter,
-    other_sets: &std::collections::HashMap<String, std::collections::HashSet<String>>,
-) -> bool {
-    use crate::diff::engine::InlineDiffer;
-    let line_text = buffer.text(start, end, true).to_string();
-    let (module, ids) = match InlineDiffer::parse_import_line(&line_text) {
-        Some(p) => p,
-        None => return false,
-    };
-    let empty_set = std::collections::HashSet::new();
-    let other_ids = other_sets.get(&module).unwrap_or(&empty_set);
-    ids.iter().all(|(id, _)| other_ids.contains(id))
-}
-
 fn apply_inline_diff(
     buffer: &gsv::Buffer,
     other_buffer: &gsv::Buffer,
@@ -2294,13 +2017,6 @@ fn apply_inline_diff(
     inline_diff_mode: &str,
 ) {
     let (start_a, end_a, start_b, end_b) = (chunk.start_a, chunk.end_a, chunk.start_b, chunk.end_b);
-
-    // Build aggregated import-identifier sets from ALL lines of the OTHER
-    // buffer, grouped by module string.  This enables correct set-based
-    // comparison even when an import is split across multiple lines on
-    // one side.
-    let other_import_sets = build_import_sets(other_buffer);
-    let other_line_sets = build_import_line_sets(other_buffer);
 
     // Process each line pair within the chunk
     let line_count = (end_a - start_a).min(end_b - start_b);
@@ -2346,29 +2062,14 @@ fn apply_inline_diff(
             continue;
         }
 
-        // Try import-aware set comparison first.  When both lines are
-        // imports from the same module, compare against the AGGREGATED
-        // identifier set from the OTHER buffer (across all its lines)
-        // rather than just the paired line.  This correctly classifies
-        // identifiers that were split across multiple import lines.
-        let this_line = if pane == 0 { &text_a } else { &text_b };
-        let missing_op = if pane == 0 {
-            DiffOp::Delete
-        } else {
-            DiffOp::Insert
+        // Compute inline diff using token or character mode.
+        // Uses the same approach as the original Meld: token/char diff
+        // for ALL lines, with no import-specific special-casing.
+        let inline_changes = match inline_diff_mode {
+            "characters" => InlineDiffer::compare_line(&text_a, &text_b),
+            "tokens" => (*cache.compare_line_tokens(&text_a, &text_b)).clone(),
+            _ => Vec::new(),
         };
-        let mut inline_changes =
-            compute_import_changes(this_line, &other_import_sets, missing_op, &other_line_sets);
-        if inline_changes.is_empty() {
-            let is_import = InlineDiffer::parse_import_line(this_line).is_some();
-            if !is_import {
-                inline_changes = match inline_diff_mode {
-                    "characters" => InlineDiffer::compare_line(&text_a, &text_b),
-                    "tokens" => (*cache.compare_line_tokens(&text_a, &text_b)).clone(),
-                    _ => Vec::new(),
-                };
-            }
-        }
         if inline_changes.is_empty() {
             continue;
         }
@@ -2426,54 +2127,6 @@ fn apply_inline_diff(
                 }
                 if s.offset() < e.offset() {
                     buffer.apply_tag(&tag, &s, &e);
-                }
-            }
-        }
-
-        // Extra lines on the side with more lines: compare against
-        // aggregated opposite-side sets.
-        let this_start = if pane == 0 { start_a } else { start_b };
-        let this_end = if pane == 0 { end_a } else { end_b };
-        let other_start = if pane == 0 { start_b } else { start_a };
-        let other_end = if pane == 0 { end_b } else { end_a };
-        let pair_count = (this_end - this_start).min(other_end - other_start);
-        for extra in pair_count..(this_end - this_start) {
-            let this_line_num = this_start + extra;
-            let s_iter = buffer.iter_at_line_offset(this_line_num as i32, 0);
-            let e_iter = buffer.iter_at_line_offset((this_line_num + 1) as i32, 0);
-            if let (Some(si), Some(ei)) = (s_iter, e_iter) {
-                let line_text = buffer.text(&si, &ei, true).to_string();
-                let mut changes = compute_import_changes(
-                    &line_text,
-                    &other_import_sets,
-                    missing_op,
-                    &other_line_sets,
-                );
-                if changes.is_empty() {
-                    continue;
-                }
-                for change in changes.iter() {
-                    let tag_name = match change.op {
-                        DiffOp::Delete => "diff-inline-delete",
-                        DiffOp::Insert => "diff-inline-insert",
-                        DiffOp::Replace => "diff-inline-replace",
-                        DiffOp::Equal => continue,
-                    };
-                    if let Some(tag) = tag_table.lookup(tag_name) {
-                        let so = si.offset() as usize + change.start;
-                        let eo = si.offset() as usize + change.end;
-                        let mut s = buffer.iter_at_offset(so as i32);
-                        let mut e = buffer.iter_at_offset(eo as i32);
-                        if !s.is_cursor_position() {
-                            s.backward_cursor_position();
-                        }
-                        if !e.is_cursor_position() {
-                            e.forward_cursor_position();
-                        }
-                        if s.offset() < e.offset() {
-                            buffer.apply_tag(&tag, &s, &e);
-                        }
-                    }
                 }
             }
         }
@@ -2579,6 +2232,10 @@ fn execute_replace(src_buffer: &gsv::Buffer, dst_buffer: &gsv::Buffer, chunk: &C
     let insert_pos = iter_at_line_or_end(dst_buffer, chunk.start_b as i32);
     dst_buffer.insert(&mut insert_pos.clone(), &src_text);
 
+    // Place cursor at the start of the replaced content for immediate context
+    let cursor_pos = iter_at_line_or_end(dst_buffer, chunk.start_b as i32);
+    dst_buffer.place_cursor(&cursor_pos);
+
     dst_buffer.end_user_action();
 
     let ins = iter_at_line_or_end(dst_buffer, chunk.start_b as i32);
@@ -2603,6 +2260,11 @@ fn execute_delete(buffer: &gsv::Buffer, chunk: &Chunk) {
     }
 
     buffer.end_user_action();
+
+    // Fading highlight to indicate what was removed (mirrors Meld's visual feedback)
+    let hl_start = iter_at_line_or_end(buffer, chunk.start_a.max(0) as i32);
+    let hl_end = iter_at_line_or_end(buffer, chunk.start_a.max(0) as i32);
+    add_fading_highlight(buffer, &hl_start, &hl_end);
 }
 
 /// Execute a copy operation: copy text from src to dst (up or down).
@@ -2622,6 +2284,9 @@ fn execute_copy(src_buffer: &gsv::Buffer, dst_buffer: &gsv::Buffer, chunk: &Chun
 
     dst_buffer.begin_user_action();
 
+    let line_count = src_text.lines().count().max(1);
+    let insert_line = if copy_up { chunk.start_b } else { chunk.end_b };
+
     if copy_up {
         if chunk.end_a >= src_buffer.line_count().max(0) as usize
             && chunk.start_b < dst_buffer.line_count().max(0) as usize
@@ -2640,4 +2305,9 @@ fn execute_copy(src_buffer: &gsv::Buffer, dst_buffer: &gsv::Buffer, chunk: &Chun
     }
 
     dst_buffer.end_user_action();
+
+    // Fading highlight to indicate the newly inserted content
+    let hl_start = iter_at_line_or_end(dst_buffer, insert_line as i32);
+    let hl_end = iter_at_line_or_end(dst_buffer, (insert_line + line_count) as i32);
+    add_fading_highlight(dst_buffer, &hl_start, &hl_end);
 }

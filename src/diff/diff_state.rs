@@ -6,13 +6,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::diff::engine::{Chunk, DiffOp, Differ};
-use crate::diff::movement::MoveMap;
-use crate::diff::similarity::SimilarityMap;
 
 pub struct DiffResult {
     pub chunks: Vec<Chunk>,
-    pub similarity: SimilarityMap,
-    pub movement: MoveMap,
     pub text_a: Vec<String>,
     pub text_b: Vec<String>,
     pub is_empty: bool,
@@ -102,56 +98,7 @@ impl DiffState {
                     }
                 };
 
-                let merged =
-                    crate::diff::engine::merge_adjacent_replace_chunks(&result.chunks);
-
-                if cancel_clone.load(Ordering::SeqCst) {
-                    let _ = tx_clone.send(None);
-                    return;
-                }
-
-                let mut matched_left = std::collections::HashSet::new();
-                let mut matched_right = std::collections::HashSet::new();
-                for chunk in &merged {
-                    if chunk.op == DiffOp::Equal {
-                        for i in chunk.start_a..chunk.end_a {
-                            matched_left.insert(i);
-                        }
-                        for i in chunk.start_b..chunk.end_b {
-                            matched_right.insert(i);
-                        }
-                    }
-                }
-
-                if cancel_clone.load(Ordering::SeqCst) {
-                    let _ = tx_clone.send(None);
-                    return;
-                }
-
-                let similarity = SimilarityMap::build(
-                    &text_a,
-                    &text_b,
-                    &matched_left,
-                    &matched_right,
-                    0.25,
-                    50,
-                    &cancel_clone,
-                );
-
-                if cancel_clone.load(Ordering::SeqCst) {
-                    let _ = tx_clone.send(None);
-                    return;
-                }
-
-                let movement = MoveMap::build(
-                    &text_a,
-                    &text_b,
-                    &matched_left,
-                    &matched_right,
-                    0.6,
-                    2,
-                    &cancel_clone,
-                );
+                let merged = crate::diff::engine::merge_adjacent_replace_chunks(&result.chunks);
 
                 if cancel_clone.load(Ordering::SeqCst) {
                     let _ = tx_clone.send(None);
@@ -163,8 +110,6 @@ impl DiffState {
 
                 let _ = tx_clone.send(Some(DiffResult {
                     chunks: merged,
-                    similarity,
-                    movement,
                     text_a,
                     text_b,
                     is_empty,
@@ -179,8 +124,8 @@ impl DiffState {
         let gen_cell = Rc::clone(&self.generation);
         let mut on_complete_opt = Some(on_complete);
 
-        let poll_id = glib::timeout_add_local(Duration::from_millis(16), move || {
-            match rx.try_recv() {
+        let poll_id =
+            glib::timeout_add_local(Duration::from_millis(16), move || match rx.try_recv() {
                 Ok(Some(diff_result)) => {
                     if gen_cell.get() != gen {
                         return glib::ControlFlow::Break;
@@ -193,8 +138,7 @@ impl DiffState {
                 Ok(None) => glib::ControlFlow::Break,
                 Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                 Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
-            }
-        });
+            });
         self.poll_source = Some(poll_id);
     }
 }

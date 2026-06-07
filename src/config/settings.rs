@@ -71,8 +71,6 @@ pub struct MeldSettings {
 
     // ── Diff visualization ──
     #[serde(default = "default_true")]
-    pub detect_moved_lines: bool,
-    #[serde(default = "default_true")]
     pub show_connectors: bool,
     #[serde(default = "default_inline_mode")]
     pub inline_diff_mode: String,
@@ -270,7 +268,6 @@ impl Default for MeldSettings {
             show_overview_map: true,
             overview_map_style: "chunkmap".into(),
             ignore_blank_lines: false,
-            detect_moved_lines: true,
             show_connectors: true,
             inline_diff_mode: "tokens".into(),
             similarity_threshold: 0.6,

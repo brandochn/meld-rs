@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::diff::engine::{DiffOp, InlineChange, InlineDiffer};
+use crate::diff::engine::{InlineChange, InlineDiffer};
 
 /// A detected similarity match between a left-side line and a right-side line.
 #[derive(Debug, Clone)]
@@ -58,9 +58,6 @@ impl SimilarityMap {
         cancel: &AtomicBool,
     ) -> Self {
         let mut map = Self::default();
-
-        let left_import_sets = Self::build_import_sets_from_slice(left);
-        let right_import_sets = Self::build_import_sets_from_slice(right);
 
         // Collect unmatched line indices from both sides
         let unmatched_left: Vec<usize> = (0..left.len())
@@ -138,21 +135,8 @@ impl SimilarityMap {
                 let score = jaccard(&left_tokens, &right_tokens);
 
                 if score >= threshold {
-                    let mut inline_diff = InlineDiffer::compare_import_lines_grouped(
-                        &left[left_idx],
-                        &left[left_idx],
-                        &right_import_sets,
-                        DiffOp::Delete,
-                    );
-                    if inline_diff.is_empty() {
-                        let is_import = InlineDiffer::parse_import_line(&left[left_idx]).is_some();
-                        if !is_import {
-                            inline_diff = InlineDiffer::compare_line_tokens(
-                                &left[left_idx],
-                                &right[right_idx],
-                            );
-                        }
-                    }
+                    let inline_diff =
+                        InlineDiffer::compare_line_tokens(&left[left_idx], &right[right_idx]);
                     map.matches.push(SimilarityEntry {
                         left_line: left_idx,
                         right_line: right_idx,
@@ -173,21 +157,6 @@ impl SimilarityMap {
     }
 
     /// Find the similarity match involving a specific line, if any.
-
-    fn build_import_sets_from_slice(
-        lines: &[String],
-    ) -> std::collections::HashMap<String, HashSet<String>> {
-        let mut map = std::collections::HashMap::new();
-        for line in lines {
-            if let Some((module, ids)) = InlineDiffer::parse_import_line(line) {
-                let entry = map.entry(module).or_insert_with(HashSet::new);
-                for (id, _) in ids {
-                    entry.insert(id);
-                }
-            }
-        }
-        map
-    }
     pub fn find_by_right(&self, line: usize) -> Option<&SimilarityEntry> {
         self.matches.iter().find(|e| e.right_line == line)
     }
@@ -267,7 +236,15 @@ mod tests {
         let right: Vec<String> = vec!["a".into(), "b".into()];
         let matched_left: HashSet<usize> = (0..left.len()).collect();
         let matched_right: HashSet<usize> = (0..right.len()).collect();
-        let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.6, 50, &AtomicBool::new(false));
+        let map = SimilarityMap::build(
+            &left,
+            &right,
+            &matched_left,
+            &matched_right,
+            0.6,
+            50,
+            &AtomicBool::new(false),
+        );
         assert!(map.matches.is_empty());
     }
 
@@ -277,7 +254,15 @@ mod tests {
         let right: Vec<String> = vec!["notifyEr(x, y);".into()];
         let matched_left = HashSet::new();
         let matched_right = HashSet::new();
-        let map = SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.15, 50, &AtomicBool::new(false));
+        let map = SimilarityMap::build(
+            &left,
+            &right,
+            &matched_left,
+            &matched_right,
+            0.15,
+            50,
+            &AtomicBool::new(false),
+        );
         assert!(
             !map.matches.is_empty(),
             "Should find similarity match for same-prefix lines"
@@ -296,8 +281,15 @@ mod tests {
         // Actually expected_right for left_idx=1 in 3 lines vs 3 lines = 1*3/3 = 1.
         // Window [0, 2] includes right[2]... so it would match.
         // Let's test with window=0 to ensure no match across positions.
-        let map_restricted =
-            SimilarityMap::build(&left, &right, &matched_left, &matched_right, 0.5, 0, &AtomicBool::new(false));
+        let map_restricted = SimilarityMap::build(
+            &left,
+            &right,
+            &matched_left,
+            &matched_right,
+            0.5,
+            0,
+            &AtomicBool::new(false),
+        );
         // With window=0, "line X" at left[1] tries to match right[1]="line b" — no match
         assert!(map_restricted.matches.is_empty());
     }
