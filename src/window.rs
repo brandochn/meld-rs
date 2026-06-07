@@ -241,7 +241,6 @@ impl MeldWindow {
         let filediff = FileDiff::new(3);
         filediff.set_font(self.settings.use_system_font, &self.settings.custom_font);
         filediff.set_ignore_blanks(self.settings.ignore_blank_lines);
-        filediff.set_detect_moved_lines(self.settings.detect_moved_lines);
         filediff.set_show_connectors(self.settings.show_connectors);
         filediff.set_inline_diff_mode(&self.settings.inline_diff_mode);
         filediff.set_files(gfiles);
@@ -546,12 +545,8 @@ fn open_comparison_in_notebook(
         // A single file opens alongside a blank pane for editing.
         let num_panes = gfiles.len().max(2);
         let filediff = FileDiff::new(num_panes);
-        filediff.set_font(
-            settings.use_system_font,
-            &settings.custom_font,
-        );
+        filediff.set_font(settings.use_system_font, &settings.custom_font);
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
-        filediff.set_detect_moved_lines(settings.detect_moved_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
         filediff.set_files(gfiles);
@@ -613,7 +608,6 @@ fn open_vc_file_comparison(
                     let filediff = FileDiff::new(2);
                     filediff.set_font(settings.use_system_font, &settings.custom_font);
                     filediff.set_ignore_blanks(settings.ignore_blank_lines);
-                    filediff.set_detect_moved_lines(settings.detect_moved_lines);
                     filediff.set_show_connectors(settings.show_connectors);
                     filediff.set_inline_diff_mode(&settings.inline_diff_mode);
                     filediff.set_files(&files);
@@ -665,7 +659,6 @@ fn open_vc_file_comparison(
         let filediff = FileDiff::new(3);
         filediff.set_font(settings.use_system_font, &settings.custom_font);
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
-        filediff.set_detect_moved_lines(settings.detect_moved_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
         filediff.set_files(&files);
@@ -718,7 +711,6 @@ fn open_vc_file_comparison(
         let filediff = FileDiff::new(2);
         filediff.set_font(settings.use_system_font, &settings.custom_font);
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
-        filediff.set_detect_moved_lines(settings.detect_moved_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
         filediff.set_files(&files);
@@ -777,12 +769,8 @@ fn handle_diff_request(
                 gfiles.len().max(2)
             };
             let fd = FileDiff::new(num_panes);
-            fd.set_font(
-                settings.use_system_font,
-                &settings.custom_font,
-            );
+            fd.set_font(settings.use_system_font, &settings.custom_font);
             fd.set_ignore_blanks(settings.ignore_blank_lines);
-            fd.set_detect_moved_lines(settings.detect_moved_lines);
             fd.set_show_connectors(settings.show_connectors);
             fd.set_inline_diff_mode(&settings.inline_diff_mode);
             if !gfiles.is_empty() {

@@ -3,23 +3,14 @@
 //!
 //! Ported from the original `meld/linkmap.py`. Renders visual connectors
 //! between matching/changed line regions in two side-by-side diff panes.
-//!
-//! Features:
-//!   - Filled bezier curves for Equal chunks (matching Meld's continuous
-//!     visual linking)
-//!   - Stroked bezier curves for Delete/Insert/Replace chunks
-//!   - Dotted amber connectors for cross-line similarity matches
-//!   - Viewport culling (only draws curves for the visible region)
 
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use sourceview5 as gsv;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::diff::engine::{Chunk, DiffOp};
-use crate::diff::movement::MoveMap;
-use crate::diff::similarity::SimilarityMap;
 
 /// Information about which connector the pointer is hovering over.
 #[derive(Debug, Clone)]
@@ -31,20 +22,6 @@ pub enum HoverInfo {
         start_b: usize,
         end_b: usize,
         op: DiffOp,
-    },
-    Token {
-        left_line: usize,
-        right_line: usize,
-    },
-    Similarity {
-        left_line: usize,
-        right_line: usize,
-    },
-    Move {
-        left_start: usize,
-        left_end: usize,
-        right_start: usize,
-        right_end: usize,
     },
 }
 
@@ -61,9 +38,8 @@ pub struct LinkMap {
     chunks: Rc<RefCell<Vec<Chunk>>>,
     total_lines_a: Rc<RefCell<usize>>,
     total_lines_b: Rc<RefCell<usize>>,
-    similarity: Rc<RefCell<Vec<SimilarityLink>>>,
-    moves: Rc<RefCell<Vec<MoveLink>>>,
-    token_relations: Rc<RefCell<Vec<TokenRelation>>>,
+    /// Index of the currently-focused chunk for highlight overlay.
+    current_chunk: Rc<Cell<Option<usize>>>,
     /// Optional references to left/right text views for viewport culling.
     left_view: Rc<RefCell<Option<gsv::View>>>,
     right_view: Rc<RefCell<Option<gsv::View>>>,
@@ -73,56 +49,6 @@ pub struct LinkMap {
     active_hover: Rc<RefCell<HoverInfo>>,
     /// External callback for hover changes.
     hover_callback: Rc<RefCell<Option<Box<dyn Fn(&HoverInfo)>>>>,
-}
-
-#[derive(Debug, Clone)]
-struct SimilarityLink {
-    left_line: usize,
-    right_line: usize,
-    score: f64,
-}
-
-#[derive(Debug, Clone)]
-struct MoveLink {
-    left_start: usize,
-    left_end: usize,
-    right_start: usize,
-    right_end: usize,
-    score: f64,
-}
-
-/// A token-level relation linking a moved identifier's position on the
-/// left pane to its position on the right pane.
-#[derive(Debug, Clone)]
-pub struct TokenRelation {
-    pub left_line: usize,
-    pub left_col_start: usize,
-    pub left_col_end: usize,
-    pub right_line: usize,
-    pub right_col_start: usize,
-    pub right_col_end: usize,
-    /// Character offset of the token start in the left buffer.
-    pub left_offset_start: usize,
-    /// Character offset of the token end in the left buffer.
-    pub left_offset_end: usize,
-    /// Character offset of the token start in the right buffer.
-    pub right_offset_start: usize,
-    /// Character offset of the token end in the right buffer.
-    pub right_offset_end: usize,
-}
-
-/// Pixel layout for a single token, computed from the text view.
-///
-/// Holds the single representative point for the token:
-/// the horizontal character position and the vertical centre of its line.
-#[derive(Debug, Clone, Copy)]
-struct TokenLayout {
-    /// Buffer-space X of the token's representative character (pixels from
-    /// the left edge of the text area).
-    x: f64,
-    /// Buffer-space Y at the vertical centre of the token's line (pixels
-    /// from the top of the buffer, before scroll compensation).
-    center_y: f64,
 }
 
 impl LinkMap {
@@ -140,25 +66,21 @@ impl LinkMap {
         let chunks_rc = Rc::new(RefCell::new(chunks.to_vec()));
         let total_a = Rc::new(RefCell::new(total_lines_a.max(1)));
         let total_b = Rc::new(RefCell::new(total_lines_b.max(1)));
-        let similarity = Rc::new(RefCell::new(Vec::<SimilarityLink>::new()));
-        let moves = Rc::new(RefCell::new(Vec::<MoveLink>::new()));
-        let token_relations = Rc::new(RefCell::new(Vec::<TokenRelation>::new()));
         let left_view: Rc<RefCell<Option<gsv::View>>> = Rc::new(RefCell::new(None));
         let right_view: Rc<RefCell<Option<gsv::View>>> = Rc::new(RefCell::new(None));
         let hover_zones = Rc::new(RefCell::new(Vec::<HoverZone>::new()));
         let active_hover = Rc::new(RefCell::new(HoverInfo::None));
         let hover_callback: Rc<RefCell<Option<Box<dyn Fn(&HoverInfo)>>>> =
             Rc::new(RefCell::new(None));
+        let current_chunk = Rc::new(Cell::new(None::<usize>));
 
         let draw_chunks = Rc::clone(&chunks_rc);
         let draw_total_a = Rc::clone(&total_a);
         let draw_total_b = Rc::clone(&total_b);
         let draw_left_view = Rc::clone(&left_view);
         let draw_right_view = Rc::clone(&right_view);
-        let draw_similarity = Rc::clone(&similarity);
-        let draw_moves = Rc::clone(&moves);
-        let draw_token_relations = Rc::clone(&token_relations);
         let draw_hover_zones = Rc::clone(&hover_zones);
+        let draw_current = Rc::clone(&current_chunk);
 
         drawing_area.set_draw_func(move |da, cr, width, height| {
             let da_widget: &gtk::Widget = da.upcast_ref();
@@ -226,8 +148,8 @@ impl LinkMap {
                         buf.iter_at_line(line as i32)?
                     };
                     let rect = view.iter_location(&iter);
-                Some(rect.y() as f64 - pix + off + 1.0)
-            };
+                    Some(rect.y() as f64 - pix + off + 1.0)
+                };
 
             // Bezier control points (x_steps = [-0.5, w/2, w + 0.5])
             let xl = -0.5;
@@ -237,7 +159,7 @@ impl LinkMap {
             let mut zones: Vec<HoverZone> = Vec::new();
 
             // ---- Chunk bezier curves (matching Meld's do_draw exactly) ----
-            for chunk in chunks.iter() {
+            for (i, chunk) in chunks.iter().enumerate() {
                 if chunk.op == DiffOp::Equal {
                     continue;
                 }
@@ -304,6 +226,17 @@ impl LinkMap {
                 cr.curve_to(xm, y1 - 0.5, xm, t1c - 0.5, xr, t1c - 0.5);
                 cr.stroke().ok();
 
+                // Current chunk highlight overlay (mirrors Meld's current-chunk-highlight)
+                if draw_current.get() == Some(i) {
+                    cr.set_source_rgba(1.0, 0.8, 0.0, 0.25);
+                    cr.move_to(xl, y0 - 0.5);
+                    cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);
+                    cr.line_to(xr, t1c - 0.5);
+                    cr.curve_to(xm, t1c - 0.5, xm, y1 - 0.5, xl, y1 - 0.5);
+                    cr.close_path();
+                    cr.fill().ok();
+                }
+
                 zones.push(HoverZone {
                     y_min: y0.min(t0c),
                     y_max: y1.max(t1c),
@@ -315,230 +248,6 @@ impl LinkMap {
                         op: chunk.op,
                     },
                 });
-            }
-
-            // ── Token-level moved-identifier connectors ────────────
-            // Blue dashed bezier curves linking moved identifiers
-            // (e.g. EnvironmentContext split from a combined import).
-            {
-                let token_rels = draw_token_relations.borrow();
-                if !token_rels.is_empty() {
-                    cr.set_source_rgba(0.541, 0.761, 1.0, 0.55);
-                    cr.set_line_width(1.2);
-                    cr.set_dash(&[4.0, 3.0], 0.0);
-
-                    for rel in token_rels.iter() {
-                        let left_y = if let (Some(lv), Some(_rv)) =
-                            (left_view_opt.as_ref(), right_view_opt.as_ref())
-                        {
-                            let center = ((rel.left_offset_start + rel.left_offset_end) / 2)
-                                as i32;
-                            compute_token_layout(lv, center)
-                                .map(|tl| tl.center_y - pix_left + off_left + 1.0)
-                                .unwrap_or_else(|| {
-                                    view_offset_line(
-                                        &left_view_opt,
-                                        pix_left,
-                                        off_left,
-                                        rel.left_line,
-                                    )
-                                    .unwrap_or(
-                                        (rel.left_line as f64 / max_lines as f64) * h,
-                                    )
-                                })
-                        } else {
-                            (rel.left_line as f64 / max_lines as f64) * h
-                        };
-
-                        let right_y =
-                            if let (Some(_lv), Some(rv)) =
-                                (left_view_opt.as_ref(), right_view_opt.as_ref())
-                            {
-                                let center =
-                                    ((rel.right_offset_start + rel.right_offset_end) / 2)
-                                        as i32;
-                                compute_token_layout(rv, center)
-                                    .map(|tl| tl.center_y - pix_right + off_right + 1.0)
-                                    .unwrap_or_else(|| {
-                                        view_offset_line(
-                                            &right_view_opt,
-                                            pix_right,
-                                            off_right,
-                                            rel.right_line,
-                                        )
-                                        .unwrap_or(
-                                            (rel.right_line as f64 / max_lines as f64) * h,
-                                        )
-                                    })
-                            } else {
-                                (rel.right_line as f64 / max_lines as f64) * h
-                            };
-
-                        let ly = left_y.clamp(-10.0, h + 10.0);
-                        let ry = right_y.clamp(-10.0, h + 10.0);
-
-                        if (ly < -5.0 && ry < -5.0)
-                            || (ly > h + 5.0 && ry > h + 5.0)
-                        {
-                            continue;
-                        }
-
-                        cr.move_to(xl, ly);
-                        cr.curve_to(xm, ly, xm, ry, xr, ry);
-                        cr.stroke().ok();
-
-                        zones.push(HoverZone {
-                            y_min: ly.min(ry),
-                            y_max: ly.max(ry),
-                            info: HoverInfo::Token {
-                                left_line: rel.left_line,
-                                right_line: rel.right_line,
-                            },
-                        });
-                    }
-
-                    cr.set_dash(&[], 0.0);
-                }
-            }
-
-            // ── Similarity connectors (amber dotted) ──────────────
-            // Dotted bezier curves for cross-line similarity matches
-            // (lines that aren't aligned but share significant tokens).
-            {
-                let sims = draw_similarity.borrow();
-                if !sims.is_empty() {
-                    for entry in sims.iter() {
-                        let score = entry.score.clamp(0.0, 1.0);
-                        let alpha = 0.15 + score * 0.35;
-                        cr.set_source_rgba(1.0, 0.75, 0.3, alpha);
-                        cr.set_line_width(1.0);
-                        cr.set_dash(&[2.0, 4.0], 0.0);
-
-                        let left_y = view_offset_line(
-                            &left_view_opt, pix_left, off_left, entry.left_line,
-                        )
-                        .unwrap_or(
-                            (entry.left_line as f64 / max_lines as f64) * h,
-                        );
-                        let right_y = view_offset_line(
-                            &right_view_opt,
-                            pix_right,
-                            off_right,
-                            entry.right_line,
-                        )
-                        .unwrap_or(
-                            (entry.right_line as f64 / max_lines as f64) * h,
-                        );
-
-                        let ly = left_y.clamp(-10.0, h + 10.0);
-                        let ry = right_y.clamp(-10.0, h + 10.0);
-
-                        if (ly < -5.0 && ry < -5.0)
-                            || (ly > h + 5.0 && ry > h + 5.0)
-                        {
-                            continue;
-                        }
-
-                        cr.move_to(xl, ly);
-                        cr.curve_to(xm, ly, xm, ry, xr, ry);
-                        cr.stroke().ok();
-
-                        zones.push(HoverZone {
-                            y_min: ly.min(ry),
-                            y_max: ly.max(ry),
-                            info: HoverInfo::Similarity {
-                                left_line: entry.left_line,
-                                right_line: entry.right_line,
-                            },
-                        });
-                    }
-                    cr.set_dash(&[], 0.0);
-                }
-            }
-
-            // ── Move connectors (dashed amber regions) ────────────
-            // Bezier outlines for detected code-block movements.
-            {
-                let moves = draw_moves.borrow();
-                if !moves.is_empty() {
-                    cr.set_source_rgba(1.0, 0.8, 0.3, 0.5);
-                    cr.set_line_width(1.2);
-                    cr.set_dash(&[6.0, 4.0], 0.0);
-
-                    for entry in moves.iter() {
-                        let f0 = view_offset_line(
-                            &left_view_opt, pix_left, off_left, entry.left_start,
-                        )
-                        .unwrap_or(
-                            (entry.left_start as f64 / max_lines as f64) * h,
-                        );
-                        let f1_raw = view_offset_line(
-                            &left_view_opt, pix_left, off_left, entry.left_end,
-                        )
-                        .unwrap_or(
-                            (entry.left_end as f64 / max_lines as f64) * h,
-                        );
-                        let f1 = if entry.left_end == entry.left_start {
-                            f0
-                        } else {
-                            f1_raw - 1.0
-                        };
-
-                        let t0 = view_offset_line(
-                            &right_view_opt,
-                            pix_right,
-                            off_right,
-                            entry.right_start,
-                        )
-                        .unwrap_or(
-                            (entry.right_start as f64 / max_lines as f64) * h,
-                        );
-                        let t1_raw = view_offset_line(
-                            &right_view_opt,
-                            pix_right,
-                            off_right,
-                            entry.right_end,
-                        )
-                        .unwrap_or(
-                            (entry.right_end as f64 / max_lines as f64) * h,
-                        );
-                        let t1 = if entry.right_end == entry.right_start {
-                            t0
-                        } else {
-                            t1_raw - 1.0
-                        };
-
-                        let y0 = f0.clamp(0.0, h);
-                        let y1 = f1.clamp(0.0, h);
-                        let t0c = t0.clamp(0.0, h);
-                        let t1c = t1.clamp(0.0, h);
-
-                        if (t0c < 0.0 && t1c < 0.0 && y0 < 0.0 && y1 < 0.0)
-                            || (t0c > h && t1c > h && y0 > h && y1 > h)
-                        {
-                            continue;
-                        }
-
-                        cr.move_to(xl, y0 - 0.5);
-                        cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);
-                        cr.line_to(xr, t1c - 0.5);
-                        cr.curve_to(xm, t1c - 0.5, xm, y1 - 0.5, xl, y1 - 0.5);
-                        cr.close_path();
-                        cr.stroke().ok();
-
-                        zones.push(HoverZone {
-                            y_min: y0.min(t0c),
-                            y_max: y1.max(t1c),
-                            info: HoverInfo::Move {
-                                left_start: entry.left_start,
-                                left_end: entry.left_end,
-                                right_start: entry.right_start,
-                                right_end: entry.right_end,
-                            },
-                        });
-                    }
-                    cr.set_dash(&[], 0.0);
-                }
             }
 
             *draw_hover_zones.borrow_mut() = zones;
@@ -578,11 +287,10 @@ impl LinkMap {
         let active_hover_leave = Rc::clone(&active_hover);
         let hover_callback_leave = Rc::clone(&hover_callback);
         mc.connect_leave(move |_| {
-            let found = HoverInfo::None;
             let changed = {
                 let current = active_hover_leave.borrow();
-                match (&*current, &found) {
-                    (HoverInfo::None, HoverInfo::None) => false,
+                match &*current {
+                    HoverInfo::None => false,
                     _ => true,
                 }
             };
@@ -601,9 +309,7 @@ impl LinkMap {
             chunks: chunks_rc,
             total_lines_a: total_a,
             total_lines_b: total_b,
-            similarity,
-            moves,
-            token_relations,
+            current_chunk,
             left_view,
             right_view,
             hover_zones,
@@ -663,88 +369,9 @@ impl LinkMap {
         self.drawing_area.queue_draw();
     }
 
-    /// Update the cross-line similarity data.
-    pub fn update_similarity(&self, map: &SimilarityMap) {
-        let entries: Vec<SimilarityLink> = map
-            .matches
-            .iter()
-            .map(|e| SimilarityLink {
-                left_line: e.left_line,
-                right_line: e.right_line,
-                score: e.score,
-            })
-            .collect();
-        self.similarity.replace(entries);
+    /// Set the currently focused chunk index for visual highlight.
+    pub fn set_current_chunk(&self, idx: Option<usize>) {
+        self.current_chunk.set(idx);
         self.drawing_area.queue_draw();
     }
-
-    /// Update the detected movement data for drawing amber connectors.
-    pub fn update_moves(&self, map: &MoveMap) {
-        let entries: Vec<MoveLink> = map
-            .moves
-            .iter()
-            .map(|e| MoveLink {
-                left_start: e.left_start,
-                left_end: e.left_end,
-                right_start: e.right_start,
-                right_end: e.right_end,
-                score: e.score,
-            })
-            .collect();
-        self.moves.replace(entries);
-        self.drawing_area.queue_draw();
-    }
-
-    /// Update token-level moved-identifier relations for blue connectors.
-    pub fn update_token_relations(&self, relations: &[TokenRelation]) {
-        self.token_relations.replace(relations.to_vec());
-        self.drawing_area.queue_draw();
-    }
-
-    /// Clear similarity, movement, and token-relation overlay data.
-    pub fn clear_overlays(&self) {
-        self.similarity.replace(Vec::new());
-        self.moves.replace(Vec::new());
-        self.token_relations.replace(Vec::new());
-        self.drawing_area.queue_draw();
-    }
-}
-
-// ─── Helper: compute real pixel position of a buffer token ──────────
-
-/// Return the single representative pixel point for the character at
-/// `center_offset` within `view`.
-///
-/// Pipeline (one offset → one iter → one rect → one point):
-/// 1. `buffer.iter_at_offset(center_offset)` → `GtkTextIter`
-/// 2. `text_view.iter_location(&iter)`        → `GdkRectangle` (buffer space)
-/// 3. `x      = rect.x()`
-///    `center_y = rect.y() + rect.height() / 2`
-///
-/// All coordinates are in **buffer space** (origin at the top of the
-/// full buffer, independent of scroll position).  The caller must
-/// subtract `vadjustment().value()` to obtain DrawingArea-relative Y.
-///
-/// Returns `None` when `center_offset` is past the end of the buffer
-/// (e.g. the buffer was modified since the token relations were built).
-fn compute_token_layout(view: &gsv::View, center_offset: i32) -> Option<TokenLayout> {
-    use gtk4::prelude::TextViewExt;
-
-    let buffer = view.buffer();
-
-    // Step 1: single GtkTextIter at the centre of the token span.
-    let iter = buffer.iter_at_offset(center_offset);
-    if iter.is_end() && center_offset > 0 {
-        return None;
-    }
-
-    // Step 2: pixel rectangle in buffer coordinates.
-    let tv: &gtk::TextView = view.upcast_ref();
-    let rect = tv.iter_location(&iter);
-
-    // Step 3: derive the single representative point.
-    Some(TokenLayout {
-        x: rect.x() as f64,
-        center_y: rect.y() as f64 + rect.height() as f64 / 2.0,
-    })
 }

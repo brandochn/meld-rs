@@ -9,9 +9,11 @@
 //!   * Delete mode (Shift)    — remove chunk from source
 //!   * Insert mode (Ctrl)     — copy chunk to target (popup for direction)
 
+use gdk4 as gdk;
+use glib;
 use gtk4 as gtk;
 use gtk4::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::diff::engine::{Chunk, DiffOp};
@@ -50,6 +52,8 @@ pub struct ActionGutter {
     target_view: gtk::TextView,
     direction: GutterDirection,
     chunks: Rc<RefCell<Vec<Chunk>>>,
+    /// Current action mode (replace/delete/insert), toggled by keyboard modifiers.
+    action_mode: Rc<Cell<ActionMode>>,
     /// Currently hovered button index.
     hovered_chunk: Rc<RefCell<Option<usize>>>,
     /// Currently pressed button index.
@@ -79,6 +83,39 @@ impl ActionGutter {
         let hovered = Rc::new(RefCell::new(None::<usize>));
         let pressed = Rc::new(RefCell::new(None::<usize>));
         let buttons = Rc::new(RefCell::new(Vec::<(f64, f64, f64, f64, usize)>::new()));
+        let action_mode = Rc::new(Cell::new(ActionMode::Replace));
+
+        // ── Keyboard modifier tracking (Shift=Delete, Ctrl=Insert) ──
+        let key_ctrl = gtk::EventControllerKey::new();
+        {
+            let mode = Rc::clone(&action_mode);
+            let da = drawing_area.clone();
+            key_ctrl.connect_key_pressed(move |_, _keyval, _, modifier| {
+                let new_mode = if modifier.contains(gdk::ModifierType::CONTROL_MASK) {
+                    ActionMode::Insert
+                } else if modifier.contains(gdk::ModifierType::SHIFT_MASK) {
+                    ActionMode::Delete
+                } else {
+                    ActionMode::Replace
+                };
+                if mode.get() != new_mode {
+                    mode.set(new_mode);
+                    da.queue_draw();
+                }
+                glib::Propagation::Proceed
+            });
+        }
+        {
+            let mode = Rc::clone(&action_mode);
+            let da = drawing_area.clone();
+            key_ctrl.connect_key_released(move |_, _, _, _| {
+                if mode.get() != ActionMode::Replace {
+                    mode.set(ActionMode::Replace);
+                    da.queue_draw();
+                }
+            });
+        }
+        drawing_area.add_controller(key_ctrl);
 
         // ── Scroll sync ──────────────────────────────────────────
         let da_weak = drawing_area.downgrade();
@@ -143,6 +180,7 @@ impl ActionGutter {
         let pressed_release = Rc::clone(&pressed_click);
         let chunks_release = Rc::clone(&chunks_click);
         let action_release = Rc::clone(&action_cb_click);
+        let mode_release = Rc::clone(&action_mode);
         gesture.connect_released(move |_gesture, _n, _x, _y| {
             let pressed = *pressed_release.borrow();
             let hover = *hover_release.borrow();
@@ -152,14 +190,12 @@ impl ActionGutter {
                     let action = {
                         let chunks = chunks_release.borrow();
                         if p < chunks.len() {
-                            Some(classify_action(&chunks[p]))
+                            Some(classify_action(&chunks[p], mode_release.get()))
                         } else {
                             None
                         }
                     };
-                    if let (Some(action), Some(cb)) =
-                        (action, action_release.borrow().as_ref())
-                    {
+                    if let (Some(action), Some(cb)) = (action, action_release.borrow().as_ref()) {
                         cb(p, action);
                     }
                 }
@@ -175,12 +211,14 @@ impl ActionGutter {
         let draw_hover = Rc::clone(&hovered);
         let draw_pressed = Rc::clone(&pressed);
         let draw_buttons = Rc::clone(&buttons);
+        let draw_mode = Rc::clone(&action_mode);
 
         drawing_area.set_draw_func(move |da, cr, width, height| {
             let chunks = draw_chunks.borrow();
             let hovered = *draw_hover.borrow();
             let pressed = *draw_pressed.borrow();
             let w = width as f64;
+            let mode = draw_mode.get();
 
             let da_w: &gtk::Widget = da.upcast_ref();
             let src_w: &gtk::Widget = draw_source.upcast_ref();
@@ -242,7 +280,7 @@ impl ActionGutter {
                 let is_pressed = pressed == Some(i);
 
                 draw_chunk_action(
-                    cr, chunk, w, rect_y, rect_h, draw_dir, is_hovered, is_pressed,
+                    cr, chunk, w, rect_y, rect_h, draw_dir, is_hovered, is_pressed, mode,
                 );
 
                 // Hit-test rectangle
@@ -258,6 +296,7 @@ impl ActionGutter {
             target_view,
             direction,
             chunks,
+            action_mode,
             hovered_chunk: hovered,
             pressed_chunk: pressed,
             action_callback: action_cb_click,
@@ -293,10 +332,16 @@ impl ActionGutter {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-/// Classify the appropriate action for a chunk (matching Meld's
-/// `_classify_change_actions` simplified for Replace-only mode).
-fn classify_action(_chunk: &Chunk) -> GutterAction {
-    GutterAction::Replace
+/// Classify the appropriate action for a chunk based on the current mode.
+fn classify_action(chunk: &Chunk, mode: ActionMode) -> GutterAction {
+    match mode {
+        ActionMode::Delete => GutterAction::Delete,
+        ActionMode::Insert => {
+            // Insert mode shows copy-up/copy-down popup
+            GutterAction::CopyDown
+        }
+        ActionMode::Replace => GutterAction::Replace,
+    }
 }
 
 // ─── Drawing ──────────────────────────────────────────────────────────
@@ -310,6 +355,7 @@ fn draw_chunk_action(
     direction: GutterDirection,
     hovered: bool,
     pressed: bool,
+    mode: ActionMode,
 ) {
     let h = line_h.max(4.0);
 
@@ -379,7 +425,7 @@ fn draw_chunk_action(
     let cx = width / 2.0;
     let cy = y + h / 2.0;
     let half = 8.0;
-    let action = classify_action(chunk);
+    let action = classify_action(chunk, mode);
 
     match action {
         GutterAction::Replace => draw_replace_icon(cr, cx, cy, half, direction),
