@@ -25,6 +25,9 @@ pub struct FilterEntry {
     pub enabled: bool,
     /// The glob or regex pattern for matching files/text.
     pub pattern: String,
+    /// If true, the pattern is a shell glob; if false, it's a regex.
+    #[serde(default)]
+    pub is_shell: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,26 +179,31 @@ fn default_filename_filters() -> Vec<FilterEntry> {
             name: "Backups".into(),
             enabled: true,
             pattern: "#*# .#* ~* *~ *.{orig,bak,swp}".into(),
+            is_shell: true,
         },
         FilterEntry {
             name: "OS-Specific Metadata".into(),
             enabled: true,
             pattern: ".DS_Store ._* .Spotlight-V100 .Trashes Thumbs.db Desktop.ini".into(),
+            is_shell: true,
         },
         FilterEntry {
             name: "Version Control".into(),
             enabled: true,
             pattern: ".git .svn .hg CVS".into(),
+            is_shell: true,
         },
         FilterEntry {
             name: "Binaries".into(),
             enabled: true,
             pattern: "*.{pyc,a,obj,o,so,la,lib,dll,exe}".into(),
+            is_shell: true,
         },
         FilterEntry {
             name: "Media".into(),
             enabled: false,
             pattern: "*.{jpg,jpeg,gif,png,bmp,tif,tiff,wav,mp3,ogg,avi,mp4,mov,psd,xcf}".into(),
+            is_shell: true,
         },
     ]
 }
@@ -205,36 +213,43 @@ fn default_text_filters() -> Vec<FilterEntry> {
             name: "CVS/SVN Keywords".into(),
             enabled: false,
             pattern: r"\$\w+(:[^\n$]+)?\$".into(),
+            is_shell: false,
         },
         FilterEntry {
             name: "C++ Comment".into(),
             enabled: false,
             pattern: "//.*".into(),
+            is_shell: false,
         },
         FilterEntry {
             name: "C Comment".into(),
             enabled: false,
             pattern: r"/\*.*?\*/".into(),
+            is_shell: false,
         },
         FilterEntry {
             name: "All Whitespace".into(),
             enabled: false,
             pattern: r"[ \t\r\f\v]*".into(),
+            is_shell: false,
         },
         FilterEntry {
             name: "Leading Whitespace".into(),
             enabled: false,
             pattern: r"^[ \t\r\f\v]*".into(),
+            is_shell: false,
         },
         FilterEntry {
             name: "Trailing Whitespace".into(),
             enabled: false,
             pattern: r"[ \t\r\f\v]*$".into(),
+            is_shell: false,
         },
         FilterEntry {
             name: "Script Comment".into(),
             enabled: false,
             pattern: "#.*".into(),
+            is_shell: false,
         },
     ]
 }
@@ -359,6 +374,22 @@ impl MeldSettings {
             .collect()
     }
 
+    /// Convert shell glob patterns to regex and return all active patterns
+    /// in a form suitable for `regex::bytes::Regex::new()`.
+    pub fn active_text_filter_regexes(&self) -> Vec<String> {
+        self.text_filters
+            .iter()
+            .filter(|f| f.enabled)
+            .map(|f| {
+                if f.is_shell {
+                    glob_to_regex(&f.pattern)
+                } else {
+                    f.pattern.clone()
+                }
+            })
+            .collect()
+    }
+
     pub fn load() -> Result<Self, SettingsError> {
         let path = settings_path()?;
         if path.exists() {
@@ -381,6 +412,66 @@ impl MeldSettings {
 fn settings_path() -> Result<PathBuf, SettingsError> {
     let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".config"));
     Ok(config_dir.join("meld-rs").join("settings.json"))
+}
+
+/// Convert a shell glob pattern to a regex pattern.
+///
+/// Handles `*` (any chars), `?` (single char), `{a,b}` (alternation),
+/// and escapes special regex chars.
+fn glob_to_regex(glob: &str) -> String {
+    let mut regex = String::with_capacity(glob.len() * 2);
+    regex.push('^');
+    let chars: Vec<char> = glob.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '*' => regex.push_str(".*"),
+            '?' => regex.push('.'),
+            '{' => {
+                // Find matching close brace
+                let mut depth = 1;
+                let start = i + 1;
+                while i + 1 < chars.len() {
+                    i += 1;
+                    match chars[i] {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let inner: String = glob[start..i].chars().collect();
+                let alts: Vec<&str> = inner.split(',').collect();
+                regex.push('(');
+                for (j, alt) in alts.iter().enumerate() {
+                    if j > 0 {
+                        regex.push('|');
+                    }
+                    regex.push_str(&regex::escape(alt));
+                }
+                regex.push(')');
+            }
+            c if is_regex_meta(c) => {
+                regex.push('\\');
+                regex.push(c);
+            }
+            c => regex.push(c),
+        }
+        i += 1;
+    }
+    regex.push('$');
+    regex
+}
+
+fn is_regex_meta(c: char) -> bool {
+    matches!(
+        c,
+        '.' | '+' | '(' | ')' | '[' | ']' | '^' | '$' | '|' | '\\'
+    )
 }
 
 #[cfg(test)]

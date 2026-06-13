@@ -10,7 +10,6 @@
 //!   * Insert mode (Ctrl)     — copy chunk to target (popup for direction)
 
 use gdk4 as gdk;
-use glib;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -85,38 +84,6 @@ impl ActionGutter {
         let buttons = Rc::new(RefCell::new(Vec::<(f64, f64, f64, f64, usize)>::new()));
         let action_mode = Rc::new(Cell::new(ActionMode::Replace));
 
-        // ── Keyboard modifier tracking (Shift=Delete, Ctrl=Insert) ──
-        let key_ctrl = gtk::EventControllerKey::new();
-        {
-            let mode = Rc::clone(&action_mode);
-            let da = drawing_area.clone();
-            key_ctrl.connect_key_pressed(move |_, _keyval, _, modifier| {
-                let new_mode = if modifier.contains(gdk::ModifierType::CONTROL_MASK) {
-                    ActionMode::Insert
-                } else if modifier.contains(gdk::ModifierType::SHIFT_MASK) {
-                    ActionMode::Delete
-                } else {
-                    ActionMode::Replace
-                };
-                if mode.get() != new_mode {
-                    mode.set(new_mode);
-                    da.queue_draw();
-                }
-                glib::Propagation::Proceed
-            });
-        }
-        {
-            let mode = Rc::clone(&action_mode);
-            let da = drawing_area.clone();
-            key_ctrl.connect_key_released(move |_, _, _, _| {
-                if mode.get() != ActionMode::Replace {
-                    mode.set(ActionMode::Replace);
-                    da.queue_draw();
-                }
-            });
-        }
-        drawing_area.add_controller(key_ctrl);
-
         // ── Scroll sync ──────────────────────────────────────────
         let da_weak = drawing_area.downgrade();
         if let Some(vadj) = source_view.vadjustment() {
@@ -167,8 +134,57 @@ impl ActionGutter {
         let hover_click = Rc::clone(&hovered);
         let pressed_click = Rc::clone(&pressed);
         let dma_click = drawing_area.clone();
-        let popover_click = Rc::new(RefCell::new(None::<gtk::Popover>));
         let action_cb_click = Rc::new(RefCell::new(None::<ActionCallback>));
+        let copy_popover: Rc<RefCell<Option<gtk::Popover>>> = Rc::new(RefCell::new(None));
+        // Chunk index for the insert-mode popover (not cleared on release)
+        let popover_chunk: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
+
+        // Build the insert-mode popover (Copy Up / Copy Down)
+        {
+            let popover = gtk::Popover::new();
+            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+
+            let up_btn = gtk::Button::with_label("Copy Up");
+            let down_btn = gtk::Button::with_label("Copy Down");
+
+            let cb_pop = Rc::clone(&action_cb_click);
+            let chunks_pop = Rc::clone(&chunks);
+            let pc_pop = Rc::clone(&popover_chunk);
+            let pop_clone = popover.clone();
+            up_btn.connect_clicked(move |_| {
+                let chunks = chunks_pop.borrow();
+                if let Some(cb) = cb_pop.borrow().as_ref() {
+                    if let Some(idx) = pc_pop.get() {
+                        if idx < chunks.len() {
+                            cb(idx, GutterAction::CopyUp);
+                        }
+                    }
+                }
+                pop_clone.popdown();
+            });
+
+            let cb_pop2 = Rc::clone(&action_cb_click);
+            let chunks_pop2 = Rc::clone(&chunks);
+            let pc_pop2 = Rc::clone(&popover_chunk);
+            let pop_clone2 = popover.clone();
+            down_btn.connect_clicked(move |_| {
+                let chunks = chunks_pop2.borrow();
+                if let Some(cb) = cb_pop2.borrow().as_ref() {
+                    if let Some(idx) = pc_pop2.get() {
+                        if idx < chunks.len() {
+                            cb(idx, GutterAction::CopyDown);
+                        }
+                    }
+                }
+                pop_clone2.popdown();
+            });
+
+            vbox.append(&up_btn);
+            vbox.append(&down_btn);
+            popover.set_child(Some(&vbox));
+            popover.set_parent(&drawing_area);
+            *copy_popover.borrow_mut() = Some(popover);
+        }
 
         let hover_press = Rc::clone(&hover_click);
         let pressed_press = Rc::clone(&pressed_click);
@@ -181,7 +197,8 @@ impl ActionGutter {
         let chunks_release = Rc::clone(&chunks_click);
         let action_release = Rc::clone(&action_cb_click);
         let mode_release = Rc::clone(&action_mode);
-        gesture.connect_released(move |_gesture, _n, _x, _y| {
+        let popover_release = Rc::clone(&copy_popover);
+        gesture.connect_released(move |_gesture, _n, x, y| {
             let pressed = *pressed_release.borrow();
             let hover = *hover_release.borrow();
 
@@ -195,8 +212,22 @@ impl ActionGutter {
                             None
                         }
                     };
-                    if let (Some(action), Some(cb)) = (action, action_release.borrow().as_ref()) {
-                        cb(p, action);
+                    match action {
+                        // Insert mode: show popover instead of immediate action
+                        Some(GutterAction::CopyUp | GutterAction::CopyDown) => {
+                            popover_chunk.set(Some(p));
+                            if let Some(pop) = popover_release.borrow().as_ref() {
+                                let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+                                pop.set_pointing_to(Some(&rect));
+                                pop.popup();
+                            }
+                        }
+                        Some(action) => {
+                            if let Some(cb) = action_release.borrow().as_ref() {
+                                cb(p, action);
+                            }
+                        }
+                        None => {}
                     }
                 }
             }
@@ -321,6 +352,11 @@ impl ActionGutter {
         self.action_callback.replace(Some(Box::new(callback)));
     }
 
+    /// Expose the action-mode cell so external key controllers can update it.
+    pub fn action_mode_cell(&self) -> Rc<Cell<ActionMode>> {
+        Rc::clone(&self.action_mode)
+    }
+
     pub fn source_view(&self) -> &gtk::TextView {
         &self.source_view
     }
@@ -429,8 +465,8 @@ fn draw_chunk_action(
 
     match action {
         GutterAction::Replace => draw_replace_icon(cr, cx, cy, half, direction),
-        GutterAction::Delete => draw_delete_icon(cr, width, y, h),
-        _ => {}
+        GutterAction::Delete => draw_delete_icon(cr, cx, cy, half),
+        GutterAction::CopyUp | GutterAction::CopyDown => draw_insert_icon(cr, cx, cy, half),
     }
 }
 
@@ -440,31 +476,40 @@ fn draw_replace_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64, direction
     cr.set_line_join(cairo::LineJoin::Round);
     match direction {
         GutterDirection::LeftToRight => {
-            // Right-pointing arrow ►
-            cr.move_to(cx - half * 0.7, cy - half);
-            cr.line_to(cx + half * 0.8, cy);
-            cr.line_to(cx - half * 0.7, cy + half);
+            cr.move_to(cx - half, cy - half);
+            cr.line_to(cx + half, cy);
+            cr.line_to(cx - half, cy + half);
         }
         GutterDirection::RightToLeft => {
-            // Left-pointing arrow ◄
-            cr.move_to(cx + half * 0.7, cy - half);
-            cr.line_to(cx - half * 0.8, cy);
-            cr.line_to(cx + half * 0.7, cy + half);
+            cr.move_to(cx + half, cy - half);
+            cr.line_to(cx - half, cy);
+            cr.line_to(cx + half, cy + half);
         }
     }
     cr.close_path();
     cr.fill().ok();
 }
 
-fn draw_delete_icon(cr: &cairo::Context, width: f64, y: f64, h: f64) {
+fn draw_delete_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64) {
     cr.set_source_rgba(0.7, 0.15, 0.15, 0.85);
     cr.set_line_width(1.8);
     cr.set_line_cap(cairo::LineCap::Round);
-    let pad = 4.0;
-    cr.move_to(pad, y + pad);
-    cr.line_to(width - pad, y + h - pad);
+    cr.move_to(cx - half, cy - half);
+    cr.line_to(cx + half, cy + half);
     cr.stroke().ok();
-    cr.move_to(width - pad, y + pad);
-    cr.line_to(pad, y + h - pad);
+    cr.move_to(cx + half, cy - half);
+    cr.line_to(cx - half, cy + half);
+    cr.stroke().ok();
+}
+
+fn draw_insert_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64) {
+    cr.set_source_rgba(0.15, 0.55, 0.15, 0.85);
+    cr.set_line_width(1.8);
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.move_to(cx - half, cy);
+    cr.line_to(cx + half, cy);
+    cr.stroke().ok();
+    cr.move_to(cx, cy - half);
+    cr.line_to(cx, cy + half);
     cr.stroke().ok();
 }
