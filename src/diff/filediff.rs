@@ -13,6 +13,7 @@
 
 use gdk4 as gdk;
 use gio::prelude::*;
+use glib;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use pango;
@@ -25,7 +26,7 @@ use crate::config::settings::MeldSettings;
 use crate::diff::diff_state::{DiffResult, DiffState};
 use crate::diff::engine::{Chunk, DiffOp, InlineDiffer, LineCache};
 use crate::diff::inline_cache::InlineDiffCache;
-use crate::ui::action_gutter::{ActionGutter, GutterAction, GutterDirection};
+use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::link_map::LinkMap;
 use crate::ui::msgarea::MsgArea;
 use crate::ui::statusbar::StatusBar;
@@ -1451,6 +1452,71 @@ impl FileDiff {
         }
     }
 
+    /// Attach a key controller to the window that updates gutter action modes.
+    ///
+    /// Uses the `modifiers` signal on `EventControllerKey` (GTK 4.14+)
+    /// attached to the **window** — not individual source views — so
+    /// Shift/Ctrl are detected globally regardless of which widget has focus.
+    /// This matches the original Meld's `on_key_event` on the GtkWindow.
+    pub fn connect_gutter_key_modes(&self, window: &impl gtk::prelude::IsA<gtk::Widget>) {
+        let mode_cells: Vec<Rc<Cell<ActionMode>>> =
+            self.gutters.iter().map(|g| g.action_mode_cell()).collect();
+        let gutter_widgets: Vec<gtk::DrawingArea> =
+            self.gutters.iter().map(|g| g.widget().clone()).collect();
+
+        if mode_cells.is_empty() {
+            return;
+        }
+
+        let held: Rc<Cell<u32>> = Rc::new(Cell::new(0u32));
+
+        let key_ctrl = gtk::EventControllerKey::builder()
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+
+        {
+            let cells = mode_cells.clone();
+            let widgets = gutter_widgets.clone();
+            let held = Rc::clone(&held);
+            key_ctrl.connect_key_pressed(move |_, keyval, _keycode, _state| {
+                let pk = modifier_bit(keyval);
+                if pk != 0 {
+                    let old = held.get();
+                    let new = old | pk;
+                    if new != old {
+                        held.set(new);
+                        apply_mode(&cells, new);
+                        for w in &widgets {
+                            w.queue_draw();
+                        }
+                    }
+                }
+                glib::Propagation::Proceed
+            });
+        }
+        {
+            let cells = mode_cells.clone();
+            let widgets = gutter_widgets.clone();
+            let held = Rc::clone(&held);
+            key_ctrl.connect_key_released(move |_, keyval, _keycode, _state| {
+                let pk = modifier_bit(keyval);
+                if pk != 0 {
+                    let old = held.get();
+                    let new = old & !pk;
+                    if new != old {
+                        held.set(new);
+                        apply_mode(&cells, new);
+                        for w in &widgets {
+                            w.queue_draw();
+                        }
+                    }
+                }
+            });
+        }
+
+        window.add_controller(key_ctrl);
+    }
+
     /// Wire up action gutter signals to the actual chunk operations.
     fn connect_gutter_signals(&self) {
         // Collect buffer pairs and chunk data for each gutter
@@ -1796,11 +1862,7 @@ impl MeldPage for FileDiff {
         self.set_ignore_blanks(settings.ignore_blank_lines);
         self.set_show_connectors(settings.show_connectors);
         self.set_inline_diff_mode(&settings.inline_diff_mode);
-        let active_patterns: Vec<String> = settings
-            .active_text_filters()
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
+        let active_patterns: Vec<String> = settings.active_text_filter_regexes();
         self.set_text_filter_patterns(&active_patterns);
     }
 }
@@ -1868,6 +1930,34 @@ fn diff_tag_names() -> Vec<&'static str> {
         "diff-inline-insert",
         "diff-inline-replace",
     ]
+}
+
+/// Returns 1 for Shift, 2 for Ctrl, 0 otherwise (keyval-based modifier bit).
+fn modifier_bit(keyval: gdk::Key) -> u32 {
+    let name = keyval.name();
+    if name.as_deref() == Some("Shift_L") || name.as_deref() == Some("Shift_R") {
+        1
+    } else if name.as_deref() == Some("Control_L") || name.as_deref() == Some("Control_R") {
+        2
+    } else {
+        0
+    }
+}
+
+/// Apply the mode corresponding to the held-modifier bitmask.
+fn apply_mode(cells: &[Rc<Cell<ActionMode>>], mask: u32) {
+    let new_mode = if mask & 2 != 0 {
+        ActionMode::Insert
+    } else if mask & 1 != 0 {
+        ActionMode::Delete
+    } else {
+        ActionMode::Replace
+    };
+    for cell in cells {
+        if cell.get() != new_mode {
+            cell.set(new_mode);
+        }
+    }
 }
 
 fn clear_diff_tags_single(buffer: &gsv::Buffer, tag_table: &gtk::TextTagTable) {
@@ -2168,16 +2258,16 @@ fn ensure_tag(tag_table: &gtk::TextTagTable, name: &str, bg: &str, fg: &str) {
 const FADE_DURATION_US: u32 = 500_000; // 500ms
 
 /// Apply a temporary highlight to a range in the buffer, then remove it after
-/// a delay. Mirrors the original Meld's `add_fading_highlight`.
+/// a delay. Uses a brief highlight similar to the original Meld's
+/// `add_fading_highlight` for visual feedback after chunk operations.
 fn add_fading_highlight(buffer: &gsv::Buffer, start: &gtk::TextIter, end: &gtk::TextIter) {
     let tag_table = buffer.tag_table();
 
-    // Ensure the animation tag exists
     if tag_table.lookup("meld-fading-highlight").is_none() {
         let tag = gtk::TextTag::builder()
             .name("meld-fading-highlight")
             .background("#ffff00")
-            .paragraph_background("rgba(255,255,0,0.3)")
+            .paragraph_background("rgba(255,255,0,0.35)")
             .build();
         tag_table.add(&tag);
     }
@@ -2185,7 +2275,6 @@ fn add_fading_highlight(buffer: &gsv::Buffer, start: &gtk::TextIter, end: &gtk::
     if let Some(tag) = tag_table.lookup("meld-fading-highlight") {
         buffer.apply_tag(&tag, start, end);
 
-        // Remove the highlight after the fade duration
         let buffer_clone = buffer.clone();
         let start_offset = start.offset();
         let end_offset = end.offset();
