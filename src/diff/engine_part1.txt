@@ -1,0 +1,167 @@
+//! Diff engine based on the `similar` crate.
+//!
+//! Provides line-level diffing via [`Differ`] and 3-way merge logic via
+//! [`ThreeWayDiffer`]. Includes preprocessing, inline diff with post-processing,
+//! and O(1) line-to-chunk mapping via [`LineCache`].
+//!
+//! Replaces the Python `difflib`/matchers module from the original Meld.
+
+use similar::{ChangeTag, TextDiff};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Operation type for a diff chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DiffOp {
+    /// Lines are identical in both sides.
+    Equal,
+    /// Lines exist only in the left (old) side.
+    Delete,
+    /// Lines exist only in the right (new) side.
+    Insert,
+    /// Lines differ between the two sides (a delete + insert pair).
+    Replace,
+}
+
+/// A single contiguous region of change between two files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chunk {
+    /// Start line in the left (A) pane.
+    pub start_a: usize,
+    /// End line (exclusive) in the left (A) pane.
+    pub end_a: usize,
+    /// Start line in the right (B) pane.
+    pub start_b: usize,
+    /// End line (exclusive) in the right (B) pane.
+    pub end_b: usize,
+    /// The diff operation for this chunk.
+    pub op: DiffOp,
+}
+
+/// The result of a line-level diff between two files.
+#[derive(Debug, Clone)]
+pub struct LineDiff {
+    /// The computed diff chunks.
+    pub chunks: Vec<Chunk>,
+    /// Original text from the left (A) pane, line-by-line.
+    pub line_a: Vec<String>,
+    /// Original text from the right (B) pane, line-by-line.
+    pub line_b: Vec<String>,
+}
+
+impl LineDiff {
+    /// Yield chunks between `from_pane` and `to_pane`, optionally filtered
+    /// by a visible line range `(start, end)`.
+    ///
+    /// Mirrors the original Meld's `Differ.pair_changes()` used by LinkMap
+    /// and scroll sync. When `from_pane == 0` and `to_pane == 1`, returns
+    /// chunks in left→right orientation; when reversed (1→0), the caller
+    /// should swap A/B positions as needed.
+    ///
+    /// The `visible` range is expressed in `from_pane` line numbers.
+    /// Chunks whose range on the from-side overlaps `visible` are included.
+    pub fn pair_changes(
+        &self,
+        from_pane: usize,
+        to_pane: usize,
+        visible: Option<(usize, usize)>,
+    ) -> Vec<(usize, &Chunk)> {
+        self.chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                let from_start = if from_pane == 0 { c.start_a } else { c.start_b };
+                let from_end = if from_pane == 0 { c.end_a } else { c.end_b };
+
+                // Skip Equal chunks and zero-width chunks with no visual footprint
+                if c.op == DiffOp::Equal {
+                    return false;
+                }
+                if from_end <= from_start {
+                    return false;
+                }
+
+                if let Some((v_start, v_end)) = visible {
+                    from_end > v_start && from_start < v_end
+                } else {
+                    true
+                }
+            })
+            .collect()
+    }
+
+    /// Yield changes visible in a single pane, optionally filtered by a
+    /// visible line range. Used for per-pane chunk background rendering
+    /// and the overview ChunkMap.
+    pub fn single_changes(
+        &self,
+        pane: usize,
+        visible: Option<(usize, usize)>,
+    ) -> Vec<(usize, &Chunk)> {
+        self.pair_changes(pane, if pane == 0 { 1 } else { 0 }, visible)
+    }
+}
+
+/// A line-level differ that computes differences between two texts.
+pub struct Differ {
+    text_a: Vec<String>,
+    text_b: Vec<String>,
+    sync_points: Vec<(usize, usize)>,
+}
+
+impl Differ {
+    /// Creates a new [`Differ`] with the two texts to compare.
+    pub fn new(text_a: Vec<String>, text_b: Vec<String>) -> Self {
+        Self {
+            text_a,
+            text_b,
+            sync_points: Vec::new(),
+        }
+    }
+
+    /// Attach forced-alignment sync points `(line_in_a, line_in_b)`.
+    ///
+    /// Each pair marks a position where the diff algorithm **must** split
+    /// the input.  Points are filtered (out-of-range entries dropped),
+    /// sorted, and deduplicated automatically.
+    pub fn with_sync_points(mut self, points: Vec<(usize, usize)>) -> Self {
+        let len_a = self.text_a.len();
+        let len_b = self.text_b.len();
+        let mut pts: Vec<(usize, usize)> = points
+            .into_iter()
+            .filter(|&(a, b)| a <= len_a && b <= len_b)
+            .collect();
+        pts.sort_unstable();
+        pts.dedup();
+        self.sync_points = pts;
+        self
+    }
+
+    /// Compute the diff and return the result.
+    ///
+    /// Uses preprocessing (matching the original Meld `MyersSequenceMatcher`)
+    /// to strip common prefix/suffix and discard unique lines before
+    /// diffing, then reconstructs the full diff with the removed lines
+    /// inserted back as Delete/Insert chunks.
+    ///
+    /// Chunk construction mirrors Python's `difflib.SequenceMatcher.get_opcodes()`:
+    /// consecutive Delete+Insert runs between Equal chunks are grouped into a
+    /// single Replace chunk, rather than relying on adjacency detection after
+    /// the fact. This handles situations where `similar` produces interleaved
+    /// Equal changes within what should be a single Replace gap.
+    pub fn compare(&self) -> LineDiff {
+        if !self.sync_points.is_empty() {
+            return self.compare_segmented();
+        }
+        self.compare_single(&self.text_a, &self.text_b, 0, 0)
+    }
+
+    pub fn compare_with_cancel(&self, cancel: &AtomicBool) -> Option<LineDiff> {
+        if cancel.load(Ordering::SeqCst) {
+            return None;
+        }
+        // Cancellation between segments would be ideal, but for now
+        // delegate to the full compare.  Sync-point segments are
+        // typically small.
+        Some(self.compare())
+    }
+
