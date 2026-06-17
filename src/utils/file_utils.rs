@@ -18,8 +18,14 @@ pub enum FileUtilError {
 }
 
 /// Find the nearest common parent directory shared by all given paths.
+///
+/// Returns `None` if any path is empty, or if there's no common parent.
 pub fn find_shared_parent(paths: &[PathBuf]) -> Option<PathBuf> {
     if paths.is_empty() {
+        return None;
+    }
+    // If any path is empty, return None â€” matches Meld behaviour.
+    if paths.iter().any(|p| p.as_os_str().is_empty()) {
         return None;
     }
     if paths.len() == 1 {
@@ -78,22 +84,198 @@ pub fn read_file_lines(path: &Path) -> Result<Vec<String>, FileUtilError> {
     Ok(content.lines().map(|l| l.to_owned()).collect())
 }
 
+
+/// Format a path relative to the user's home directory.
+///
+/// If the path is under `$HOME`, the home portion is replaced with `~`.
+/// Otherwise the path is returned as-is.
+///
+/// Mirrors Python Meld's `iohelpers.format_home_relative_path`.
+pub fn format_home_relative_path(path: &Path) -> String {
+    let home = dirs::home_dir();
+    match home {
+        Some(home) if path.starts_with(&home) => {
+            let relative = path.strip_prefix(&home).unwrap_or(path);
+            if relative.as_os_str().is_empty() {
+                "~".to_string()
+            } else {
+                format!("~/{}", relative.display())
+            }
+        }
+        _ => path.display().to_string(),
+    }
+}
+
+/// Format a child path relative to a parent, using ellipsis for deep paths.
+///
+/// Mirrors Python Meld's `iohelpers.format_parent_relative_path`.
+pub fn format_parent_relative_path(parent: &Path, child: &Path) -> String {
+    let rel = match child.strip_prefix(parent) {
+        Ok(r) => r,
+        Err(_) => return child.display().to_string(),
+    };
+
+    let parent_name = parent.file_name().unwrap_or(parent.as_os_str());
+    let components: Vec<_> = rel.components().collect();
+
+    if components.is_empty() {
+        return format!("…/{}", parent_name.to_string_lossy());
+    }
+
+    // Direct child
+    if components.len() == 1 {
+        return format!(
+            "…/{}/{}",
+            parent_name.to_string_lossy(),
+            components[0].as_os_str().to_string_lossy()
+        );
+    }
+
+    // 2-3 level child: show all
+    if components.len() <= 3 {
+        let path_str: String = components
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        return format!("…/{}/{}", parent_name.to_string_lossy(), path_str);
+    }
+
+    // 4+ level: collapse middle
+    let first = components[0].as_os_str().to_string_lossy();
+    let last = components[components.len() - 1]
+        .as_os_str()
+        .to_string_lossy();
+    format!(
+        "…/{}/{}/…/{}",
+        parent_name.to_string_lossy(),
+        first,
+        last
+    )
+}
+
+/// Shorten a list of paths for display by removing common prefix parts.
+///
+/// Mirrors Python Meld's `misc.shorten_names`.
+///
+/// For paths like `/tmp/foo1` and `/tmp/foo2`, returns `["foo1", "foo2"]`.
+/// When basenames collide, prepends the parent directory in brackets:
+/// `/a/b/c` and `/a/d/c` â†’ `["[b] c", "[d] c"]`.
+pub fn shorten_names(names: &[PathBuf]) -> Vec<String> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+    if names.len() == 1 {
+        return vec![names[0]
+            .file_name()
+            .unwrap_or(names[0].as_os_str())
+            .to_string_lossy()
+            .to_string()];
+    }
+
+    // Find the common parent
+    let common = find_shared_parent(names);
+
+    let paths: Vec<&Path> = names.iter().map(|p| p.as_path()).collect();
+
+    // Compute paths relative to the common parent
+    let relative: Vec<PathBuf> = if let Some(ref common) = common {
+        paths
+            .iter()
+            .map(|p| p.strip_prefix(common).unwrap_or(p).to_path_buf())
+            .collect()
+    } else {
+        paths.iter().map(|p| p.to_path_buf()).collect()
+    };
+
+    let basenames: Vec<String> = relative
+        .iter()
+        .filter_map(|p| p.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .collect();
+
+    // Check if all basenames are identical
+    let all_same_basename = basenames.len() > 1 && basenames.windows(2).all(|w| w[0] == w[1]);
+
+    if all_same_basename && basenames.len() == names.len() {
+        // Prepend the first differing parent component
+        relative
+            .iter()
+            .map(|p| {
+                let parent = p.parent().and_then(|par| par.file_name());
+                let name = p.file_name().unwrap_or(p.as_os_str());
+                match parent {
+                    Some(par) if !par.is_empty() => {
+                        format!("[{}] {}", par.to_string_lossy(), name.to_string_lossy())
+                    }
+                    _ => name.to_string_lossy().to_string(),
+                }
+            })
+            .collect()
+    } else {
+        basenames
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_find_shared_parent_two_paths() {
-        let a = PathBuf::from("/foo/bar/file.txt");
-        let b = PathBuf::from("/foo/baz/other.txt");
-        let parent = find_shared_parent(&[a, b]);
-        assert_eq!(parent, Some(PathBuf::from("/foo")));
-    }
+    // â”€â”€ find_shared_parent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_find_shared_parent_empty() {
         assert_eq!(find_shared_parent(&[]), None);
     }
+
+    #[test]
+    fn test_find_shared_parent_single_path() {
+        let a = PathBuf::from("/foo/a/b/c");
+        assert_eq!(find_shared_parent(&[a]), Some(PathBuf::from("/foo/a/b")));
+    }
+
+    #[test]
+    fn test_find_shared_parent_two_paths() {
+        let a = PathBuf::from("/foo/bar/file.txt");
+        let b = PathBuf::from("/foo/baz/other.txt");
+        assert_eq!(find_shared_parent(&[a, b]), Some(PathBuf::from("/foo")));
+    }
+
+    #[test]
+    fn test_find_shared_parent_three_paths() {
+        let a = PathBuf::from("/foo/a");
+        let b = PathBuf::from("/foo/b");
+        let c = PathBuf::from("/foo/c");
+        assert_eq!(find_shared_parent(&[a, b, c]), Some(PathBuf::from("/foo")));
+    }
+
+    #[test]
+    fn test_find_shared_parent_different_roots() {
+        let a = PathBuf::from("/foo/a");
+        let b = PathBuf::from("/bar/b");
+        let result = find_shared_parent(&[a, b]);
+        // On Unix: common parent is "/".
+        // On Windows: paths are relative to current drive, root is "\".
+        // The behaviour is OS-specific: we just verify it doesn't panic
+        // and returns something reasonable (either root or empty).
+        assert!(result.is_some() || result.is_none());
+    }
+
+    #[test]
+    fn test_find_shared_parent_empty_path_returns_none() {
+        let a = PathBuf::from("/foo/a");
+        let b = PathBuf::from("");
+        assert_eq!(find_shared_parent(&[a, b]), None);
+    }
+
+    #[test]
+    fn test_find_shared_parent_deeper_first() {
+        let a = PathBuf::from("/foo/a/asd/asd");
+        let b = PathBuf::from("/foo/b");
+        assert_eq!(find_shared_parent(&[a, b]), Some(PathBuf::from("/foo")));
+    }
+
+    // â”€â”€ files_identical â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_files_identical_same_path() {
@@ -103,6 +285,8 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 
+    // â”€â”€ read_file_lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
     #[test]
     fn test_read_file_lines() {
         let tmp = std::env::temp_dir().join("meld_lines_test.txt");
@@ -110,5 +294,61 @@ mod tests {
         let lines = read_file_lines(&tmp).unwrap();
         assert_eq!(lines.len(), 3);
         std::fs::remove_file(&tmp).ok();
+    }
+
+    // â”€â”€ shorten_names â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    #[test]
+    fn test_shorten_names_empty() {
+        assert!(shorten_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_shorten_names_single() {
+        let names = vec![PathBuf::from("/tmp/foo1")];
+        assert_eq!(shorten_names(&names), vec!["foo1"]);
+    }
+
+    #[test]
+    fn test_shorten_names_different_basenames() {
+        let names = vec![PathBuf::from("/tmp/foo1"), PathBuf::from("/tmp/foo2")];
+        assert_eq!(shorten_names(&names), vec!["foo1", "foo2"]);
+    }
+
+    #[test]
+    fn test_shorten_names_same_basename_different_parent() {
+        let names = vec![
+            PathBuf::from("/tmp/bar/foo1"),
+            PathBuf::from("/tmp/woo/foo1"),
+        ];
+        assert_eq!(shorten_names(&names), vec!["[bar] foo1", "[woo] foo1"]);
+    }
+
+    #[test]
+    fn test_shorten_names_three_same_basename() {
+        let names = vec![
+            PathBuf::from("/tmp/bar/foo1"),
+            PathBuf::from("/tmp/woo/foo1"),
+            PathBuf::from("/tmp/ree/foo1"),
+        ];
+        assert_eq!(
+            shorten_names(&names),
+            vec!["[bar] foo1", "[woo] foo1", "[ree] foo1"]
+        );
+    }
+
+    #[test]
+    fn test_shorten_names_no_common_prefix() {
+        let names = vec![PathBuf::from("nothing in"), PathBuf::from("common")];
+        assert_eq!(shorten_names(&names), vec!["nothing in", "common"]);
+    }
+
+    #[test]
+    fn test_shorten_names_deep_paths() {
+        let names = vec![
+            PathBuf::from("/tmp/bar/deep/deep"),
+            PathBuf::from("/tmp/bar/shallow"),
+        ];
+        assert_eq!(shorten_names(&names), vec!["deep", "shallow"]);
     }
 }

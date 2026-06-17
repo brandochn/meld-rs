@@ -1,7 +1,7 @@
 #![cfg(feature = "gui")]
 //! Full directory comparison with recursive scanning, multi-pane treeviews, and filters.
 //!
-//! Matches the layout of `dirdiff.ui` — each folder gets its own TreeView with
+//! Matches the layout of `dirdiff.ui` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â each folder gets its own TreeView with
 //! ActionBar, MsgArea, and overview map.
 
 use gio::prelude::*;
@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use crate::diff::file_compare::{
+    self, DirDiffCache, FileCompareOptions, FileCompareResult, StatItem,
+};
 use crate::window::MeldPage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,6 +67,10 @@ pub struct DirDiff {
     show_identical: Rc<RefCell<bool>>,
     scan_cancel: Rc<RefCell<Option<std::sync::Arc<AtomicBool>>>>,
     scan_source: Rc<RefCell<Option<glib::SourceId>>>,
+    /// Cached file-comparison results, avoiding repeated reads.
+    cache: std::sync::Arc<DirDiffCache>,
+    /// Options controlling how file contents are compared.
+    compare_options: FileCompareOptions,
 }
 
 impl DirDiff {
@@ -215,6 +222,8 @@ impl DirDiff {
             show_identical,
             scan_cancel: Rc::new(RefCell::new(None)),
             scan_source: Rc::new(RefCell::new(None)),
+            cache: std::sync::Arc::new(DirDiffCache::new()),
+            compare_options: FileCompareOptions::default(),
         }
     }
 
@@ -254,8 +263,11 @@ impl DirDiff {
         let (tx, rx) = mpsc::channel();
         let cancel_clone = std::sync::Arc::clone(&cancel);
 
+        let cache = std::sync::Arc::clone(&self.cache);
+        let opts = self.compare_options.clone();
+
         std::thread::spawn(move || {
-            let result = scan_recursive(&dir_a, &dir_b);
+            let result = scan_recursive(&dir_a, &dir_b, &cache, &opts);
             if cancel_clone.load(Ordering::SeqCst) {
                 return;
             }
@@ -267,8 +279,8 @@ impl DirDiff {
         let state_filter = Rc::clone(&self.state_filter);
         let show_identical = Rc::clone(&self.show_identical);
 
-        let source_id = glib::timeout_add_local(Duration::from_millis(100), move || {
-            match rx.try_recv() {
+        let source_id =
+            glib::timeout_add_local(Duration::from_millis(100), move || match rx.try_recv() {
                 Ok(result) => {
                     *entries_ref.borrow_mut() = result;
                     for tv in &tree_views {
@@ -283,8 +295,7 @@ impl DirDiff {
                 }
                 Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                 Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
-            }
-        });
+            });
         *self.scan_source.borrow_mut() = Some(source_id);
     }
 
@@ -318,9 +329,14 @@ impl MeldPage for DirDiff {
     }
 }
 
-// ─── Recursive scanning ──────────────────────────────────────────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Recursive scanning ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
-fn scan_recursive(dir_a: &Path, dir_b: &Path) -> Vec<DirDiffEntry> {
+fn scan_recursive(
+    dir_a: &Path,
+    dir_b: &Path,
+    cache: &DirDiffCache,
+    opts: &FileCompareOptions,
+) -> Vec<DirDiffEntry> {
     let mut file_map: HashMap<String, (Option<std::fs::DirEntry>, Option<std::fs::DirEntry>)> =
         HashMap::new();
     collect_entries(dir_a, &mut file_map, true);
@@ -334,7 +350,7 @@ fn scan_recursive(dir_a: &Path, dir_b: &Path) -> Vec<DirDiffEntry> {
 
         let entry = if let (Some(a), Some(b)) = (entry_a, entry_b) {
             if is_dir {
-                let children = scan_recursive(&a.path(), &b.path());
+                let children = scan_recursive(&a.path(), &b.path(), cache, opts);
                 DirDiffEntry {
                     name: name.clone(),
                     state,
@@ -351,7 +367,12 @@ fn scan_recursive(dir_a: &Path, dir_b: &Path) -> Vec<DirDiffEntry> {
                 let mod_a = extract_ts(meta_a.as_ref());
                 let mod_b = extract_ts(meta_b.as_ref());
                 let final_state = if state == DirDiffState::Same {
-                    compare_contents(a.path().as_path(), b.path().as_path())
+                    match cache.files_same(a.path().as_path(), b.path().as_path(), opts) {
+                        FileCompareResult::Same => DirDiffState::Same,
+                        FileCompareResult::SameFiltered => DirDiffState::Filtered,
+                        FileCompareResult::FileError => DirDiffState::Error,
+                        _ => DirDiffState::Modified,
+                    }
                 } else {
                     state
                 };
@@ -421,7 +442,17 @@ fn determine_state(
             if ma.is_dir() || mb.is_dir() {
                 return (true, DirDiffState::Same);
             }
-            if ma.len() == mb.len() && ma.modified().ok() == mb.modified().ok() {
+            let sa = StatItem {
+                mode: file_compare::mode_bits(ma),
+                size: ma.len(),
+                mtime_ns: file_compare::mtime_nanos(ma),
+            };
+            let sb = StatItem {
+                mode: file_compare::mode_bits(mb),
+                size: mb.len(),
+                mtime_ns: file_compare::mtime_nanos(mb),
+            };
+            if sa.shallow_equal(&sb, 10_000_000_000) {
                 (false, DirDiffState::Same)
             } else {
                 (false, DirDiffState::Modified)
@@ -432,8 +463,11 @@ fn determine_state(
 }
 
 fn compare_contents(a: &Path, b: &Path) -> DirDiffState {
-    match (std::fs::read(a), std::fs::read(b)) {
-        (Ok(ca), Ok(cb)) if ca == cb => DirDiffState::Same,
+    let opts = FileCompareOptions::default();
+    match file_compare::files_same(a, b, &opts) {
+        FileCompareResult::Same => DirDiffState::Same,
+        FileCompareResult::SameFiltered => DirDiffState::Filtered,
+        FileCompareResult::FileError => DirDiffState::Error,
         _ => DirDiffState::Modified,
     }
 }
