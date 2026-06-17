@@ -15,6 +15,9 @@ pub mod movement;
 /// LRU cache for inline (character-level) diff results.
 pub mod inline_cache;
 
+/// File-level comparison logic (stat, shallow comparison, content comparison).
+pub mod file_compare;
+
 #[cfg(feature = "gui")]
 /// Background diff computation state management.
 pub mod diff_state;

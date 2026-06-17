@@ -24,7 +24,7 @@ pub fn find_shared_parent(paths: &[PathBuf]) -> Option<PathBuf> {
     if paths.is_empty() {
         return None;
     }
-    // If any path is empty, return None — matches Meld behaviour.
+    // If any path is empty, return None â€” matches Meld behaviour.
     if paths.iter().any(|p| p.as_os_str().is_empty()) {
         return None;
     }
@@ -84,13 +84,83 @@ pub fn read_file_lines(path: &Path) -> Result<Vec<String>, FileUtilError> {
     Ok(content.lines().map(|l| l.to_owned()).collect())
 }
 
+
+/// Format a path relative to the user's home directory.
+///
+/// If the path is under `$HOME`, the home portion is replaced with `~`.
+/// Otherwise the path is returned as-is.
+///
+/// Mirrors Python Meld's `iohelpers.format_home_relative_path`.
+pub fn format_home_relative_path(path: &Path) -> String {
+    let home = dirs::home_dir();
+    match home {
+        Some(home) if path.starts_with(&home) => {
+            let relative = path.strip_prefix(&home).unwrap_or(path);
+            if relative.as_os_str().is_empty() {
+                "~".to_string()
+            } else {
+                format!("~/{}", relative.display())
+            }
+        }
+        _ => path.display().to_string(),
+    }
+}
+
+/// Format a child path relative to a parent, using ellipsis for deep paths.
+///
+/// Mirrors Python Meld's `iohelpers.format_parent_relative_path`.
+pub fn format_parent_relative_path(parent: &Path, child: &Path) -> String {
+    let rel = match child.strip_prefix(parent) {
+        Ok(r) => r,
+        Err(_) => return child.display().to_string(),
+    };
+
+    let parent_name = parent.file_name().unwrap_or(parent.as_os_str());
+    let components: Vec<_> = rel.components().collect();
+
+    if components.is_empty() {
+        return format!("…/{}", parent_name.to_string_lossy());
+    }
+
+    // Direct child
+    if components.len() == 1 {
+        return format!(
+            "…/{}/{}",
+            parent_name.to_string_lossy(),
+            components[0].as_os_str().to_string_lossy()
+        );
+    }
+
+    // 2-3 level child: show all
+    if components.len() <= 3 {
+        let path_str: String = components
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        return format!("…/{}/{}", parent_name.to_string_lossy(), path_str);
+    }
+
+    // 4+ level: collapse middle
+    let first = components[0].as_os_str().to_string_lossy();
+    let last = components[components.len() - 1]
+        .as_os_str()
+        .to_string_lossy();
+    format!(
+        "…/{}/{}/…/{}",
+        parent_name.to_string_lossy(),
+        first,
+        last
+    )
+}
+
 /// Shorten a list of paths for display by removing common prefix parts.
 ///
 /// Mirrors Python Meld's `misc.shorten_names`.
 ///
 /// For paths like `/tmp/foo1` and `/tmp/foo2`, returns `["foo1", "foo2"]`.
 /// When basenames collide, prepends the parent directory in brackets:
-/// `/a/b/c` and `/a/d/c` → `["[b] c", "[d] c"]`.
+/// `/a/b/c` and `/a/d/c` â†’ `["[b] c", "[d] c"]`.
 pub fn shorten_names(names: &[PathBuf]) -> Vec<String> {
     if names.is_empty() {
         return Vec::new();
@@ -151,7 +221,7 @@ pub fn shorten_names(names: &[PathBuf]) -> Vec<String> {
 mod tests {
     use super::*;
 
-    // ── find_shared_parent ─────────────────────────────────────────────
+    // â”€â”€ find_shared_parent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_find_shared_parent_empty() {
@@ -205,7 +275,7 @@ mod tests {
         assert_eq!(find_shared_parent(&[a, b]), Some(PathBuf::from("/foo")));
     }
 
-    // ── files_identical ───────────────────────────────────────────────
+    // â”€â”€ files_identical â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_files_identical_same_path() {
@@ -215,7 +285,7 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 
-    // ── read_file_lines ───────────────────────────────────────────────
+    // â”€â”€ read_file_lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_read_file_lines() {
@@ -226,7 +296,7 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 
-    // ── shorten_names ─────────────────────────────────────────────────
+    // â”€â”€ shorten_names â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_shorten_names_empty() {

@@ -27,7 +27,19 @@ pub fn all_same<T: PartialEq>(items: &[T]) -> bool {
 ///
 /// Mirrors Python Meld's `dirdiff.remove_blank_lines`.
 pub fn remove_blank_lines(text: &[u8]) -> Vec<u8> {
-    let mut result = text.to_vec();
+    // Normalize CRLF to LF so Windows-style line endings don't cause
+    // spurious differences after blank-line removal.
+    let mut result: Vec<u8> = Vec::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        if text[i] == b'\r' && i + 1 < text.len() && text[i + 1] == b'\n' {
+            result.push(b'\n');
+            i += 2;
+        } else {
+            result.push(text[i]);
+            i += 1;
+        }
+    }
 
     // Trim leading blank lines
     while let Some(pos) = result.iter().position(|&b| b == b'\n') {

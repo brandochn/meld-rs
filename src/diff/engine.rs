@@ -1554,6 +1554,57 @@ impl InlineDiffer {
         changes
     }
 
+    /// Compare two import lines semantically.
+    ///
+    /// If both lines are import statements from the same module, only
+    /// the identifiers inside the braces are compared.  Otherwise falls
+    /// back to token-level diffing.
+    pub fn compare_imports(line_a: &str, line_b: &str) -> Vec<InlineChange> {
+        let parsed_a = Self::parse_import_line(line_a);
+        let parsed_b = Self::parse_import_line(line_b);
+
+        match (parsed_a, parsed_b) {
+            (Some((mod_a, ids_a)), Some((mod_b, ids_b))) if mod_a == mod_b => {
+                // Build sets of identifier names for quick lookup
+                let names_a: std::collections::HashSet<&str> =
+                    ids_a.iter().map(|(name, _)| name.as_str()).collect();
+                let names_b: std::collections::HashSet<&str> =
+                    ids_b.iter().map(|(name, _)| name.as_str()).collect();
+
+                let mut changes = Vec::new();
+
+                // Identifiers in A but not in B are deletions
+                for (name, (start, end)) in &ids_a {
+                    if !names_b.contains(name.as_str()) {
+                        changes.push(InlineChange {
+                            start: *start,
+                            end: *end,
+                            op: DiffOp::Delete,
+                        });
+                    }
+                }
+
+                // Identifiers in B but not in A are insertions
+                for (name, (start, end)) in &ids_b {
+                    if !names_a.contains(name.as_str()) {
+                        changes.push(InlineChange {
+                            start: *start,
+                            end: *end,
+                            op: DiffOp::Insert,
+                        });
+                    }
+                }
+
+                changes
+            }
+            _ => {
+                // Fall back to token-level diff for non-imports or
+                // imports from different modules
+                Self::compare_line_tokens(line_a, line_b)
+            }
+        }
+    }
+
     pub fn parse_import_line(line: &str) -> Option<(String, Vec<(String, (usize, usize))>)> {
         let trimmed = line.trim_start();
         if !trimmed.starts_with("import") {
@@ -2599,6 +2650,58 @@ mod tests {
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Three-way merge tests Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+    #[test]
+    fn test_compare_imports_same_module_added_identifier() {
+        let a = "import { useAlert } from 'react-alert';";
+        let b = "import { useAlert, useConfirm } from 'react-alert';";
+        let changes = InlineDiffer::compare_imports(a, b);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].op, DiffOp::Insert);
+    }
+
+    #[test]
+    fn test_compare_imports_same_module_removed_identifier() {
+        let a = "import { useAlert, useConfirm } from 'react-alert';";
+        let b = "import { useAlert } from 'react-alert';";
+        let changes = InlineDiffer::compare_imports(a, b);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].op, DiffOp::Delete);
+    }
+
+    #[test]
+    fn test_compare_imports_multiple_changes() {
+        let a = "import { Foo, Bar, Baz } from 'mylib';";
+        let b = "import { Bar, Qux } from 'mylib';";
+        let changes = InlineDiffer::compare_imports(a, b);
+        let deletes: Vec<_> = changes.iter().filter(|c| c.op == DiffOp::Delete).collect();
+        let inserts: Vec<_> = changes.iter().filter(|c| c.op == DiffOp::Insert).collect();
+        assert_eq!(deletes.len(), 2);
+        assert_eq!(inserts.len(), 1);
+    }
+
+    #[test]
+    fn test_compare_imports_different_modules_falls_back() {
+        let a = "import { Foo } from 'lib-a';";
+        let b = "import { Foo } from 'lib-b';";
+        let changes = InlineDiffer::compare_imports(a, b);
+        assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_compare_imports_not_imports_falls_back() {
+        let a = "const x = 42;";
+        let b = "const y = 42;";
+        let changes = InlineDiffer::compare_imports(a, b);
+        assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_compare_imports_identical() {
+        let a = "import { Foo } from 'lib';";
+        let changes = InlineDiffer::compare_imports(a, a);
+        assert!(changes.is_empty());
+    }
 
     #[test]
     fn test_three_way_merge_conflicting_changes() {
