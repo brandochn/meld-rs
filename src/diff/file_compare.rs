@@ -4,7 +4,6 @@
 //! Provides stat-based shallow comparison and content-based deep
 //! comparison with configurable blank-line stripping and text filtering.
 
-use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};

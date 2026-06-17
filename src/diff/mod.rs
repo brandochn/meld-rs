@@ -18,6 +18,9 @@ pub mod inline_cache;
 /// File-level comparison logic (stat, shallow comparison, content comparison).
 pub mod file_compare;
 
+#[cfg(test)]
+mod fuzz_tests;
+
 #[cfg(feature = "gui")]
 /// Background diff computation state management.
 pub mod diff_state;
