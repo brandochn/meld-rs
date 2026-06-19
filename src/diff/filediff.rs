@@ -347,6 +347,13 @@ impl FileDiff {
         view.set_hexpand(true);
         view.set_pixels_below_lines(2);
         view.set_pixels_above_lines(2);
+        // The `paragraph-background` (chunk fill) starts at the text window's
+        // left margin, so any left margin leaves an unpainted white strip
+        // between the opaque line-number gutter and the highlighted text — a
+        // visible seam on changed lines. Anchor the text at the gutter edge;
+        // the visual gap before the text is provided by the gutter's own
+        // right padding, which the chunk gutter paints in the chunk colour.
+        view.set_left_margin(0);
 
         // Custom chunk-aware line-number gutter.
         let line_gutter = ChunkGutterRenderer::new(index);
