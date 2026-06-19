@@ -1,6 +1,7 @@
 //! User interface components — GTK4 widgets for all Meld views.
 
 pub mod action_gutter;
+pub mod chunk_gutter;
 pub mod commit_dialog;
 pub mod diff_grid;
 pub mod diff_map;
@@ -21,6 +22,7 @@ pub mod recent_selector;
 pub mod revert_dialog;
 pub mod save_confirm_dialog;
 pub mod statusbar;
+pub mod style;
 pub mod tab_manager;
 pub mod vc_view;
 

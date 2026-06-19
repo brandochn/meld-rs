@@ -173,6 +173,7 @@ impl MeldApp {
         self.app.connect_activate(move |app| {
             setup_actions(app);
             setup_css();
+            setup_style_schemes();
             if let Some(o) = opts.lock().ok().and_then(|mut o| o.take()) {
                 open_comparisons(app, &o);
             } else if app.windows().iter().count() == 0 {
@@ -222,6 +223,29 @@ fn setup_css() {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+}
+
+/// Install Meld's `meld-base` / `meld-dark` GtkSourceView style schemes.
+///
+/// The schemes are embedded in the binary and written to the user data
+/// directory at startup, then that directory is added to the default
+/// `StyleSchemeManager` search path so panes can select them by id.
+fn setup_style_schemes() {
+    let base = include_str!("../resources/styles/meld-base.style-scheme.xml");
+    let dark = include_str!("../resources/styles/meld-dark.style-scheme.xml");
+
+    let Some(dir) = dirs::data_dir().map(|d| d.join("meld-rs").join("styles")) else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let _ = std::fs::write(dir.join("meld-base.style-scheme.xml"), base);
+    let _ = std::fs::write(dir.join("meld-dark.style-scheme.xml"), dark);
+
+    let manager = sourceview5::StyleSchemeManager::default();
+    manager.append_search_path(&dir.to_string_lossy());
+    manager.force_rescan();
 }
 
 fn show_about_dialog() {

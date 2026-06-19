@@ -11,6 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::diff::engine::{Chunk, DiffOp};
+use crate::ui::style;
 
 /// Information about which connector the pointer is hovering over.
 #[derive(Debug, Clone)]
@@ -189,26 +190,24 @@ impl LinkMap {
                 let t0c = t0.clamp(0.0, h);
                 let t1c = t1.clamp(0.0, h);
 
-                let (r, g, b) = match chunk.op {
-                    // Meld style scheme colors (matching get_common_theme):
-                    //   insert fill=#d0ffa3 stroke=#a5ff4c
-                    //   delete fill=#d0ffa3 stroke=#a5ff4c  (same as insert)
-                    //   replace fill=#bdddff stroke=#65b2ff
-                    // For filled regions we use the "background" color.
-                    DiffOp::Delete | DiffOp::Insert => (0.816, 1.0, 0.639),
-                    DiffOp::Replace => (0.741, 0.867, 1.0),
-                    DiffOp::Equal => continue,
+                // Meld style scheme colours (see `crate::ui::style`):
+                //   insert/delete fill=#d0ffa3 stroke=#a5ff4c
+                //   replace       fill=#bdddff stroke=#65b2ff
+                // Filled regions use the "background" (fill) colour; the
+                // stroked outline uses the "line-background" (line) colour.
+                let (r, g, b) = match style::fill_color(chunk.op) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let (sr, sg, sb) = match style::line_color(chunk.op) {
+                    Some(c) => c,
+                    None => continue,
                 };
 
-                // Stroke uses "line-background" color (slightly different shade)
-                let (sr, sg, sb) = match chunk.op {
-                    DiffOp::Delete | DiffOp::Insert => (0.647, 1.0, 0.298),
-                    DiffOp::Replace => (0.396, 0.698, 1.0),
-                    _ => continue,
-                };
-
-                // Filled region (Meld's fill_colors)
-                cr.set_source_rgba(r, g, b, 0.35);
+                // Filled region — opaque `fill_colors`, matching Meld so the
+                // connector reads as solid colour continuous with the panes
+                // (not a washed-out translucent shape).
+                cr.set_source_rgb(r, g, b);
                 cr.move_to(xl, y0 - 0.5);
                 cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);
                 cr.line_to(xr, t1c - 0.5);
@@ -216,8 +215,8 @@ impl LinkMap {
                 cr.close_path();
                 cr.fill().ok();
 
-                // Stroked outline (Meld's line_colors)
-                cr.set_source_rgba(sr, sg, sb, 0.55);
+                // Stroked outline (Meld's line_colors), opaque.
+                cr.set_source_rgb(sr, sg, sb);
                 cr.set_line_width(1.0);
                 cr.move_to(xl, y0 - 0.5);
                 cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);

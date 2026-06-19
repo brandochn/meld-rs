@@ -154,10 +154,13 @@
     background: rgba(100, 100, 100, 0.4);
 }
 
-/* ── Source map container ── */
+/* ── Source map / overview container (right edge) ── */
 .sourcemap-container {
-    padding: 2px;
-    background: alpha(@borders, 0.1);
+    border-width: 0 0 0 1px;
+    border-style: solid;
+    border-color: @borders;
+    padding: 0 2px;
+    background-color: @theme_bg_color;
 }
 
 /* ── Source view font size (matching original Meld default) ── */
