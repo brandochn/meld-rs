@@ -27,9 +27,13 @@ use crate::diff::diff_state::{DiffResult, DiffState};
 use crate::diff::engine::{Chunk, DiffOp, InlineDiffer, LineCache};
 use crate::diff::inline_cache::InlineDiffCache;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
+use crate::ui::chunk_gutter::ChunkGutterRenderer;
+use crate::ui::diff_map::DiffMap;
 use crate::ui::link_map::LinkMap;
 use crate::ui::msgarea::MsgArea;
+use crate::ui::pathlabel::PathLabel;
 use crate::ui::statusbar::StatusBar;
+use crate::ui::style;
 use crate::window::MeldPage;
 
 // ─── FileDiff ───────────────────────────────────────────────────────
@@ -53,6 +57,10 @@ pub struct FileDiff {
     gutters: Vec<Rc<ActionGutter>>,
     /// Link maps (one per adjacent pane pair).
     link_maps: Vec<Rc<LinkMap>>,
+    /// Overview (chunk) maps on the right edge, one per displayed pane.
+    diff_maps: Vec<Rc<DiffMap>>,
+    /// Container holding the overview maps (toggled by `show_overview_map`).
+    overview_map_box: gtk::Box,
     /// Shared message area at the top.
     shared_msgarea: Rc<MsgArea>,
     /// Guard against recomputing diffs during programmatic buffer changes.
@@ -89,7 +97,9 @@ struct PaneData {
     msgarea: Rc<MsgArea>,
     statusbar: Rc<StatusBar>,
     save_button: gtk::Button,
-    file_label: gtk::Label,
+    file_label: Rc<PathLabel>,
+    /// Custom line-number gutter that paints chunk backgrounds opaquely.
+    line_gutter: ChunkGutterRenderer,
     /// Transparent DrawingArea overlay that draws Insert boundary markers.
     insert_overlay: gtk::DrawingArea,
 }
@@ -198,7 +208,9 @@ impl FileDiff {
                 action_bar.add_css_class("toolbar");
                 action_bar.add_css_class("meld-actionbar");
                 action_bar.append(&p.save_button);
-                action_bar.append(&p.file_label);
+                let file_label_widget = p.file_label.widget();
+                file_label_widget.set_hexpand(true);
+                action_bar.append(file_label_widget);
                 vbox.append(&action_bar);
 
                 // MsgArea
@@ -232,6 +244,21 @@ impl FileDiff {
             grid.append(&pane_widgets[1]);
         }
 
+        // Shared chunk list, read by the overview maps and per-pane overlays.
+        let chunks: Rc<RefCell<Vec<Chunk>>> = Rc::new(RefCell::new(Vec::new()));
+
+        // ── Overview maps (right-hand chunk map) ──
+        // One narrow strip per displayed pane, mirroring Meld's sourcemap.
+        let map_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        map_box.add_css_class("sourcemap-container");
+        let mut diff_maps: Vec<Rc<DiffMap>> = Vec::new();
+        for (i, pane) in panes.iter().enumerate().take(num_panes.min(2)) {
+            let dm = Rc::new(DiffMap::new(&pane.view, i, Rc::clone(&chunks)));
+            map_box.append(dm.widget());
+            diff_maps.push(dm);
+        }
+        grid.append(&map_box);
+
         container.append(&grid);
 
         let loading = Rc::new(Cell::new(false));
@@ -251,11 +278,13 @@ impl FileDiff {
             container,
             panes,
             num_panes,
-            chunks: Rc::new(RefCell::new(Vec::new())),
+            chunks,
             merge_output: Rc::new(RefCell::new(None)),
             labels: Rc::new(RefCell::new(labels)),
             gutters,
             link_maps,
+            diff_maps,
+            overview_map_box: map_box,
             shared_msgarea,
             loading: Rc::clone(&loading),
             current_chunk_idx,
@@ -295,27 +324,33 @@ impl FileDiff {
         let buffer = gsv::Buffer::new(None::<&gtk::TextTagTable>);
         buffer.set_highlight_syntax(true);
 
-        // Apply the default style scheme so that syntax highlighting and
-        // theme-aware colours work.  Python Meld uses "classic" as its
-        // base, falling back to the system scheme on unavailability.
-        let manager = gsv::StyleSchemeManager::new();
-        let scheme = manager
-            .scheme("classic")
-            .or_else(|| manager.scheme("Adwaita"))
-            .or_else(|| manager.scheme("Adwaita-dark"));
+        // Apply Meld's style scheme so syntax highlighting matches the
+        // original, preferring `meld-base`/`meld-dark` and falling back to
+        // common built-ins.  Uses the *default* manager so the schemes
+        // installed by `setup_style_schemes` are visible.
+        let manager = gsv::StyleSchemeManager::default();
+        let scheme = style::preferred_scheme_id(|id| manager.scheme(id).is_some())
+            .and_then(|id| manager.scheme(id));
         if let Some(ref s) = scheme {
             buffer.set_style_scheme(Some(s));
         }
 
         let view = gsv::View::with_buffer(&buffer);
         view.set_monospace(true);
-        view.set_show_line_numbers(true);
+        // Disable the built-in line-number gutter; we install our own renderer
+        // below so chunk backgrounds can be painted opaquely behind the
+        // numbers (Meld's gutterrendererchunk behaviour).
+        view.set_show_line_numbers(false);
         view.set_editable(true);
         view.set_wrap_mode(gtk::WrapMode::None);
         view.set_vexpand(true);
         view.set_hexpand(true);
         view.set_pixels_below_lines(2);
         view.set_pixels_above_lines(2);
+
+        // Custom chunk-aware line-number gutter.
+        let line_gutter = ChunkGutterRenderer::new(index);
+        gsv::prelude::ViewExt::gutter(&view, gtk::TextWindowType::Left).insert(&line_gutter, 0);
 
         scrolled.set_child(Some(&view));
 
@@ -326,16 +361,14 @@ impl FileDiff {
         insert_overlay.set_hexpand(true);
 
         let msgarea = Rc::new(MsgArea::new());
-        let statusbar = Rc::new(StatusBar::new());
+        let statusbar = Rc::new(StatusBar::new(&view, &line_gutter));
 
         let save_btn = gtk::Button::from_icon_name("document-save-symbolic");
         save_btn.set_tooltip_text(Some(&format!("Save file in pane {}", index + 1)));
         save_btn.set_focus_on_click(false);
 
-        let file_label = gtk::Label::new(Some(&format!("File {}", index + 1)));
-        file_label.set_ellipsize(pango::EllipsizeMode::Middle);
-        file_label.set_halign(gtk::Align::Center);
-        file_label.set_hexpand(true);
+        let file_label = Rc::new(PathLabel::new());
+        file_label.set_path(&format!("File {}", index + 1));
 
         PaneData {
             scrolled,
@@ -345,6 +378,7 @@ impl FileDiff {
             statusbar,
             save_button: save_btn,
             file_label,
+            line_gutter,
             insert_overlay,
         }
     }
@@ -360,9 +394,9 @@ impl FileDiff {
                 self.load_file_sync(i, &path_str);
                 if let Some(name) = path.file_name() {
                     let name_str = name.to_string_lossy().into_owned();
-                    self.labels.borrow_mut()[i] = name_str.clone();
-                    self.panes[i].file_label.set_text(&name_str);
+                    self.labels.borrow_mut()[i] = name_str;
                 }
+                self.panes[i].file_label.set_path(&path_str);
             }
         }
         self.loading.set(false);
@@ -374,12 +408,30 @@ impl FileDiff {
             return;
         }
         let buffer = &self.panes[pane_idx].buffer;
+        let statusbar = &self.panes[pane_idx].statusbar;
+
+        // Detect and apply the source language, mirroring it in the status bar.
         let lang_mgr = gsv::LanguageManager::new();
-        if let Some(lang) = lang_mgr.guess_language(Some(path), None) {
-            buffer.set_language(Some(&lang));
-        }
+        let lang_name = match lang_mgr.guess_language(Some(path), None) {
+            Some(lang) => {
+                buffer.set_language(Some(&lang));
+                lang.name().to_string()
+            }
+            None => {
+                buffer.set_language(None);
+                "Plain Text".to_string()
+            }
+        };
+        statusbar.set_language(&lang_name);
+
         match std::fs::read_to_string(path) {
-            Ok(content) => buffer.set_text(&content),
+            Ok(content) => {
+                buffer.set_text(&content);
+                statusbar.set_encoding("UTF-8");
+                // GtkTextBuffer leaves the cursor at the end after set_text;
+                // move it to the start so the status bar reads "Ln 1, Col 1".
+                buffer.place_cursor(&buffer.start_iter());
+            }
             Err(e) => {
                 self.panes[pane_idx]
                     .msgarea
@@ -399,7 +451,7 @@ impl FileDiff {
         for (i, label) in labels.iter().enumerate() {
             if i < lbls.len() {
                 lbls[i] = label.clone();
-                self.panes[i].file_label.set_text(label);
+                self.panes[i].file_label.set_path(label);
             }
         }
     }
@@ -502,6 +554,11 @@ impl FileDiff {
         for lm in &self.link_maps {
             lm.widget().set_visible(show);
         }
+    }
+
+    /// Show or hide the right-hand overview (chunk) map.
+    pub fn set_show_overview_map(&self, show: bool) {
+        self.overview_map_box.set_visible(show);
     }
 
     /// Set the inline diff mode ("characters", "tokens", or "none").
@@ -613,6 +670,9 @@ impl FileDiff {
             .iter()
             .map(|p| p.insert_overlay.clone())
             .collect();
+        let diff_maps = self.diff_maps.clone();
+        let line_gutters: Vec<ChunkGutterRenderer> =
+            self.panes.iter().map(|p| p.line_gutter.clone()).collect();
         let panes: Vec<_> = (0..self.num_panes.min(2))
             .map(|i| {
                 (
@@ -682,6 +742,12 @@ impl FileDiff {
 
                 for ov in &overlays {
                     ov.queue_draw();
+                }
+                for dm in &diff_maps {
+                    dm.queue_draw();
+                }
+                for g in &line_gutters {
+                    g.set_chunks(&chunks.borrow());
                 }
 
                 if is_empty {
@@ -1333,6 +1399,9 @@ impl FileDiff {
             .iter()
             .map(|p| p.insert_overlay.clone())
             .collect();
+        let diff_maps = self.diff_maps.clone();
+        let line_gutters: Vec<ChunkGutterRenderer> =
+            self.panes.iter().map(|p| p.line_gutter.clone()).collect();
 
         let buffers: Vec<gsv::Buffer> = self.panes.iter().map(|p| p.buffer.clone()).collect();
         let tag_tables: Vec<gtk::TextTagTable> =
@@ -1352,6 +1421,8 @@ impl FileDiff {
             let ignore_blank_lines_f = Rc::clone(&ignore_blank_lines);
             let inline_diff_mode_f = Rc::clone(&inline_diff_mode);
             let overlays_f = overlays.clone();
+            let diff_maps_f = diff_maps.clone();
+            let line_gutters_f = line_gutters.clone();
 
             self.panes[pi].buffer.connect_changed(move |_| {
                 if loading.get() || buffers.len() < 2 {
@@ -1372,6 +1443,8 @@ impl FileDiff {
                 let ignore_bl = Rc::clone(&ignore_blank_lines_f);
                 let inline_mode = Rc::clone(&inline_diff_mode_f);
                 let overlays_inner = overlays_f.clone();
+                let diff_maps_inner = diff_maps_f.clone();
+                let line_gutters_inner = line_gutters_f.clone();
 
                 diff_state.borrow_mut().schedule_diff(
                     text_a.clone(),
@@ -1437,6 +1510,12 @@ impl FileDiff {
 
                         for ov in &overlays_inner {
                             ov.queue_draw();
+                        }
+                        for dm in &diff_maps_inner {
+                            dm.queue_draw();
+                        }
+                        for g in &line_gutters_inner {
+                            g.set_chunks(&chunks.borrow());
                         }
 
                         if is_empty {
@@ -1664,76 +1743,92 @@ impl FileDiff {
 
                 let da_w: &gtk::Widget = da.upcast_ref();
                 let scr_w: &gtk::Widget = scrolled.upcast_ref();
-                let view_w: &gtk::Widget = view.upcast_ref();
-                let (scr_x, scr_y) = scr_w
+                let (_scr_x, scr_y) = scr_w
                     .translate_coordinates(da_w, 0.0, 0.0)
                     .unwrap_or((0.0, 0.0));
-                let (view_x, _) = view_w
-                    .translate_coordinates(da_w, 0.0, 0.0)
-                    .unwrap_or((0.0, 0.0));
-                let view_w_px = view_w.allocated_width() as f64;
+                // Span the full pane width (matching Meld's `do_draw_layer`,
+                // which strokes across the whole clip width).  Using the
+                // overlay's own width avoids the short marker that results
+                // from the text view's `allocated_width()` excluding the
+                // scrollbar gutter.
+                let full_w = width as f64;
+                let scr_h = scr_w.allocated_height() as f64;
                 let scroll_val = view.vadjustment().map(|a| a.value()).unwrap_or(0.0);
 
                 let buf = view.buffer();
+                // Y position (in overlay coordinates) of the top of `line`,
+                // or the bottom of the buffer when `line` is past the end
+                // (so a chunk that runs to EOF gets a proper bottom border).
                 let line_to_y = |line: usize| -> Option<f64> {
-                    if line >= buf.line_count() as usize {
-                        return None;
+                    if line < buf.line_count() as usize {
+                        let iter = buf.iter_at_line(line as i32)?;
+                        let rect = view.iter_location(&iter);
+                        Some(rect.y() as f64 - scroll_val + scr_y)
+                    } else {
+                        let end = buf.end_iter();
+                        let rect = view.iter_location(&end);
+                        Some(rect.y() as f64 + rect.height() as f64 - scroll_val + scr_y)
                     }
-                    let iter = buf.iter_at_line(line as i32)?;
-                    let rect = view.iter_location(&iter);
-                    Some(rect.y() as f64 - scroll_val + scr_y)
                 };
+
+                // Clip vertically to the text viewport so borders never bleed
+                // into the action bar, message area or status bar above/below.
+                cr.rectangle(0.0, scr_y, full_w, scr_h);
+                cr.clip();
+
+                cr.set_line_width(1.0);
+                let visible = |y: f64| y >= scr_y - 1.0 && y <= scr_y + scr_h + 1.0;
 
                 let chunks = chunks.borrow();
                 for chunk in chunks.iter() {
-                    // ── Marker line on the zero-span pane ──────────────────
-                    let marker_line = if chunk.start_a == chunk.end_a && pi == 0 {
-                        Some(chunk.start_a)
-                    } else if chunk.start_b == chunk.end_b && pi == 1 {
-                        Some(chunk.start_b)
+                    if chunk.op == DiffOp::Equal {
+                        continue;
+                    }
+                    // Line range of this chunk *in this pane*.
+                    let (cs, ce) = if pi == 0 {
+                        (chunk.start_a, chunk.end_a)
                     } else {
-                        None
+                        (chunk.start_b, chunk.end_b)
                     };
-                    if let Some(line) = marker_line {
-                        if let Some(y) = line_to_y(line) {
-                            if y >= -1.0 && y <= height as f64 + 1.0 {
-                                cr.set_source_rgba(0.647, 1.0, 0.298, 0.6);
-                                cr.set_line_width(1.0);
-                                cr.move_to(view_x, y + 0.5);
-                                cr.line_to(view_x + view_w_px, y + 0.5);
+
+                    let (r, g, b) = match style::line_color(chunk.op) {
+                        Some(c) => c,
+                        None => continue,
+                    };
+
+                    // Resolve the chunk's top/bottom Y once and reuse.
+                    let y_cs = line_to_y(cs);
+                    let y_ce = line_to_y(ce);
+
+                    cr.set_source_rgb(r, g, b);
+
+                    if cs == ce {
+                        // Zero-span: the change exists only on the other side.
+                        // Draw a single full-width marker line at the
+                        // insertion point.
+                        if let Some(y) = y_cs {
+                            if visible(y) {
+                                cr.move_to(0.0, y + 0.5);
+                                cr.line_to(full_w, y + 0.5);
                                 cr.stroke().ok();
                             }
                         }
-                    }
-
-                    // ── Fill full-width green for content-bearing chunks ──
-                    // GTK4 paragraph_background doesn't render on empty
-                    // paragraphs.  Draw a matching fill for the full
-                    // chunk range (harmless double-render on non-empty
-                    // lines — same alpha as action gutter).
-                    let (fill_start, fill_end) = if chunk.op == DiffOp::Insert
-                        && pi == 1
-                        && chunk.end_b > chunk.start_b
-                    {
-                        (chunk.start_b, chunk.end_b)
-                    } else if chunk.op == DiffOp::Delete && pi == 0 && chunk.end_a > chunk.start_a {
-                        (chunk.start_a, chunk.end_a)
                     } else {
-                        continue;
-                    };
-                    let y0 = line_to_y(fill_start);
-                    let y1 = if fill_end < view.buffer().line_count() as usize {
-                        line_to_y(fill_end)
-                    } else {
-                        let end_iter = view.buffer().end_iter();
-                        let rect = view.iter_location(&end_iter);
-                        Some(rect.y() as f64 + rect.height() as f64 - scroll_val + scr_y)
-                    };
-                    if let (Some(y0), Some(y1)) = (y0, y1) {
-                        if y1 > y0 && y1 >= -1.0 && y0 <= height as f64 + 1.0 {
-                            cr.set_source_rgba(0.816, 1.0, 0.639, 0.35);
-                            cr.rectangle(view_x, y0, view_w_px, y1 - y0);
-                            cr.fill().ok();
+                        // Top and bottom 1px outline of the chunk, matching
+                        // Meld's `do_draw_layer` line-colour strokes.
+                        if let Some(y) = y_cs {
+                            if visible(y) {
+                                cr.move_to(0.0, y + 0.5);
+                                cr.line_to(full_w, y + 0.5);
+                                cr.stroke().ok();
+                            }
+                        }
+                        if let Some(y) = y_ce {
+                            if visible(y) {
+                                cr.move_to(0.0, y - 0.5);
+                                cr.line_to(full_w, y - 0.5);
+                                cr.stroke().ok();
+                            }
                         }
                     }
                 }
@@ -1861,6 +1956,7 @@ impl MeldPage for FileDiff {
     fn apply_settings(&self, settings: &MeldSettings) {
         self.set_ignore_blanks(settings.ignore_blank_lines);
         self.set_show_connectors(settings.show_connectors);
+        self.set_show_overview_map(settings.show_overview_map);
         self.set_inline_diff_mode(&settings.inline_diff_mode);
         let active_patterns: Vec<String> = settings.active_text_filter_regexes();
         self.set_text_filter_patterns(&active_patterns);
@@ -1925,6 +2021,7 @@ fn diff_tag_names() -> Vec<&'static str> {
         "diff-insert",
         "diff-insert-marker",
         "diff-replace",
+        "diff-conflict",
         "diff-inline",
         "diff-inline-delete",
         "diff-inline-insert",
@@ -1971,73 +2068,77 @@ fn clear_diff_tags_single(buffer: &gsv::Buffer, tag_table: &gtk::TextTagTable) {
 }
 
 fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
-    // Match the original Meld base style scheme colors exactly.
-    //   meld:insert  bg=#d0ffa3  fg=#008800  line-bg=#a5ff4c
-    //   meld:replace bg=#bdddff  fg=#0044dd  line-bg=#65b2ff
-    //   meld:delete  bg=#ffffff  fg=#880000  line-bg=#cccccc
-    // All three use only paragraph_background — no foreground override
-    // so syntax highlighting is preserved. Meld's style-scheme foreground
-    // interacts with the syntax engine; GtkTextTag.foreground overrides it.
-    // diff-insert: paragraph_background only — green full-line bar.
+    // Match the original Meld base style scheme exactly.  The *fill* (light)
+    // colour is used for the paragraph background; the more saturated *line*
+    // colour is drawn as the 1px chunk outline by the per-pane overlay (see
+    // `setup_insert_overlays`).  Centralised in `crate::ui::style`.
+    //   meld:insert  fill=#d0ffa3  line=#a5ff4c
+    //   meld:replace fill=#bdddff  line=#65b2ff
+    //   meld:conflict fill=#ffa5a3 line=#ff4f4c
+    // Only paragraph_background is set — no foreground override — so syntax
+    // highlighting is preserved.
+    // diff-insert: light-green full-line fill.
     if tag_table.lookup("diff-insert").is_none() {
         let tag = gtk::TextTag::builder()
             .name("diff-insert")
-            .paragraph_background("#a5ff4c")
+            .paragraph_background(style::fill_hex(DiffOp::Insert).unwrap_or("#d0ffa3"))
             .build();
         tag_table.add(&tag);
     }
-    // diff-replace uses only paragraph_background (no background) for a
-    // uniform light-blue fill — dark-blue accent is applied per-word via
-    // diff-inline-replace tags on changed tokens only.
+    // diff-replace: uniform light-blue fill — the dark-blue accent is applied
+    // per-word via diff-inline-replace tags on changed tokens only.
     if tag_table.lookup("diff-replace").is_none() {
         let tag = gtk::TextTag::builder()
             .name("diff-replace")
-            .paragraph_background("#bdddff")
+            .paragraph_background(style::fill_hex(DiffOp::Replace).unwrap_or("#bdddff"))
             .build();
         tag_table.add(&tag);
     }
-    // diff-delete uses the same green fill as diff-insert — matching
-    // Meld's get_common_theme where delete → insert color lookup.
+    // diff-delete uses the same fill as diff-insert — matching Meld's
+    // get_common_theme where delete → insert colour lookup.
     if tag_table.lookup("diff-delete").is_none() {
         let tag = gtk::TextTag::builder()
             .name("diff-delete")
-            .paragraph_background("#a5ff4c")
+            .paragraph_background(style::fill_hex(DiffOp::Delete).unwrap_or("#d0ffa3"))
+            .build();
+        tag_table.add(&tag);
+    }
+    // diff-conflict: full-line conflict fill (3-way merge conflicts).
+    if tag_table.lookup("diff-conflict").is_none() {
+        let tag = gtk::TextTag::builder()
+            .name("diff-conflict")
+            .paragraph_background(style::conflict_fill_hex())
             .build();
         tag_table.add(&tag);
     }
     // Inline differences within a line — single intense blue for BOTH panes,
-    // matching the original Meld "meld:inline" style.
+    // matching the original Meld "meld:inline" style (background only, so the
+    // syntax foreground shows through in both light and dark themes).
     // Use GtkSource.Tag (not plain GtkTextTag) with draw_spaces = true so
     // that whitespace changes are visible, matching Python Meld behaviour.
     if tag_table.lookup("diff-inline").is_none() {
         let tag = gsv::Tag::new(Some("diff-inline"));
-        tag.set_background(Some("#8ac2ff"));
-        tag.set_foreground(Some("#000000"));
+        tag.set_background(Some(style::inline_hex()));
         tag.set_draw_spaces(true);
         tag_table.add(&tag);
     }
     // Differentiated inline tags for delete/insert/replace at token level.
     // These use GtkSource.Tag with draw_spaces=true for whitespace visibility.
-    // Colours are more intense than the line-level backgrounds so that
-    // individual token changes stand out clearly.
     if tag_table.lookup("diff-inline-delete").is_none() {
         let tag = gsv::Tag::new(Some("diff-inline-delete"));
-        tag.set_background(Some("#ff6666"));
-        tag.set_foreground(Some("#880000"));
+        tag.set_background(Some(style::inline_delete_hex()));
         tag.set_draw_spaces(true);
         tag_table.add(&tag);
     }
     if tag_table.lookup("diff-inline-insert").is_none() {
         let tag = gsv::Tag::new(Some("diff-inline-insert"));
-        tag.set_background(Some("#66ff66"));
-        tag.set_foreground(Some("#008800"));
+        tag.set_background(Some(style::inline_insert_hex()));
         tag.set_draw_spaces(true);
         tag_table.add(&tag);
     }
     if tag_table.lookup("diff-inline-replace").is_none() {
         let tag = gsv::Tag::new(Some("diff-inline-replace"));
-        tag.set_background(Some("#4488ff"));
-        tag.set_foreground(Some("#000044"));
+        tag.set_background(Some(style::inline_replace_hex()));
         tag.set_draw_spaces(true);
         tag_table.add(&tag);
     }

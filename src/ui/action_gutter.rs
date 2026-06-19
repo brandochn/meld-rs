@@ -16,6 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::diff::engine::{Chunk, DiffOp};
+use crate::ui::style;
 
 /// Which direction the gutter "points" (left-to-right or right-to-left).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,26 +297,36 @@ impl ActionGutter {
                     continue;
                 }
 
-                let (chunk_start, chunk_end) = if draw_dir == GutterDirection::LeftToRight {
-                    (chunk.start_a, chunk.end_a.max(chunk.start_a + 1))
+                // Real chunk range in the *source* pane.  A zero-span range
+                // (an insertion on the side without content) is drawn as a
+                // line only, matching Meld's action gutter.
+                let (cs, ce) = if draw_dir == GutterDirection::LeftToRight {
+                    (chunk.start_a, chunk.end_a)
                 } else {
-                    (chunk.start_b, chunk.end_b.max(chunk.start_b + 1))
+                    (chunk.start_b, chunk.end_b)
                 };
+                let content = ce > cs;
 
-                let y_start = line_to_y(chunk_start);
-                let y_end = line_to_y(chunk_end);
+                let y_start = line_to_y(cs);
+                let y_end = if content { line_to_y(ce) } else { y_start };
                 let rect_y = y_start;
-                let rect_h = (y_end - y_start).max(4.0);
+                let rect_h = if content {
+                    (y_end - y_start).max(4.0)
+                } else {
+                    0.0
+                };
+                // Hit area is always tall enough to click comfortably.
+                let hit_h = (y_end - y_start).max(4.0);
 
                 let is_hovered = hovered == Some(i);
                 let is_pressed = pressed == Some(i);
 
                 draw_chunk_action(
-                    cr, chunk, w, rect_y, rect_h, draw_dir, is_hovered, is_pressed, mode,
+                    cr, chunk, w, rect_y, rect_h, content, draw_dir, is_hovered, is_pressed, mode,
                 );
 
                 // Hit-test rectangle
-                new_buttons.push((1.0, rect_y, w - 1.0, rect_y + rect_h, i));
+                new_buttons.push((1.0, rect_y, w - 1.0, rect_y + hit_h, i));
             }
 
             *draw_buttons.borrow_mut() = new_buttons;
@@ -382,43 +393,45 @@ fn classify_action(chunk: &Chunk, mode: ActionMode) -> GutterAction {
 
 // ─── Drawing ──────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn draw_chunk_action(
     cr: &cairo::Context,
     chunk: &Chunk,
     width: f64,
     y: f64,
     line_h: f64,
+    content: bool,
     direction: GutterDirection,
     hovered: bool,
     pressed: bool,
     mode: ActionMode,
 ) {
+    let (lr, lg, lb) = match style::line_color(chunk.op) {
+        Some(c) => c,
+        None => return,
+    };
     let h = line_h.max(4.0);
-
-    // Chunk background (matching Meld's fill_colors)
-    let (r, g, b) = match chunk.op {
-        DiffOp::Delete | DiffOp::Insert => (0.816, 1.0, 0.639),
-        DiffOp::Replace => (0.741, 0.867, 1.0),
-        DiffOp::Equal => return,
-    };
-
-    // Fill the chunk region (matching link_map bezier fill alpha).
-    // Insert chunks are filled only on the side that has content
-    // (RightToLeft gutter uses start_b..end_b which has span).
-    cr.set_source_rgba(r, g, b, 0.35);
-    cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
-    cr.fill().ok();
-
-    // Border (Meld's line_colors)
-    let (lr, lg, lb) = match chunk.op {
-        DiffOp::Delete | DiffOp::Insert => (0.647, 1.0, 0.298),
-        DiffOp::Replace => (0.396, 0.698, 1.0),
-        DiffOp::Equal => return,
-    };
-    cr.set_source_rgba(lr, lg, lb, 0.5);
     cr.set_line_width(1.0);
-    cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
-    cr.stroke().ok();
+
+    if content {
+        // Opaque fill + outline (Meld's fill_colors / line_colors), so the
+        // gutter reads as solid colour continuous with the panes.
+        if let Some((r, g, b)) = style::fill_color(chunk.op) {
+            cr.set_source_rgb(r, g, b);
+            cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
+            cr.fill().ok();
+        }
+        cr.set_source_rgb(lr, lg, lb);
+        cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
+        cr.stroke().ok();
+    } else {
+        // Zero-span (insertion on the side without content): a single line
+        // at the insertion point, matching Meld.
+        cr.set_source_rgb(lr, lg, lb);
+        cr.move_to(-0.5, y + 0.5);
+        cr.line_to(width + 1.0, y + 0.5);
+        cr.stroke().ok();
+    }
 
     // LeftToRight Insert has no content on the source side —
     // skip action button, matching Meld's _classify_change_actions → None.
@@ -457,42 +470,63 @@ fn draw_chunk_action(
         cr.stroke().ok();
     }
 
-    // Action icon (centered) — fixed size matching Meld's ActionIcons (16px)
+    // Action icon (centered).  Drawn subtly — faint when idle and brighter
+    // on hover/press — mirroring Meld's flat image-button gutter icons.
     let cx = width / 2.0;
     let cy = y + h / 2.0;
-    let half = 8.0;
+    let half = 5.5;
+    let icon_alpha = if pressed {
+        0.95
+    } else if hovered {
+        0.85
+    } else {
+        0.55
+    };
     let action = classify_action(chunk, mode);
 
     match action {
-        GutterAction::Replace => draw_replace_icon(cr, cx, cy, half, direction),
-        GutterAction::Delete => draw_delete_icon(cr, cx, cy, half),
-        GutterAction::CopyUp | GutterAction::CopyDown => draw_insert_icon(cr, cx, cy, half),
+        GutterAction::Replace => draw_arrow_icon(cr, cx, cy, half, direction, icon_alpha),
+        GutterAction::Delete => draw_delete_icon(cr, cx, cy, half, icon_alpha),
+        GutterAction::CopyUp | GutterAction::CopyDown => {
+            draw_insert_icon(cr, cx, cy, half, icon_alpha)
+        }
     }
 }
 
-fn draw_replace_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64, direction: GutterDirection) {
-    cr.set_source_rgba(0.0, 0.0, 0.0, 0.7);
-    cr.set_line_width(1.8);
+/// A slim directional arrow (replace / apply) pointing in the copy direction,
+/// stroked rather than filled so it reads as a light Meld-style action icon.
+fn draw_arrow_icon(
+    cr: &cairo::Context,
+    cx: f64,
+    cy: f64,
+    half: f64,
+    direction: GutterDirection,
+    alpha: f64,
+) {
+    cr.set_source_rgba(0.2, 0.2, 0.2, alpha);
+    cr.set_line_width(1.5);
+    cr.set_line_cap(cairo::LineCap::Round);
     cr.set_line_join(cairo::LineJoin::Round);
-    match direction {
-        GutterDirection::LeftToRight => {
-            cr.move_to(cx - half, cy - half);
-            cr.line_to(cx + half, cy);
-            cr.line_to(cx - half, cy + half);
-        }
-        GutterDirection::RightToLeft => {
-            cr.move_to(cx + half, cy - half);
-            cr.line_to(cx - half, cy);
-            cr.line_to(cx + half, cy + half);
-        }
-    }
-    cr.close_path();
-    cr.fill().ok();
+    let dir = match direction {
+        GutterDirection::LeftToRight => 1.0,
+        GutterDirection::RightToLeft => -1.0,
+    };
+    let tip = cx + dir * half;
+    let tail = cx - dir * half;
+    // Shaft
+    cr.move_to(tail, cy);
+    cr.line_to(tip, cy);
+    cr.stroke().ok();
+    // Arrowhead
+    cr.move_to(tip - dir * half * 0.7, cy - half * 0.7);
+    cr.line_to(tip, cy);
+    cr.line_to(tip - dir * half * 0.7, cy + half * 0.7);
+    cr.stroke().ok();
 }
 
-fn draw_delete_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64) {
-    cr.set_source_rgba(0.7, 0.15, 0.15, 0.85);
-    cr.set_line_width(1.8);
+fn draw_delete_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64, alpha: f64) {
+    cr.set_source_rgba(0.55, 0.15, 0.15, alpha);
+    cr.set_line_width(1.5);
     cr.set_line_cap(cairo::LineCap::Round);
     cr.move_to(cx - half, cy - half);
     cr.line_to(cx + half, cy + half);
@@ -502,9 +536,9 @@ fn draw_delete_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64) {
     cr.stroke().ok();
 }
 
-fn draw_insert_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64) {
-    cr.set_source_rgba(0.15, 0.55, 0.15, 0.85);
-    cr.set_line_width(1.8);
+fn draw_insert_icon(cr: &cairo::Context, cx: f64, cy: f64, half: f64, alpha: f64) {
+    cr.set_source_rgba(0.15, 0.45, 0.15, alpha);
+    cr.set_line_width(1.5);
     cr.set_line_cap(cairo::LineCap::Round);
     cr.move_to(cx - half, cy);
     cr.line_to(cx + half, cy);
