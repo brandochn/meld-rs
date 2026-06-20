@@ -267,19 +267,23 @@ impl ActionGutter {
                     return 0.0;
                 }
                 let is_end = line == buf.line_count() as usize;
-                let iter = if is_end {
-                    buf.end_iter()
-                } else if let Some(iter) = buf.iter_at_line(line as i32) {
-                    iter
-                } else {
+                // Use the full line y-range (line top, including
+                // `pixels-above-lines`) so the gutter fill aligns with the
+                // panes' paragraph-background chunk bands. `iter_location`
+                // returns the glyph top instead — a couple of pixels lower —
+                // which left the fill misaligned with the connectors/panes.
+                // Round to the pixel grid so the fill snaps to the same device
+                // row as the panes' pixel-snapped paragraph background.
+                if is_end {
+                    let iter = buf.end_iter();
+                    let (y, h) = draw_source.line_yrange(&iter);
+                    return ((y + h) as f64 - scroll + src_off).round();
+                }
+                let Some(iter) = buf.iter_at_line(line as i32) else {
                     return 0.0;
                 };
-                let rect = draw_source.iter_location(&iter);
-                if is_end {
-                    rect.y() as f64 + rect.height() as f64 - scroll + src_off
-                } else {
-                    rect.y() as f64 - scroll + src_off
-                }
+                let (y, _) = draw_source.line_yrange(&iter);
+                (y as f64 - scroll + src_off).round()
             };
 
             // Background is handled by CSS (.action-gutter { background: transparent })
@@ -415,14 +419,17 @@ fn draw_chunk_action(
 
     if content {
         // Opaque fill + outline (Meld's fill_colors / line_colors), so the
-        // gutter reads as solid colour continuous with the panes.
+        // gutter reads as solid colour continuous with the panes.  The fill
+        // sits on the exact line tops (`y`, no half-pixel offset) so it lines
+        // up with the link-map connector and the panes' paragraph backgrounds
+        // with no 1px step at the boundary.
         if let Some((r, g, b)) = style::fill_color(chunk.op) {
             cr.set_source_rgb(r, g, b);
-            cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
+            cr.rectangle(-0.5, y, width + 1.0, h);
             cr.fill().ok();
         }
         cr.set_source_rgb(lr, lg, lb);
-        cr.rectangle(-0.5, y + 0.5, width + 1.0, h);
+        cr.rectangle(-0.5, y - 0.5, width + 1.0, h);
         cr.stroke().ok();
     } else {
         // Zero-span (insertion on the side without content): a single line

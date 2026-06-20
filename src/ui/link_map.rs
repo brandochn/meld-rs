@@ -135,21 +135,31 @@ impl LinkMap {
             //           self.views[view_idx].get_y_for_line_num(line_num)
             //       return line_start - pix_start[view_idx] +
             //              y_offset[view_idx]
+            //
+            // `get_y_for_line_num` is GtkTextView's `get_line_yrange`, which
+            // returns the top of the *full line allocation* (it includes the
+            // `pixels-above-lines` spacing). That is exactly where the panes
+            // paint their `paragraph-background` chunk bands, so the connector
+            // lines up with them. Using `iter_location` instead returns the
+            // glyph top — a couple of pixels lower — which is what left the
+            // connectors 1–2px off and broke the continuity at the boundary.
             let view_offset_line =
                 |view_opt: &Option<gsv::View>, pix: f64, off: f64, line: usize| -> Option<f64> {
                     let view = view_opt.as_ref()?;
                     let buf = view.buffer();
-                    let iter = if line >= buf.line_count() as usize {
+                    // Round to the pixel grid so the cairo connector snaps to
+                    // the same device row as GtkTextView's pixel-snapped
+                    // paragraph background (scroll/offset can be fractional,
+                    // which otherwise leaves an anti-aliased 1px mismatch).
+                    if line >= buf.line_count() as usize {
                         let last = (buf.line_count() - 1).max(0);
                         let i = buf.iter_at_line(last)?;
-                        let rect = view.iter_location(&i);
-                        // Meld adds +1 to y_offset, so: buffer_y - pix + off + 1
-                        return Some(rect.y() as f64 + rect.height() as f64 - pix + off + 1.0);
-                    } else {
-                        buf.iter_at_line(line as i32)?
-                    };
-                    let rect = view.iter_location(&iter);
-                    Some(rect.y() as f64 - pix + off + 1.0)
+                        let (y, hgt) = view.line_yrange(&i);
+                        return Some(((y + hgt) as f64 - pix + off).round());
+                    }
+                    let iter = buf.iter_at_line(line as i32)?;
+                    let (y, _) = view.line_yrange(&iter);
+                    Some((y as f64 - pix + off).round())
                 };
 
             // Bezier control points (x_steps = [-0.5, w/2, w + 0.5])
@@ -172,7 +182,7 @@ impl LinkMap {
                 let f1 = if chunk.end_a == chunk.start_a {
                     f0
                 } else {
-                    f1_raw - 1.0
+                    f1_raw
                 };
 
                 let t0 = view_offset_line(&right_view_opt, pix_right, off_right, chunk.start_b)
@@ -182,7 +192,7 @@ impl LinkMap {
                 let t1 = if chunk.end_b == chunk.start_b {
                     t0
                 } else {
-                    t1_raw - 1.0
+                    t1_raw
                 };
 
                 let y0 = f0.clamp(0.0, h);
@@ -206,12 +216,15 @@ impl LinkMap {
 
                 // Filled region — opaque `fill_colors`, matching Meld so the
                 // connector reads as solid colour continuous with the panes
-                // (not a washed-out translucent shape).
+                // (not a washed-out translucent shape).  The fill edges sit on
+                // the exact line tops (`y0/t0/t1/y1`, no half-pixel offset) so
+                // they meet the action-gutter fill and the panes' paragraph
+                // backgrounds with no 1px step.
                 cr.set_source_rgb(r, g, b);
-                cr.move_to(xl, y0 - 0.5);
-                cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);
-                cr.line_to(xr, t1c - 0.5);
-                cr.curve_to(xm, t1c - 0.5, xm, y1 - 0.5, xl, y1 - 0.5);
+                cr.move_to(xl, y0);
+                cr.curve_to(xm, y0, xm, t0c, xr, t0c);
+                cr.line_to(xr, t1c);
+                cr.curve_to(xm, t1c, xm, y1, xl, y1);
                 cr.close_path();
                 cr.fill().ok();
 
@@ -228,10 +241,10 @@ impl LinkMap {
                 // Current chunk highlight overlay (mirrors Meld's current-chunk-highlight)
                 if draw_current.get() == Some(i) {
                     cr.set_source_rgba(1.0, 0.8, 0.0, 0.25);
-                    cr.move_to(xl, y0 - 0.5);
-                    cr.curve_to(xm, y0 - 0.5, xm, t0c - 0.5, xr, t0c - 0.5);
-                    cr.line_to(xr, t1c - 0.5);
-                    cr.curve_to(xm, t1c - 0.5, xm, y1 - 0.5, xl, y1 - 0.5);
+                    cr.move_to(xl, y0);
+                    cr.curve_to(xm, y0, xm, t0c, xr, t0c);
+                    cr.line_to(xr, t1c);
+                    cr.curve_to(xm, t1c, xm, y1, xl, y1);
                     cr.close_path();
                     cr.fill().ok();
                 }
