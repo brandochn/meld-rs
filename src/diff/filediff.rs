@@ -1767,14 +1767,22 @@ impl FileDiff {
                 // or the bottom of the buffer when `line` is past the end
                 // (so a chunk that runs to EOF gets a proper bottom border).
                 let line_to_y = |line: usize| -> Option<f64> {
+                    // Use the full line y-range (line top, including
+                    // `pixels-above-lines`) so the chunk outline sits exactly
+                    // on the paragraph-background band edges and lines up with
+                    // the link-map connectors — `iter_location` returns the
+                    // glyph top, a couple of pixels lower.
+                    // Round to the pixel grid so the outline snaps to the same
+                    // device row as the pixel-snapped paragraph background and
+                    // the link-map connectors.
                     if line < buf.line_count() as usize {
                         let iter = buf.iter_at_line(line as i32)?;
-                        let rect = view.iter_location(&iter);
-                        Some(rect.y() as f64 - scroll_val + scr_y)
+                        let (y, _) = view.line_yrange(&iter);
+                        Some((y as f64 - scroll_val + scr_y).round())
                     } else {
                         let end = buf.end_iter();
-                        let rect = view.iter_location(&end);
-                        Some(rect.y() as f64 + rect.height() as f64 - scroll_val + scr_y)
+                        let (y, h) = view.line_yrange(&end);
+                        Some(((y + h) as f64 - scroll_val + scr_y).round())
                     }
                 };
 
@@ -1812,21 +1820,26 @@ impl FileDiff {
                     if cs == ce {
                         // Zero-span: the change exists only on the other side.
                         // Draw a single full-width marker line at the
-                        // insertion point.
+                        // insertion point. Use `y - 0.5` to match the
+                        // line-map/action-gutter outlines, so the marker lines
+                        // up across the pane boundary.
                         if let Some(y) = y_cs {
                             if visible(y) {
-                                cr.move_to(0.0, y + 0.5);
-                                cr.line_to(full_w, y + 0.5);
+                                cr.move_to(0.0, y - 0.5);
+                                cr.line_to(full_w, y - 0.5);
                                 cr.stroke().ok();
                             }
                         }
                     } else {
-                        // Top and bottom 1px outline of the chunk, matching
-                        // Meld's `do_draw_layer` line-colour strokes.
+                        // Top and bottom 1px outline of the chunk. Both edges
+                        // use `y - 0.5` so they sit exactly where the link-map
+                        // and action-gutter outlines do (those stroke at
+                        // `line_top - 0.5`), keeping the chunk border
+                        // continuous across the pane boundary.
                         if let Some(y) = y_cs {
                             if visible(y) {
-                                cr.move_to(0.0, y + 0.5);
-                                cr.line_to(full_w, y + 0.5);
+                                cr.move_to(0.0, y - 0.5);
+                                cr.line_to(full_w, y - 0.5);
                                 cr.stroke().ok();
                             }
                         }
