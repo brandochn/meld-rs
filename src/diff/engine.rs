@@ -1264,8 +1264,15 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
     let mut tokens = Vec::new();
     let mut offsets = Vec::new();
     let chars: Vec<char> = line.chars().collect();
+    // Map char index → byte offset so we can slice the original &str
+    // safely even when multi-byte UTF-8 characters are present.
+    let byte_offsets: Vec<usize> = line.char_indices().map(|(off, _)| off).collect();
     let len = chars.len();
     let mut i = 0;
+
+    // Returns the byte offset for char position `idx`, or `line.len()`
+    // when `idx` is past the last character.
+    let byte_of = |idx: usize| -> usize { byte_offsets.get(idx).copied().unwrap_or(line.len()) };
 
     while i < len {
         let ch = chars[i];
@@ -1284,17 +1291,17 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
 
                 if c == '_' {
                     // snake_case boundary
-                    tokens.push(line[word_start..i].to_string());
-                    offsets.push(word_start);
+                    tokens.push(line[byte_of(word_start)..byte_of(i)].to_string());
+                    offsets.push(byte_of(word_start));
                     // Emit underscore as its own token
                     tokens.push("_".to_string());
-                    offsets.push(i);
+                    offsets.push(byte_of(i));
                     i += 1;
                     word_start = i;
                     // Find next alphanumeric start
                     while i < len && !chars[i].is_alphanumeric() && chars[i] != '_' {
                         tokens.push(chars[i].to_string());
-                        offsets.push(i);
+                        offsets.push(byte_of(i));
                         i += 1;
                     }
                     word_start = i;
@@ -1307,15 +1314,15 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
                     && kind == CharKind::Upper
                 {
                     // camelCase boundary: "fooBar" -> "foo", "Bar"
-                    tokens.push(line[word_start..i].to_string());
-                    offsets.push(word_start);
+                    tokens.push(line[byte_of(word_start)..byte_of(i)].to_string());
+                    offsets.push(byte_of(word_start));
                     word_start = i;
                     prev_kind = kind;
                     i += 1;
                 } else if !c.is_alphanumeric() {
                     // End of word at punctuation/whitespace
-                    tokens.push(line[word_start..i].to_string());
-                    offsets.push(word_start);
+                    tokens.push(line[byte_of(word_start)..byte_of(i)].to_string());
+                    offsets.push(byte_of(word_start));
                     word_start = i;
                     break;
                 } else {
@@ -1326,13 +1333,13 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
 
             // Emit the remaining word
             if word_start < i.min(len) {
-                tokens.push(line[word_start..i.min(len)].to_string());
-                offsets.push(word_start);
+                tokens.push(line[byte_of(word_start)..byte_of(i.min(len))].to_string());
+                offsets.push(byte_of(word_start));
             }
         } else {
-            // Punctuation/whitespace each character is its own token
+            // Punctuation/whitespace — each character is its own token
             tokens.push(ch.to_string());
-            offsets.push(start);
+            offsets.push(byte_of(start));
             i += 1;
         }
     }
@@ -2610,6 +2617,45 @@ mod tests {
         let changes = InlineDiffer::compare_line_tokens(a, b);
         // Should detect differences in both the import names and module path
         assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_compare_line_tokens_with_accented_chars() {
+        // Regression test: multi-byte UTF-8 characters (like á, 2 bytes)
+        // must not cause a panic due to char-index/byte-index mismatch.
+        let a = "acción rápidamente";
+        let b = "acción lentamente";
+        let changes = InlineDiffer::compare_line_tokens(a, b);
+        assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_compare_line_tokens_with_mixed_ascii_and_multibyte() {
+        // The panic originally occurred at byte 58 inside 'á' when
+        // word_start was a char index misused as a byte index.
+        // Long mixed ASCII + multi-byte strings exercise this.
+        let prefix = "1234567890".repeat(5); // 50 ASCII bytes
+        let a = format!("{}rápido", prefix);
+        let b = format!("{}lento", prefix);
+        let changes = InlineDiffer::compare_line_tokens(&a, &b);
+        assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_compare_line_tokens_unicode_various_widths() {
+        // Characters of different byte widths: ASCII (1), ñ (2), 中 (3), 😀 (4)
+        let a = "café y niño 中文";
+        let b = "café y niña 中文";
+        let changes = InlineDiffer::compare_line_tokens(a, b);
+        assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_compare_line_tokens_identical_with_accents() {
+        // Identical lines with multi-byte chars should return no changes
+        let a = "acción rápidamente";
+        let changes = InlineDiffer::compare_line_tokens(a, a);
+        assert!(changes.is_empty());
     }
 
     #[test]
