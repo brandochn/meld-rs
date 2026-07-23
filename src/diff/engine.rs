@@ -55,7 +55,7 @@ impl LineDiff {
     ///
     /// Mirrors the original Meld's `Differ.pair_changes()` used by LinkMap
     /// and scroll sync. When `from_pane == 0` and `to_pane == 1`, returns
-    /// chunks in leftÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢right orientation; when reversed (1ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢0), the caller
+    /// chunks in left->right orientation; when reversed (1->0), the caller
     /// should swap A/B positions as needed.
     ///
     /// The `visible` range is expressed in `from_pane` line numbers.
@@ -284,7 +284,7 @@ impl Differ {
 
 /// that may include both kept and non-kept lines.  This function walks
 /// through each chunk, detects runs of non-kept positions, and emits
-/// Delete / Insert chunks for them, using the chunk's internal AÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂB offset
+/// Delete / Insert chunks for them, using the chunk's internal A->B offset
 /// to derive correct cross-side indices.
 fn insert_unique_line_chunks(
     chunks: &mut Vec<Chunk>,
@@ -312,7 +312,7 @@ fn insert_unique_line_chunks(
     let mid_end_b = text_b.len().saturating_sub(suffix_len);
 
     for chunk in chunks.drain(..) {
-        // Pass prefix and suffix chunks through unchanged ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â they were
+        // Pass prefix and suffix chunks through unchanged they were
         // inserted by `compare()` and represent the stripped common
         // prefix / suffix, not part of the filtered diff.
         if chunk.end_a <= mid_start && chunk.end_b <= mid_start {
@@ -329,7 +329,7 @@ fn insert_unique_line_chunks(
                 split_equal(&mut new_chunks, &chunk, &kept_a, &kept_b);
             }
             DiffOp::Delete => {
-                // Delete from the filtered diff ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â already correct,
+                // Delete from the filtered diff -- already correct,
                 // but may still span non-kept A positions.
                 split_delete(&mut new_chunks, &chunk, &kept_a);
             }
@@ -364,7 +364,7 @@ fn insert_unique_line_chunks(
     );
 }
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Chunk-splitting helpers ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- Chunk-splitting helpers ---
 
 /// Internal offset between A and B positions within a chunk: `sb - sa`.
 fn ab_offset(chunk: &Chunk) -> isize {
@@ -405,7 +405,7 @@ fn split_equal(
                 });
             }
         } else {
-            // Non-kept A run ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Delete
+            // Non-kept A run Delete
             let del_start = a;
             while a < chunk.end_a && !kept_a.contains(&a) {
                 a += 1;
@@ -464,7 +464,7 @@ fn split_equal(
 /// Delete chunks with correct cross-side positions.
 fn split_delete(out: &mut Vec<Chunk>, chunk: &Chunk, kept_a: &std::collections::HashSet<usize>) {
     let offset = ab_offset(chunk);
-    // Emit the kept-position deletions ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â these ARE the filtered diff's output
+    // Emit the kept-position deletions these ARE the filtered diff's output
     let mut a = chunk.start_a;
     while a < chunk.end_a {
         if kept_a.contains(&a) {
@@ -566,7 +566,7 @@ fn split_replace(
 ) {
     let offset = ab_offset(chunk);
 
-    // Kept A-positions ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Delete (will merge into Replace downstream)
+    // Kept A-positions Delete (will merge into Replace downstream)
     let mut a = chunk.start_a;
     while a < chunk.end_a {
         if kept_a.contains(&a) {
@@ -587,7 +587,7 @@ fn split_replace(
         }
     }
 
-    // Non-kept A-positions ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ extra unique-line Deletes
+    // Non-kept A-positions extra unique-line Deletes
     a = chunk.start_a;
     while a < chunk.end_a {
         if !kept_a.contains(&a) {
@@ -608,7 +608,7 @@ fn split_replace(
         }
     }
 
-    // Kept B-positions ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Insert (will merge into Replace downstream)
+    // Kept B-positions Insert (will merge into Replace downstream)
     let mut b = chunk.start_b;
     while b < chunk.end_b {
         if kept_b.contains(&b) {
@@ -629,7 +629,7 @@ fn split_replace(
         }
     }
 
-    // Non-kept B-positions ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ extra unique-line Inserts
+    // Non-kept B-positions extra unique-line Inserts
     b = chunk.start_b;
     while b < chunk.end_b {
         if !kept_b.contains(&b) {
@@ -731,7 +731,7 @@ fn fill_between_gaps(
     chunks.sort_by_key(|c| (c.start_a, c.start_b));
 }
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Gap-based chunk construction ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- Gap-based chunk construction ---
 
 /// A lightweight snapshot of a single change from the `similar` crate,
 /// used to build chunk groups without lifetime constraints.
@@ -755,7 +755,7 @@ struct RawChange {
 /// so that standalone Inserts and Deletes receive the correct cross-side
 /// position. Without this, a standalone Insert would incorrectly use
 /// `new_index` for its A-side position, and a standalone Delete would
-/// incorrectly use `old_index` for its B-side position ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â producing chunks
+/// incorrectly use `old_index` for its B-side position producing chunks
 /// whose positions overlap or contradict adjacent Equal blocks.
 ///
 /// This mirrors difflib's opcode semantics where:
@@ -811,7 +811,7 @@ fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, 'a, str>) -> Vec<Chunk> {
                 let has_insert = gap.iter().any(|r| r.tag == similar::ChangeTag::Insert);
 
                 if has_delete && has_insert {
-                    // Mixed gap: Delete + Insert ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ single Replace chunk.
+                    // Mixed gap: Delete + Insert single Replace chunk.
                     // A-side positions come from the Delete entries (old_index).
                     // B-side positions come from the Insert entries (new_index).
                     let start_a = gap
@@ -895,7 +895,7 @@ fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, 'a, str>) -> Vec<Chunk> {
     chunks
 }
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Three-way merge ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- Three-way merge ---
 
 /// The result of a 3-way file merge.
 #[derive(Debug, Clone)]
@@ -974,7 +974,7 @@ impl ThreeWayDiffer {
             .flat_map(|c| c.start_a..c.end_a)
             .collect();
 
-        // Base lines where both sides changed ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ potential conflict
+        // Base lines where both sides changed potential conflict
         let conflicting_base: HashSet<usize> = local_del_rep
             .intersection(&remote_del_rep)
             .copied()
@@ -1044,7 +1044,7 @@ impl ThreeWayDiffer {
                             .cloned(),
                     );
                 } else {
-                    // Same change on both sides ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ merge it
+                    // Same change on both sides merge it
                     apply_single_chunk(&mut merged, &self.local, lc);
                 }
             }
@@ -1214,14 +1214,14 @@ pub fn consume_blank_lines(chunks: &mut Vec<Chunk>, text_a: &[String], text_b: &
         // Adjust tag based on what remains
         if chunk.op == DiffOp::Replace {
             if a_has_content && b_has_content {
-                // Still a replace ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â update bounds
+                // Still a replace update bounds
                 chunk.start_a = a_start;
                 chunk.end_a = a_end;
                 chunk.start_b = b_start;
                 chunk.end_b = b_end;
                 true
             } else if a_has_content {
-                // Only A remains ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ demote to Delete
+                // Only A remains demote to Delete
                 chunk.op = DiffOp::Delete;
                 chunk.start_a = a_start;
                 chunk.end_a = a_end;
@@ -1229,7 +1229,7 @@ pub fn consume_blank_lines(chunks: &mut Vec<Chunk>, text_a: &[String], text_b: &
                 chunk.end_b = b_start;
                 a_end > a_start
             } else if b_has_content {
-                // Only B remains ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ demote to Insert
+                // Only B remains demote to Insert
                 chunk.op = DiffOp::Insert;
                 chunk.start_a = a_start; // zero-width
                 chunk.end_a = a_start;
@@ -1237,7 +1237,7 @@ pub fn consume_blank_lines(chunks: &mut Vec<Chunk>, text_a: &[String], text_b: &
                 chunk.end_b = b_end;
                 b_end > b_start
             } else {
-                // Both empty ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ remove
+                // Both empty remove
                 false
             }
         } else if a_has_content || b_has_content {
@@ -1252,7 +1252,7 @@ pub fn consume_blank_lines(chunks: &mut Vec<Chunk>, text_a: &[String], text_b: &
     });
 }
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Tokenization helper ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- Tokenization helper ---
 
 /// Split a line into tokens at whitespace, punctuation, and
 /// CamelCase/snake_case boundaries. Returns (tokens, start_offsets).
@@ -1272,7 +1272,7 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
         let start = i;
 
         if ch.is_alphanumeric() || ch == '_' {
-            // Start of an identifier/word ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â split on camelCase and
+            // Start of an identifier/word split on camelCase and
             // snake_case boundaries.
             let mut word_start = i;
             let mut prev_kind = char_kind(ch);
@@ -1330,7 +1330,7 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
                 offsets.push(word_start);
             }
         } else {
-            // Punctuation/whitespace ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â each character is its own token
+            // Punctuation/whitespace each character is its own token
             tokens.push(ch.to_string());
             offsets.push(start);
             i += 1;
@@ -1361,7 +1361,7 @@ fn char_kind(ch: char) -> CharKind {
     }
 }
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Inline (word-level) diff ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- Inline (word-level) diff ---
 
 /// An in-word change within a single line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1396,6 +1396,7 @@ impl InlineDiffer {
             return Vec::new();
         }
 
+        // === Step 1: character-level diff with token cache ===
         let diff = TextDiff::from_chars(line_a, line_b);
 
         // Collect all changes so we can filter small equals
@@ -1457,7 +1458,7 @@ impl InlineDiffer {
         }
 
         // Delete and Insert changes use coordinates from different
-        // buffers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â merging them into a single Replace produces wrong
+        // buffers — merging them into a single Replace produces wrong
         // bounds on one pane.  Keep them separate for per-pane accuracy.
         changes
     }
@@ -1663,7 +1664,7 @@ impl InlineDiffer {
     }
 }
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Line cache (O(1) chunk navigation) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- Line cache (O(1) chunk navigation) ---
 
 /// Caches a mapping from line numbers to chunk indices for fast navigation.
 ///
@@ -1743,7 +1744,7 @@ impl LineCache {
 
     /// Return the chunk indices surrounding a line `(prev, curr, next)`.
     ///
-    /// Only non-Equal chunks are returned ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Equal chunks are skipped
+    /// Only non-Equal chunks are returned Equal chunks are skipped
     /// to match navigation expectations (jumping between actual changes).
     /// All three may be `None` if the line is in an Equal region.
     pub fn chunk_triad(&self, line: usize) -> (Option<usize>, Option<usize>, Option<usize>) {
@@ -1754,7 +1755,7 @@ impl LineCache {
     }
 }
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Diff Preprocessor ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- Diff Preprocessor ---
 
 /// Result of diff preprocessing: strips common prefix/suffix and removes
 /// unique lines, then maps result indices back to original positions.
@@ -1780,14 +1781,14 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
     let len_a = text_a.len();
     let len_b = text_b.len();
 
-    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Strip common prefix ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+    // --- Strip common prefix ---
     let prefix_len = text_a
         .iter()
         .zip(text_b.iter())
         .take_while(|(a, b)| a == b)
         .count();
 
-    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Strip common suffix ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+    // --- Strip common suffix ---
     let suffix_len = text_a[prefix_len..]
         .iter()
         .rev()
@@ -1798,7 +1799,7 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
     let a_mid = &text_a[prefix_len..len_a - suffix_len];
     let b_mid = &text_b[prefix_len..len_b - suffix_len];
 
-    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Discard unique lines (lines in only one file) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+    // --- Discard unique lines (lines in only one file) ---
     // Only apply if either side discards more than 10 lines
     // (heuristic from Meld's MyersSequenceMatcher).
     use std::collections::HashSet;
@@ -1834,7 +1835,7 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
     // Only use the filtered version if enough lines were discarded
     // on either side.  Mirrors Python Meld's heuristic.
     if discarded_a <= 10 && discarded_b <= 10 {
-        // Not worth it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â return the full middle section (prefix/suffix
+        // Not worth it return the full middle section (prefix/suffix
         // already stripped so the diff only processes middle lines).
         // Prefix and suffix themselves are re-inserted by `compare()`.
         // The index maps must map filtered (middle-section) positions to
@@ -1896,7 +1897,7 @@ pub fn unprocess_chunks(chunks: &mut Vec<Chunk>, pre: &PreprocessResult) {
         let f_start_b = chunk.start_b;
         let f_end_b = chunk.end_b;
 
-        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ A side ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+        // --- A side ---
         if f_start_a < pre.index_map_a.len() {
             chunk.start_a = pre.index_map_a[f_start_a];
         }
@@ -1907,7 +1908,7 @@ pub fn unprocess_chunks(chunks: &mut Vec<Chunk>, pre: &PreprocessResult) {
             chunk.end_a = pre.index_map_a[f_end_a - 1] + 1;
         }
 
-        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ B side ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+        // --- B side ---
         if f_start_b < pre.index_map_b.len() {
             chunk.start_b = pre.index_map_b[f_start_b];
         }
@@ -2048,7 +2049,7 @@ mod tests {
 
     #[test]
     fn test_run_merge_multiple_deletes_and_inserts() {
-        // Delete, Delete, Insert, Insert ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ single Replace
+        // Delete, Delete, Insert, Insert single Replace
         let chunks = vec![
             Chunk {
                 start_a: 2,
@@ -2090,7 +2091,7 @@ mod tests {
 
     #[test]
     fn test_run_merge_respects_equal_boundaries() {
-        // Equal, Delete, Insert, Equal ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Replace should NOT merge across Equal
+        // Equal, Delete, Insert, Equal Replace should NOT merge across Equal
         let chunks = vec![
             Chunk {
                 start_a: 0,
@@ -2253,7 +2254,7 @@ mod tests {
         }
     }
 
-    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ consume_blank_lines tests ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+    // --- consume_blank_lines tests ---
 
     #[test]
     fn test_consume_blank_lines_removes_empty_chunk() {
@@ -2267,7 +2268,7 @@ mod tests {
         let text_a = vec!["x".into(), "".into(), "y".into()];
         let text_b = vec!["x".into(), "".into(), "y".into()];
         consume_blank_lines(&mut chunks, &text_a, &text_b);
-        // Both sides contain only a blank line ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ chunk is removed
+        // Both sides contain only a blank line chunk is removed
         assert!(chunks.is_empty());
     }
 
@@ -2283,7 +2284,7 @@ mod tests {
         let text_a = vec!["x".into(), "real".into(), "y".into()];
         let text_b = vec!["x".into(), "".into(), "y".into()];
         consume_blank_lines(&mut chunks, &text_a, &text_b);
-        // A has content, B is blank ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ demote to Delete
+        // A has content, B is blank demote to Delete
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].op, DiffOp::Delete);
         assert_eq!(chunks[0].start_a, 1);
@@ -2302,7 +2303,7 @@ mod tests {
         let text_a = vec!["x".into(), "".into(), "y".into()];
         let text_b = vec!["x".into(), "real".into(), "y".into()];
         consume_blank_lines(&mut chunks, &text_a, &text_b);
-        // B has content, A is blank ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ demote to Insert
+        // B has content, A is blank demote to Insert
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].op, DiffOp::Insert);
         assert_eq!(chunks[0].start_b, 1);
@@ -2423,14 +2424,14 @@ mod tests {
         assert!(chunks.is_empty());
     }
 
-    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ preprocess_diff / unprocess_chunks round-trip tests ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+    // --- preprocess_diff / unprocess_chunks round-trip tests ---
 
     #[test]
     fn test_preprocess_identical_texts() {
         let a: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
         let b = a.clone();
         let pre = preprocess_diff(&a, &b);
-        // All lines are common ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ prefix covers everything, mid is empty
+        // All lines are common prefix covers everything, mid is empty
         assert_eq!(pre.prefix_len, 3);
         assert_eq!(pre.suffix_len, 0);
         assert!(pre.filtered_a.is_empty());
@@ -2450,7 +2451,7 @@ mod tests {
 
     #[test]
     fn test_preprocess_discards_unique_lines_beyond_threshold() {
-        // 12 unique lines on A side ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ should trigger discard
+        // --- A side ---
         let a: Vec<String> = (0..12).map(|i| format!("unique_a_{}", i)).collect();
         let b: Vec<String> = vec!["common".into()];
         let pre = preprocess_diff(&a, &b);
@@ -2459,7 +2460,7 @@ mod tests {
 
     #[test]
     fn test_preprocess_keeps_unique_lines_below_threshold() {
-        // Only 5 unique lines on A side ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ heuristic says keep them
+        // --- A side ---
         let a: Vec<String> = (0..5).map(|i| format!("unique_a_{}", i)).collect();
         let b: Vec<String> = vec!["common".into()];
         let pre = preprocess_diff(&a, &b);
@@ -2481,11 +2482,11 @@ mod tests {
 
     #[test]
     fn test_unprocess_chunks_round_trip() {
-        // Full round-trip: preprocess ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ mock diff ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ unprocess
+        // Full round-trip: preprocess mock diff unprocess
         let a: Vec<String> = vec!["P".into(), "A".into(), "B".into(), "C".into(), "S".into()];
         let b: Vec<String> = vec!["P".into(), "A".into(), "X".into(), "C".into(), "S".into()];
         let pre = preprocess_diff(&a, &b);
-        // A[2]="B" vs B[2]="X" ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Replace
+        // A[2]="B" vs B[2]="X" Replace
         let mut chunks = vec![Chunk {
             start_a: 0,
             end_a: 1,
@@ -2495,7 +2496,7 @@ mod tests {
         }];
         unprocess_chunks(&mut chunks, &pre);
         // After unprocessing with prefix=2, suffix=2, the chunk should map
-        // filtered[0]=A[2] ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ original index 2
+        // filtered[0]=A[2] original index 2
         assert_eq!(chunks[0].start_a, 2);
         assert_eq!(chunks[0].end_a, 3);
         assert_eq!(chunks[0].start_b, 2);
@@ -2544,7 +2545,7 @@ mod tests {
 
     #[test]
     fn test_preprocess_unprocess_full_diff_round_trip() {
-        // Complete diff pipeline: preprocess ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ diff ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ unprocess
+        // Complete diff pipeline: preprocess diff unprocess
         // should produce correct chunks for the original text
         let a: Vec<String> = vec!["common".into(), "old".into(), "end".into()];
         let b: Vec<String> = vec!["common".into(), "new".into(), "end".into()];
@@ -2568,7 +2569,7 @@ mod tests {
         assert_eq!(replace[0].end_b, 2);
     }
 
-    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ InlineDiffer tests ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+    // --- InlineDiffer tests ---
 
     #[test]
     fn test_compare_line_identical() {
@@ -2635,7 +2636,7 @@ mod tests {
         assert!(InlineDiffer::parse_import_line(line).is_none());
     }
 
-    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Three-way merge tests ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+    // --- Three-way merge ---
 
     #[test]
     fn test_compare_imports_same_module_added_identifier() {
@@ -2724,7 +2725,7 @@ mod tests {
         assert!(result.conflicts.is_empty());
         assert_eq!(result.merged[1], "b_local");
     }
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Sync-point tests Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // --- Sync-point tests ---
 
     #[test]
     fn test_sync_points_no_points_behaves_like_normal_diff() {

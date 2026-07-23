@@ -36,7 +36,7 @@ use crate::ui::statusbar::StatusBar;
 use crate::ui::style;
 use crate::window::MeldPage;
 
-// ─── FileDiff ───────────────────────────────────────────────────────
+// â”€â”€â”€ FileDiff â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// The main file-comparison view supporting 2 or 3 panes.
 pub struct FileDiff {
@@ -105,7 +105,7 @@ struct PaneData {
 }
 
 impl FileDiff {
-    // ── Constructor ──────────────────────────────────────────────
+    // â”€â”€ Constructor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Create a new `FileDiff` with the given number of text panes
     /// (typically 2 for file diff, 3 for merge).
@@ -118,11 +118,11 @@ impl FileDiff {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
         container.add_css_class("meld-notebook-child");
 
-        // ── Shared message area ──
+        // â”€â”€ Shared message area â”€â”€
         let shared_msgarea = Rc::new(MsgArea::new());
         container.append(shared_msgarea.widget());
 
-        // ── Main horizontal grid ──
+        // â”€â”€ Main horizontal grid â”€â”€
         let grid = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         grid.set_vexpand(true);
         grid.set_hexpand(true);
@@ -130,20 +130,20 @@ impl FileDiff {
         let mut panes: Vec<PaneData> = Vec::with_capacity(num_panes);
         let mut labels: Vec<String> = Vec::with_capacity(num_panes);
 
-        // ── Build each pane column ──
+        // â”€â”€ Build each pane column â”€â”€
         for i in 0..num_panes {
             let pane = Self::build_pane_column(i, num_panes);
             labels.push(format!("File {}", i + 1));
             panes.push(pane);
         }
 
-        // ── Build action gutters and link maps ──
+        // â”€â”€ Build action gutters and link maps â”€â”€
         let mut gutters: Vec<Rc<ActionGutter>> = Vec::new();
         let mut link_maps: Vec<Rc<LinkMap>> = Vec::new();
 
         // Between pane 0 and pane 1
         if num_panes >= 2 {
-            // Gutter: push from left (0→1)
+            // Gutter: push from left (0â†’1)
             let ag0 = Rc::new(ActionGutter::new(
                 panes[0].view.clone().upcast::<gtk::TextView>(),
                 panes[1].view.clone().upcast::<gtk::TextView>(),
@@ -160,7 +160,7 @@ impl FileDiff {
             lm0.associate(&panes[0].view, &panes[1].view);
             link_maps.push(Rc::clone(&lm0));
 
-            // Gutter: push from right (1→0)
+            // Gutter: push from right (1â†’0)
             let ag1 = Rc::new(ActionGutter::new(
                 panes[1].view.clone().upcast::<gtk::TextView>(),
                 panes[0].view.clone().upcast::<gtk::TextView>(),
@@ -194,7 +194,7 @@ impl FileDiff {
             gutters.push(Rc::clone(&ag3));
         }
 
-        // ── Assemble the horizontal layout ──
+        // â”€â”€ Assemble the horizontal layout â”€â”€
         // Layout: [pane0_vbox] [gutter] [linkmap] [gutter] [pane1_vbox] [gutter] [linkmap] [gutter] [pane2_vbox]
         // We use a GtkBox for each pane and insert gutters/linkmaps between.
 
@@ -234,11 +234,11 @@ impl FileDiff {
         grid.append(&pane_widgets[0]);
 
         if num_panes >= 2 {
-            // Gutter 0 (0→1)
+            // Gutter 0 (0â†’1)
             grid.append(gutters[0].widget());
             // Link map 0
             grid.append(link_maps[0].widget());
-            // Gutter 1 (1→0)
+            // Gutter 1 (1â†’0)
             grid.append(gutters[1].widget());
             // Pane 1
             grid.append(&pane_widgets[1]);
@@ -247,7 +247,7 @@ impl FileDiff {
         // Shared chunk list, read by the overview maps and per-pane overlays.
         let chunks: Rc<RefCell<Vec<Chunk>>> = Rc::new(RefCell::new(Vec::new()));
 
-        // ── Overview maps (right-hand chunk map) ──
+        // â”€â”€ Overview maps (right-hand chunk map) â”€â”€
         // One narrow strip per displayed pane, mirroring Meld's sourcemap.
         let map_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         map_box.add_css_class("sourcemap-container");
@@ -314,7 +314,7 @@ impl FileDiff {
         fd
     }
 
-    // ── Pane column builder ──────────────────────────────────────
+    // â”€â”€ Pane column builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn build_pane_column(index: usize, _num_panes: usize) -> PaneData {
         let scrolled = gtk::ScrolledWindow::new();
@@ -349,7 +349,7 @@ impl FileDiff {
         view.set_pixels_above_lines(2);
         // The `paragraph-background` (chunk fill) starts at the text window's
         // left margin, so any left margin leaves an unpainted white strip
-        // between the opaque line-number gutter and the highlighted text — a
+        // between the opaque line-number gutter and the highlighted text â€” a
         // visible seam on changed lines. Anchor the text at the gutter edge;
         // the visual gap before the text is provided by the gutter's own
         // right padding, which the chunk gutter paints in the chunk colour.
@@ -390,7 +390,7 @@ impl FileDiff {
         }
     }
 
-    // ── Public API ───────────────────────────────────────────────
+    // â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Load files from disk into the panes.
     pub fn set_files(&self, gfiles: &[gio::File]) {
@@ -1121,7 +1121,7 @@ impl FileDiff {
         self.panes[pane].view.set_editable(editable);
     }
 
-    // ── Private helpers ───────────────────────────────────────────
+    // â”€â”€ Private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn apply_diff_tags(&self, pane: usize, chunks: &[Chunk]) {
         if pane >= self.panes.len() {
@@ -1167,7 +1167,7 @@ impl FileDiff {
                 // Apply line-level tag per-line.  For Replace chunks on import
                 // lines we apply BOTH the line-level background (blue for
                 // Replace) AND per-token inline tags (red/green for individual
-                // identifiers) — matching Meld's original behaviour.  The
+                // identifiers) â€” matching Meld's original behaviour.  The
                 // inline tags are applied after the loop by apply_inline_diff()
                 // and their per-character backgrounds take visual precedence
                 // over the line-level background for the changed identifiers.
@@ -1273,7 +1273,7 @@ impl FileDiff {
 
         let scroll_lock: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
-        // ── Pane 0 ↔ Pane 1 bidirectional sync with proportional chunk mapping ──
+        // â”€â”€ Pane 0 â†” Pane 1 bidirectional sync with proportional chunk mapping â”€â”€
         let adj0 = self.panes[0].view.vadjustment();
         let adj1 = self.panes[1].view.vadjustment();
 
@@ -1283,7 +1283,7 @@ impl FileDiff {
             let chunks = Rc::clone(&self.chunks);
             let lock = Rc::clone(&scroll_lock);
 
-            // Pane 0 scroll → sync Pane 1 (master=0, slave=1)
+            // Pane 0 scroll â†’ sync Pane 1 (master=0, slave=1)
             let a1_weak = a1.downgrade();
             let lock_0_to_1 = Rc::clone(&lock);
             let chunks_01 = Rc::clone(&chunks);
@@ -1311,7 +1311,7 @@ impl FileDiff {
                 }
             });
 
-            // Pane 1 scroll → sync Pane 0 (master=1, slave=0)
+            // Pane 1 scroll â†’ sync Pane 0 (master=1, slave=0)
             let a0_weak = a0.downgrade();
             let lock_1_to_0 = Rc::clone(&lock);
             let chunks_10 = Rc::clone(&chunks);
@@ -1340,7 +1340,7 @@ impl FileDiff {
             });
         }
 
-        // ── Pane 1 ↔ Pane 2 bidirectional sync (3-pane mode) ──
+        // â”€â”€ Pane 1 â†” Pane 2 bidirectional sync (3-pane mode) â”€â”€
         if self.panes.len() >= 3 {
             let adj1b = self.panes[1].view.vadjustment();
             let adj2 = self.panes[2].view.vadjustment();
@@ -1541,7 +1541,7 @@ impl FileDiff {
     /// Attach a key controller to the window that updates gutter action modes.
     ///
     /// Uses the `modifiers` signal on `EventControllerKey` (GTK 4.14+)
-    /// attached to the **window** — not individual source views — so
+    /// attached to the **window** â€” not individual source views â€” so
     /// Shift/Ctrl are detected globally regardless of which widget has focus.
     /// This matches the original Meld's `on_key_event` on the GtkWindow.
     pub fn connect_gutter_key_modes(&self, window: &impl gtk::prelude::IsA<gtk::Widget>) {
@@ -1616,9 +1616,9 @@ impl FileDiff {
             let is_right_to_left = gi % 2 == 1;
 
             let (src_pane_idx, dst_pane_idx) = if is_right_to_left {
-                (pair_idx + 1, pair_idx) // e.g., gutter 1: 1→0
+                (pair_idx + 1, pair_idx) // e.g., gutter 1: 1â†’0
             } else {
-                (pair_idx, pair_idx + 1) // e.g., gutter 0: 0→1
+                (pair_idx, pair_idx + 1) // e.g., gutter 0: 0â†’1
             };
 
             // Clone the buffers for use in the closure
@@ -1770,7 +1770,7 @@ impl FileDiff {
                     // Use the full line y-range (line top, including
                     // `pixels-above-lines`) so the chunk outline sits exactly
                     // on the paragraph-background band edges and lines up with
-                    // the link-map connectors — `iter_location` returns the
+                    // the link-map connectors â€” `iter_location` returns the
                     // glyph top, a couple of pixels lower.
                     // Round to the pixel grid so the outline snaps to the same
                     // device row as the pixel-snapped paragraph background and
@@ -1927,7 +1927,7 @@ impl FileDiff {
     }
 }
 
-// ─── MeldPage impl ──────────────────────────────────────────────────
+// â”€â”€â”€ MeldPage impl â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 impl MeldPage for FileDiff {
     fn widget(&self) -> &gtk::Widget {
@@ -1996,7 +1996,7 @@ impl Drop for FileDiff {
     }
 }
 
-// ─── Tag helpers ────────────────────────────────────────────────────
+// â”€â”€â”€ Tag helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn highlight_range(buffer: &gsv::Buffer, tag_name: &str, start_line: usize, end_line: usize) {
     if start_line >= end_line {
@@ -2095,7 +2095,7 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
     //   meld:insert  fill=#d0ffa3  line=#a5ff4c
     //   meld:replace fill=#bdddff  line=#65b2ff
     //   meld:conflict fill=#ffa5a3 line=#ff4f4c
-    // Only paragraph_background is set — no foreground override — so syntax
+    // Only paragraph_background is set â€” no foreground override â€” so syntax
     // highlighting is preserved.
     // diff-insert: light-green full-line fill.
     if tag_table.lookup("diff-insert").is_none() {
@@ -2105,7 +2105,7 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
             .build();
         tag_table.add(&tag);
     }
-    // diff-replace: uniform light-blue fill — the dark-blue accent is applied
+    // diff-replace: uniform light-blue fill â€” the dark-blue accent is applied
     // per-word via diff-inline-replace tags on changed tokens only.
     if tag_table.lookup("diff-replace").is_none() {
         let tag = gtk::TextTag::builder()
@@ -2114,8 +2114,8 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
             .build();
         tag_table.add(&tag);
     }
-    // diff-delete uses the same fill as diff-insert — matching Meld's
-    // get_common_theme where delete → insert colour lookup.
+    // diff-delete uses the same fill as diff-insert â€” matching Meld's
+    // get_common_theme where delete â†’ insert colour lookup.
     if tag_table.lookup("diff-delete").is_none() {
         let tag = gtk::TextTag::builder()
             .name("diff-delete")
@@ -2131,7 +2131,7 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
             .build();
         tag_table.add(&tag);
     }
-    // Inline differences within a line — single intense blue for BOTH panes,
+    // Inline differences within a line â€” single intense blue for BOTH panes,
     // matching the original Meld "meld:inline" style (background only, so the
     // syntax foreground shows through in both light and dark themes).
     // Use GtkSource.Tag (not plain GtkTextTag) with draw_spaces = true so
@@ -2228,16 +2228,72 @@ fn apply_inline_diff(
     inline_diff_mode: &str,
 ) {
     let (start_a, end_a, start_b, end_b) = (chunk.start_a, chunk.end_a, chunk.start_b, chunk.end_b);
+    let count_a = end_a - start_a;
+    let count_b = end_b - start_b;
 
-    // Process each line pair within the chunk
-    let line_count = (end_a - start_a).min(end_b - start_b);
+    // --- Meld-style full-chunk diff (when line counts differ) ---
+    // Extract the complete text of the Replace chunk from both buffers
+    // and run character-level diff on it.  Offsets are relative to the
+    // chunk start in each buffer → absolute buffer offsets.
+    if count_a != count_b && count_a > 0 && count_b > 0 {
+        let (buf_a, buf_b) = if pane == 0 {
+            (buffer, other_buffer)
+        } else {
+            (other_buffer, buffer)
+        };
+
+        let sa = buf_a.iter_at_line_offset(start_a as i32, 0);
+        let ea = buf_a.iter_at_line_offset(end_a as i32, 0);
+        let sb = buf_b.iter_at_line_offset(start_b as i32, 0);
+        let eb = buf_b.iter_at_line_offset(end_b as i32, 0);
+
+        if let (Some(sa), Some(ea), Some(sb), Some(eb)) = (sa, ea, sb, eb) {
+            let text_a = buf_a.text(&sa, &ea, false).to_string();
+            let text_b = buf_b.text(&sb, &eb, false).to_string();
+            if !text_a.is_empty() && !text_b.is_empty() && text_a != text_b {
+                let changes = InlineDiffer::compare_line(&text_a, &text_b);
+                let base_a = sa.offset() as usize;
+                let base_b = sb.offset() as usize;
+
+                for change in &changes {
+                    // Pane 0 shows Deletes (removed from A = buffer)
+                    // Pane 1 shows Inserts (added to B = buffer)
+                    let (base, target_buf) = match (pane, change.op) {
+                        (0, DiffOp::Delete) => (base_a, buffer),
+                        (1, DiffOp::Insert) => (base_b, buffer),
+                        _ => continue,
+                    };
+
+                    let s_off = base + change.start;
+                    let e_off = base + change.end;
+                    let tag_name = "diff-inline-replace";
+
+                    if let Some(tag) = tag_table.lookup(tag_name) {
+                        let mut s = target_buf.iter_at_offset(s_off as i32);
+                        let mut e = target_buf.iter_at_offset(e_off as i32);
+                        if !s.is_cursor_position() {
+                            s.backward_cursor_position();
+                        }
+                        if !e.is_cursor_position() {
+                            e.forward_cursor_position();
+                        }
+                        if s.offset() < e.offset() {
+                            target_buf.apply_tag(&tag, &s, &e);
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // --- Original line-by-line path (when counts are equal) ---
+    let line_count = count_a.min(count_b);
     for offset in 0..line_count {
         let line_a_num = start_a + offset;
         let line_b_num = start_b + offset;
 
-        // Get text of line from buffer A (this pane's buffer or other buffer)
         let (text_a, text_b) = if pane == 0 {
-            // Pane 0: this buffer is A, other is B
             let a_start = buffer.iter_at_line_offset(line_a_num as i32, 0);
             let a_end = buffer.iter_at_line_offset((line_a_num + 1) as i32, 0);
             let b_start = other_buffer.iter_at_line_offset(line_b_num as i32, 0);
@@ -2251,7 +2307,6 @@ fn apply_inline_diff(
                 continue;
             }
         } else {
-            // Pane 1: this buffer is B, other is A
             let a_start = other_buffer.iter_at_line_offset(line_a_num as i32, 0);
             let a_end = other_buffer.iter_at_line_offset((line_a_num + 1) as i32, 0);
             let b_start = buffer.iter_at_line_offset(line_b_num as i32, 0);
@@ -2273,9 +2328,6 @@ fn apply_inline_diff(
             continue;
         }
 
-        // Compute inline diff using token or character mode.
-        // Uses the same approach as the original Meld: token/char diff
-        // for ALL lines, with no import-specific special-casing.
         let inline_changes = match inline_diff_mode {
             "characters" => InlineDiffer::compare_line(&text_a, &text_b),
             "tokens" => (*cache.compare_line_tokens(&text_a, &text_b)).clone(),
@@ -2285,17 +2337,12 @@ fn apply_inline_diff(
             continue;
         }
 
-        // Determine base iterator for this pane's line
         let base_line = if pane == 0 { line_a_num } else { line_b_num };
         let base_iter = match buffer.iter_at_line_offset(base_line as i32, 0) {
             Some(iter) => iter,
             None => continue,
         };
 
-        // Apply differentiated inline tags at the correct character offsets.
-        // NOTE: token-level diffs mix Delete (left offsets) and Insert
-        // (right offsets) changes in the same vector.  We must only apply
-        // changes whose offsets refer to THIS pane's line.
         for change in inline_changes.iter() {
             let apply = match (pane, change.op) {
                 (0, DiffOp::Delete | DiffOp::Replace) => true,
@@ -2307,10 +2354,6 @@ fn apply_inline_diff(
             if !apply {
                 continue;
             }
-            // For Replace chunks, all inline changes use the unified
-            // dark-blue tag (matching Meld's single "inline" color).
-            // The coordinate-space filter above ensures each pane only
-            // sees changes with its own buffer's offsets.
             let tag_name = if chunk.op == DiffOp::Replace {
                 "diff-inline-replace"
             } else {
@@ -2327,9 +2370,6 @@ fn apply_inline_diff(
                 let end_offset = base_iter.offset() as usize + change.end;
                 let mut s = buffer.iter_at_offset(start_offset as i32);
                 let mut e = buffer.iter_at_offset(end_offset as i32);
-                // Adjust iterators to valid cursor positions so that
-                // combining characters (Unicode diacritics) are not split
-                // by the tag boundary.  Mirrors Python Meld.
                 if !s.is_cursor_position() {
                     s.backward_cursor_position();
                 }
@@ -2373,7 +2413,7 @@ fn ensure_tag(tag_table: &gtk::TextTagTable, name: &str, bg: &str, fg: &str) {
     }
 }
 
-// ─── Chunk operation helpers (for use by gutter callbacks) ────────
+// â”€â”€â”€ Chunk operation helpers (for use by gutter callbacks) â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Duration of the fading highlight animation for chunk actions (microseconds).
 const FADE_DURATION_US: u32 = 500_000; // 500ms
@@ -2426,7 +2466,7 @@ fn execute_replace(src_buffer: &gsv::Buffer, dst_buffer: &gsv::Buffer, chunk: &C
         String::new()
     };
     // Trailing empty lines produce zero visible text between the
-    // chunk-start iter and the buffer-end iter — include the newline.
+    // chunk-start iter and the buffer-end iter â€” include the newline.
     if chunk.end_a == src_buffer.line_count() as usize && src_text.is_empty() {
         src_text.push('\n');
     }
