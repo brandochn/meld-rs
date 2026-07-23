@@ -642,10 +642,9 @@ fn get_system_monospace_font() -> String {
         if let Some(src) = gio::SettingsSchemaSource::default() {
             if src.lookup("org.gnome.desktop.interface", true).is_some() {
                 let settings = gio::Settings::new("org.gnome.desktop.interface");
-                if let Ok(name) = settings.string("monospace-font-name") {
-                    if !name.is_empty() {
-                        return name.to_string();
-                    }
+                let name = settings.string("monospace-font-name");
+                if !name.is_empty() {
+                    return name.to_string();
                 }
             }
         }
