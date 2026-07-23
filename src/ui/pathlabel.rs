@@ -29,7 +29,6 @@ impl PathLabel {
         button.add_css_class("flat");
         button.set_focus_on_click(false);
 
-        // ── Visible content: [icon] shortened-path ──
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let icon = gtk::Image::from_icon_name("text-x-generic-symbolic");
         let label = gtk::Label::new(None);
@@ -40,7 +39,6 @@ impl PathLabel {
         content.append(&label);
         button.set_child(Some(&content));
 
-        // ── Popover: full path + actions ──
         let popover = gtk::Popover::new();
         let pbox = gtk::Box::new(gtk::Orientation::Vertical, 6);
         pbox.set_margin_start(6);

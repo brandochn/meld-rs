@@ -65,7 +65,6 @@ impl NewDiffTab {
         root_box.set_margin_bottom(12);
         root_box.set_width_request(620);
 
-        // ── Title ──
         let title_label = gtk::Label::new(Some("New comparison"));
         title_label.set_xalign(0.0);
         title_label.add_css_class("new-diff-title");
@@ -74,7 +73,6 @@ impl NewDiffTab {
         let middle_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
         middle_box.set_vexpand(true);
 
-        // ── Toggle buttons ──
         let button_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         button_row.set_homogeneous(true);
         let button_file = build_type_toggle("document-new-symbolic", "File");
@@ -85,7 +83,6 @@ impl NewDiffTab {
         button_row.append(&button_vc);
         middle_box.append(&button_row);
 
-        // ── Choosers notebook ──
         let choosers_notebook = gtk::Notebook::new();
         choosers_notebook.set_show_tabs(false);
         choosers_notebook.set_show_border(false);
@@ -131,7 +128,6 @@ impl NewDiffTab {
         middle_box.append(&choosers_notebook);
         root_box.append(&middle_box);
 
-        // ── Action buttons ──
         let button_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         button_box.set_halign(gtk::Align::End);
         button_box.set_margin_top(6);
@@ -181,8 +177,6 @@ impl NewDiffTab {
         this.choosers_notebook.set_current_page(Some(0));
         this
     }
-
-    // ── Toggle signals ──────────────────────────────────────────
 
     fn connect_toggle_signals(this: &Self) {
         let btns: Vec<gtk::ToggleButton> = vec![
@@ -239,8 +233,6 @@ impl NewDiffTab {
             });
         }
     }
-
-    // ── Compare / Blank ─────────────────────────────────────────
 
     fn connect_action_buttons(this: &Self) {
         let dt = Rc::clone(&this.diff_type);
@@ -307,8 +299,6 @@ impl MeldPage for NewDiffTab {
         self.on_diff_created.replace(Some(cb));
     }
 }
-
-// ── Widget builders ───────────────────────────────────────────────
 
 /// Build a type-toggle button where child widgets do NOT intercept clicks.
 fn build_type_toggle(icon_name: &str, label_text: &str) -> gtk::ToggleButton {

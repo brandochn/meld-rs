@@ -211,8 +211,6 @@ mod tests {
         assert!(cache.len() <= 2);
     }
 
-    // ── compare_line_tokens tests ──────────────────────────────────────
-
     #[test]
     fn test_tokens_cache_hit() {
         let cache = InlineDiffCache::new();

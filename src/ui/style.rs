@@ -32,7 +32,7 @@ use crate::diff::engine::DiffOp;
 /// An RGB colour with components in the `0.0..=1.0` range.
 pub type Rgb = (f64, f64, f64);
 
-// ── meld-base style scheme (light) ──────────────────────────────────
+// meld-base style scheme (light)
 const INSERT_FILL_LIGHT: Rgb = (0.8157, 1.0, 0.6392); // #d0ffa3
 const INSERT_LINE_LIGHT: Rgb = (0.6471, 1.0, 0.2980); // #a5ff4c
 const REPLACE_FILL_LIGHT: Rgb = (0.7412, 0.8667, 1.0); // #bdddff
@@ -40,7 +40,7 @@ const REPLACE_LINE_LIGHT: Rgb = (0.3961, 0.6980, 1.0); // #65b2ff
 const CONFLICT_FILL_LIGHT: Rgb = (1.0, 0.6471, 0.6392); // #ffa5a3
 const CONFLICT_LINE_LIGHT: Rgb = (1.0, 0.3098, 0.2980); // #ff4f4c
 
-// ── meld-dark style scheme (dark) ───────────────────────────────────
+// meld-dark style scheme (dark)
 const INSERT_FILL_DARK: Rgb = (0.0706, 0.2196, 0.0235); // #123806
 const INSERT_LINE_DARK: Rgb = (0.1412, 0.3333, 0.0824); // #245515
 const REPLACE_FILL_DARK: Rgb = (0.0, 0.1961, 0.4); // #003266

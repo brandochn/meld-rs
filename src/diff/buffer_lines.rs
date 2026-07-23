@@ -76,9 +76,7 @@ impl BufferLines {
 
         // Fetch from buffer
         let start = self.buffer.iter_at_line_offset(index as i32, 0);
-        let end = crate::diff::filediff::iter_at_line_or_end(
-            &self.buffer, (index + 1) as i32,
-        );
+        let end = crate::diff::filediff::iter_at_line_or_end(&self.buffer, (index + 1) as i32);
 
         if let Some(s) = start {
             let raw = self.buffer.text(&s, &end, true).to_string();
@@ -149,8 +147,6 @@ impl BufferLines {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    // ── Signal wiring ──────────────────────────────────────────
 
     fn connect_signals(this: Rc<Self>) {
         let this_insert = Rc::clone(&this);

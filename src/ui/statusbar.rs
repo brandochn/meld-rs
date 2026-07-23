@@ -39,14 +39,13 @@ impl StatusBar {
         container.set_margin_top(2);
         container.set_margin_bottom(2);
 
-        // ── Display menu (left) ──
         let display_button = gtk::MenuButton::new();
         display_button.set_label("Display");
         display_button.add_css_class("flat");
         display_button.set_focus_on_click(false);
         display_button.set_popover(Some(&build_display_popover(view, line_gutter)));
 
-        // ── Spacer pushes the rest to the right, matching Meld ──
+        // Spacer pushes the rest to the right, matching Meld
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
 

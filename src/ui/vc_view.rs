@@ -31,7 +31,6 @@ impl VcView {
     pub fn new() -> Self {
         let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-        // ── ActionBar ──
         let action_bar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         action_bar.add_css_class("toolbar");
         action_bar.add_css_class("meld-actionbar");
@@ -61,7 +60,6 @@ impl VcView {
         action_bar.append(&refresh_btn);
         main_box.append(&action_bar);
 
-        // ── Paned: tree + console ──
         let paned = gtk::Paned::new(gtk::Orientation::Vertical);
         paned.set_position(350);
         paned.set_vexpand(true);
@@ -125,7 +123,6 @@ impl VcView {
         let file_activated_cb: Rc<RefCell<Option<FileActivatedCallback>>> =
             Rc::new(RefCell::new(None));
 
-        // ── Connect double-click on tree ──
         let cb_weak = Rc::downgrade(&file_activated_cb);
         let loc_row = Rc::clone(&location);
         let ent_row = Rc::clone(&entries);
@@ -155,7 +152,6 @@ impl VcView {
             handler(loc, entry.path.clone(), entry.status);
         });
 
-        // ── Connect all VC action buttons ──
         let vc = Self {
             container: main_box,
             tree_view,
