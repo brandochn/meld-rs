@@ -32,15 +32,15 @@ pub struct FilterEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeldSettings {
-    // ── GtkSettings overrides ──
+    // GtkSettings overrides
     #[serde(default)]
     pub prefer_dark_theme: bool,
 
-    // ── File loading ──
+    // File loading
     #[serde(default)]
     pub detect_encodings: Vec<String>,
 
-    // ── Editor properties ──
+    // Editor properties
     #[serde(default = "default_indent_width")]
     pub indent_width: i32,
     #[serde(default)]
@@ -62,17 +62,17 @@ pub struct MeldSettings {
     #[serde(default = "default_custom_font")]
     pub custom_font: String,
 
-    // ── Overview map ──
+    // Overview map
     #[serde(default = "default_true")]
     pub show_overview_map: bool,
     #[serde(default = "default_map_style")]
     pub overview_map_style: String,
 
-    // ── File comparison ──
+    // File comparison
     #[serde(default)]
     pub ignore_blank_lines: bool,
 
-    // ── Diff visualization ──
+    // Diff visualization
     #[serde(default = "default_true")]
     pub show_connectors: bool,
     #[serde(default = "default_inline_mode")]
@@ -80,13 +80,13 @@ pub struct MeldSettings {
     #[serde(default = "default_similarity_threshold")]
     pub similarity_threshold: f64,
 
-    // ── External helpers ──
+    // External helpers
     #[serde(default = "default_true")]
     pub use_system_editor: bool,
     #[serde(default)]
     pub custom_editor_command: String,
 
-    // ── Folder comparison ──
+    // Folder comparison
     #[serde(default = "default_folder_columns")]
     pub folder_columns: Vec<(String, bool)>,
     #[serde(default)]
@@ -100,7 +100,7 @@ pub struct MeldSettings {
     #[serde(default = "default_folder_status_filters")]
     pub folder_status_filters: Vec<String>,
 
-    // ── VC properties ──
+    // VC properties
     #[serde(default)]
     pub vc_console_visible: bool,
     #[serde(default = "default_console_pane")]
@@ -118,13 +118,13 @@ pub struct MeldSettings {
     #[serde(default = "default_vc_status_filters")]
     pub vc_status_filters: Vec<String>,
 
-    // ── Filters (predefined named filters with enabled state) ──
+    // Filters (predefined named filters with enabled state)
     #[serde(default = "default_filename_filters")]
     pub filename_filters: Vec<FilterEntry>,
     #[serde(default = "default_text_filters")]
     pub text_filters: Vec<FilterEntry>,
 
-    // ── Window state ──
+    // Window state
     #[serde(default = "default_neg1")]
     pub window_width: i32,
     #[serde(default = "default_neg1")]

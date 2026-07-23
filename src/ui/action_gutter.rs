@@ -85,7 +85,6 @@ impl ActionGutter {
         let buttons = Rc::new(RefCell::new(Vec::<(f64, f64, f64, f64, usize)>::new()));
         let action_mode = Rc::new(Cell::new(ActionMode::Replace));
 
-        // ── Scroll sync ──────────────────────────────────────────
         let da_weak = drawing_area.downgrade();
         if let Some(vadj) = source_view.vadjustment() {
             vadj.connect_value_changed(move |_| {
@@ -95,7 +94,6 @@ impl ActionGutter {
             });
         }
 
-        // ── Hover tracking (motion controller) ───────────────────
         let hover_rc = Rc::clone(&hovered);
         let buttons_mc = Rc::clone(&buttons);
         let dma_motion = drawing_area.clone();
@@ -127,7 +125,6 @@ impl ActionGutter {
         });
         drawing_area.add_controller(mc);
 
-        // ── Click gesture ────────────────────────────────────────
         let gesture = gtk::GestureClick::new();
         gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
 
@@ -236,7 +233,6 @@ impl ActionGutter {
         });
         drawing_area.add_controller(gesture);
 
-        // ── Draw function ────────────────────────────────────────
         let draw_source = source_view.clone();
         let draw_dir = direction;
         let draw_chunks = Rc::clone(&chunks);
@@ -381,8 +377,6 @@ impl ActionGutter {
     }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────
-
 /// Classify the appropriate action for a chunk based on the current mode.
 fn classify_action(chunk: &Chunk, mode: ActionMode) -> GutterAction {
     match mode {
@@ -394,8 +388,6 @@ fn classify_action(chunk: &Chunk, mode: ActionMode) -> GutterAction {
         ActionMode::Replace => GutterAction::Replace,
     }
 }
-
-// ─── Drawing ──────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
 fn draw_chunk_action(

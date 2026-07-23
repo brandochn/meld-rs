@@ -39,7 +39,6 @@ impl DiffMap {
         drawing_area.set_vexpand(true);
         drawing_area.add_css_class("chunkmap");
 
-        // ── Draw ──────────────────────────────────────────────────
         let draw_chunks = Rc::clone(&chunks);
         let draw_view = view.clone();
         drawing_area.set_draw_func(move |_, cr, width, height| {
@@ -57,7 +56,6 @@ impl DiffMap {
 
             cr.set_line_width(1.0);
 
-            // ── Coloured chunk blocks ─────────────────────────────
             for chunk in draw_chunks.borrow().iter() {
                 if chunk.op == DiffOp::Equal {
                     continue;
@@ -92,7 +90,6 @@ impl DiffMap {
                 cr.stroke().ok();
             }
 
-            // ── Scroll-position handle ────────────────────────────
             if let Some(adj) = draw_view.vadjustment() {
                 let upper = adj.upper();
                 let page = adj.page_size();
@@ -109,7 +106,6 @@ impl DiffMap {
             }
         });
 
-        // ── Redraw on scroll ──────────────────────────────────────
         if let Some(adj) = view.vadjustment() {
             let da = drawing_area.clone();
             adj.connect_value_changed(move |_| da.queue_draw());
@@ -117,7 +113,6 @@ impl DiffMap {
             adj.connect_changed(move |_| da.queue_draw());
         }
 
-        // ── Click / drag to scroll ────────────────────────────────
         let pressed = Rc::new(Cell::new(false));
 
         let scroll_to = {

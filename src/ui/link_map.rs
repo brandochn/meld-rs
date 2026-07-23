@@ -265,7 +265,6 @@ impl LinkMap {
             *draw_hover_zones.borrow_mut() = zones;
         });
 
-        // ── Motion controller for hover detection ──
         let mc = gtk::EventControllerMotion::new();
         let hover_zones_mc = Rc::clone(&hover_zones);
         let active_hover_mc = Rc::clone(&active_hover);

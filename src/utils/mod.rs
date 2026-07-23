@@ -84,8 +84,6 @@ pub fn remove_blank_lines(text: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    // ── all_same ───────────────────────────────────────────────────────
-
     #[test]
     fn test_all_same_empty() {
         let items: &[i32] = &[];
@@ -110,8 +108,6 @@ mod tests {
         assert!(!all_same(&[0, 1, 0]));
         assert!(!all_same(&["a", "b", "c"]));
     }
-
-    // ── remove_blank_lines ─────────────────────────────────────────────
 
     #[test]
     fn test_remove_blank_lines_empty() {

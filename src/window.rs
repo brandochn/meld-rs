@@ -81,10 +81,8 @@ impl MeldWindow {
         window.set_title(Some("Meld-rs"));
         window.set_default_size(1280, 720);
 
-        // ── Load settings ──
         let settings = Rc::new(MeldSettings::load().unwrap_or_default());
 
-        // ── Header bar ──
         let header = gtk::HeaderBar::new();
         header.set_show_title_buttons(true);
         window.set_titlebar(Some(&header));
@@ -162,7 +160,6 @@ impl MeldWindow {
         spinner.set_visible(false);
         header.pack_end(&spinner);
 
-        // ── Notebook ──
         let notebook = gtk::Notebook::new();
         notebook.set_scrollable(true);
         notebook.set_show_tabs(true);
@@ -293,8 +290,6 @@ impl MeldWindow {
         self.notebook.n_pages() > 0
     }
 
-    // ─── Private ───────────────────────────────────────────────────
-
     fn open_single_path(&self, gfile: &gio::File, focus: bool) {
         if let Some(path) = gfile.path() {
             let is_dir = path.is_dir();
@@ -382,7 +377,6 @@ impl MeldWindow {
         popover.set_child(Some(selector.widget()));
         recent_btn.set_popover(Some(&popover));
 
-        // ── Change navigation buttons ──
         let pages_nav = self.pages.clone();
         let nb_nav = self.notebook.clone();
         self.prev_change_btn.connect_clicked(move |_| {
@@ -405,7 +399,6 @@ impl MeldWindow {
             }
         });
 
-        // ── Conflict navigation buttons ──
         let pages_cnf = self.pages.clone();
         let nb_cnf = self.notebook.clone();
         self.prev_conflict_btn.connect_clicked(move |_| {
@@ -535,8 +528,6 @@ impl MeldWindow {
     }
 }
 
-// ─── Free functions ────────────────────────────────────────────────
-
 fn open_comparison_in_notebook(
     notebook: &gtk::Notebook,
     pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
@@ -607,7 +598,6 @@ fn open_vc_file_comparison(
     let working_path = std::path::Path::new(repo_root).join(relative_path);
 
     if status == VcFileStatus::Conflicted {
-        // ── 3-way merge for conflicted files ──
         let local_content = vc.get_conflict_path(relative_path, repo_root, ConflictKind::Local);
         let base_content = vc.get_conflict_path(relative_path, repo_root, ConflictKind::Base);
         let remote_content = vc.get_conflict_path(relative_path, repo_root, ConflictKind::Remote);
@@ -689,7 +679,6 @@ fn open_vc_file_comparison(
         notebook.append_page(filediff.widget(), Some(&lbl.widget));
         pages.borrow_mut().push(Box::new(filediff));
     } else {
-        // ── 2-way diff for normal files ──
         let repo_content = match vc.get_repo_file(relative_path, repo_root) {
             Ok(c) => c,
             Err(e) => {

@@ -140,7 +140,6 @@ fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
     font_btn.set_halign(gtk::Align::Start);
     page.append(&font_btn);
 
-    // ── Diff section separator ──
     let diff_section = gtk::Label::new(Some("Diff Visualization"));
     diff_section.set_halign(gtk::Align::Start);
     diff_section.set_xalign(0.0);
@@ -275,8 +274,6 @@ fn build_filters_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
 
     page
 }
-
-// ── Filter list helpers ───────────────────────────────────────────
 
 /// Build a vertical list of filter rows, each with a checkbox, name, and pattern.
 fn build_filter_list(entries: &[FilterEntry]) -> gtk::ListBox {

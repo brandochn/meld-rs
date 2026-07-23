@@ -36,7 +36,6 @@ use crate::ui::statusbar::StatusBar;
 use crate::ui::style;
 use crate::window::MeldPage;
 
-// â”€â”€â”€ FileDiff â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// The main file-comparison view supporting 2 or 3 panes.
 pub struct FileDiff {
@@ -105,7 +104,6 @@ struct PaneData {
 }
 
 impl FileDiff {
-    // â”€â”€ Constructor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Create a new `FileDiff` with the given number of text panes
     /// (typically 2 for file diff, 3 for merge).
@@ -118,11 +116,9 @@ impl FileDiff {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
         container.add_css_class("meld-notebook-child");
 
-        // â”€â”€ Shared message area â”€â”€
         let shared_msgarea = Rc::new(MsgArea::new());
         container.append(shared_msgarea.widget());
 
-        // â”€â”€ Main horizontal grid â”€â”€
         let grid = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         grid.set_vexpand(true);
         grid.set_hexpand(true);
@@ -130,14 +126,12 @@ impl FileDiff {
         let mut panes: Vec<PaneData> = Vec::with_capacity(num_panes);
         let mut labels: Vec<String> = Vec::with_capacity(num_panes);
 
-        // â”€â”€ Build each pane column â”€â”€
         for i in 0..num_panes {
             let pane = Self::build_pane_column(i, num_panes);
             labels.push(format!("File {}", i + 1));
             panes.push(pane);
         }
 
-        // â”€â”€ Build action gutters and link maps â”€â”€
         let mut gutters: Vec<Rc<ActionGutter>> = Vec::new();
         let mut link_maps: Vec<Rc<LinkMap>> = Vec::new();
 
@@ -194,7 +188,6 @@ impl FileDiff {
             gutters.push(Rc::clone(&ag3));
         }
 
-        // â”€â”€ Assemble the horizontal layout â”€â”€
         // Layout: [pane0_vbox] [gutter] [linkmap] [gutter] [pane1_vbox] [gutter] [linkmap] [gutter] [pane2_vbox]
         // We use a GtkBox for each pane and insert gutters/linkmaps between.
 
@@ -247,7 +240,6 @@ impl FileDiff {
         // Shared chunk list, read by the overview maps and per-pane overlays.
         let chunks: Rc<RefCell<Vec<Chunk>>> = Rc::new(RefCell::new(Vec::new()));
 
-        // â”€â”€ Overview maps (right-hand chunk map) â”€â”€
         // One narrow strip per displayed pane, mirroring Meld's sourcemap.
         let map_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         map_box.add_css_class("sourcemap-container");
@@ -314,7 +306,6 @@ impl FileDiff {
         fd
     }
 
-    // â”€â”€ Pane column builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn build_pane_column(index: usize, _num_panes: usize) -> PaneData {
         let scrolled = gtk::ScrolledWindow::new();
@@ -390,8 +381,6 @@ impl FileDiff {
         }
     }
 
-    // â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
     /// Load files from disk into the panes.
     pub fn set_files(&self, gfiles: &[gio::File]) {
         self.loading.set(true);
@@ -466,7 +455,7 @@ impl FileDiff {
     /// Apply the configured font to all panes.
     ///
     /// When `use_system_font` is true the monospace font is read from the
-    /// system (Windows: "Consolas 11", Linux: GSettings monospace-font-name).
+    /// system (Windows: "Consolas 12", Linux: GSettings monospace-font-name).
     /// Otherwise the `custom_font` string (e.g. "Consolas 12") is applied.
     /// Font is applied via CSS provider since GTK4 removed `override_font`.
     pub fn set_font(&self, use_system: bool, custom: &str) {
@@ -475,7 +464,7 @@ impl FileDiff {
         } else if !custom.is_empty() {
             custom.to_string()
         } else {
-            "monospace 11".to_string()
+            "monospace 12".to_string()
         };
         let desc = pango::FontDescription::from_string(&font_str);
         let provider = gtk::CssProvider::new();
@@ -635,21 +624,20 @@ impl FileDiff {
 fn get_system_monospace_font() -> String {
     #[cfg(target_os = "windows")]
     {
-        return "Consolas 11".to_string();
+        return "Consolas 12".to_string();
     }
     #[cfg(not(target_os = "windows"))]
     {
         if let Some(src) = gio::SettingsSchemaSource::default() {
             if src.lookup("org.gnome.desktop.interface", true).is_some() {
                 let settings = gio::Settings::new("org.gnome.desktop.interface");
-                if let Ok(name) = settings.string("monospace-font-name") {
-                    if !name.is_empty() {
-                        return name.to_string();
-                    }
+                let name = settings.string("monospace-font-name");
+                if !name.is_empty() {
+                    return name.to_string();
                 }
             }
         }
-        "monospace 11".to_string()
+        "monospace 12".to_string()
     }
 }
 
@@ -1121,7 +1109,6 @@ impl FileDiff {
         self.panes[pane].view.set_editable(editable);
     }
 
-    // â”€â”€ Private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn apply_diff_tags(&self, pane: usize, chunks: &[Chunk]) {
         if pane >= self.panes.len() {
@@ -1273,7 +1260,6 @@ impl FileDiff {
 
         let scroll_lock: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
-        // â”€â”€ Pane 0 â†” Pane 1 bidirectional sync with proportional chunk mapping â”€â”€
         let adj0 = self.panes[0].view.vadjustment();
         let adj1 = self.panes[1].view.vadjustment();
 
@@ -1340,7 +1326,6 @@ impl FileDiff {
             });
         }
 
-        // â”€â”€ Pane 1 â†” Pane 2 bidirectional sync (3-pane mode) â”€â”€
         if self.panes.len() >= 3 {
             let adj1b = self.panes[1].view.vadjustment();
             let adj2 = self.panes[2].view.vadjustment();
@@ -1927,7 +1912,6 @@ impl FileDiff {
     }
 }
 
-// â”€â”€â”€ MeldPage impl â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 impl MeldPage for FileDiff {
     fn widget(&self) -> &gtk::Widget {
@@ -1996,7 +1980,6 @@ impl Drop for FileDiff {
     }
 }
 
-// â”€â”€â”€ Tag helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn highlight_range(buffer: &gsv::Buffer, tag_name: &str, start_line: usize, end_line: usize) {
     if start_line >= end_line {
@@ -2413,7 +2396,6 @@ fn ensure_tag(tag_table: &gtk::TextTagTable, name: &str, bg: &str, fg: &str) {
     }
 }
 
-// â”€â”€â”€ Chunk operation helpers (for use by gutter callbacks) â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Duration of the fading highlight animation for chunk actions (microseconds).
 const FADE_DURATION_US: u32 = 500_000; // 500ms

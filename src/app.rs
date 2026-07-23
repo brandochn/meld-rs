@@ -6,8 +6,10 @@
 use glib::prelude::*;
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use std::cell::Cell;
 use std::path::Path;
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use crate::window::MeldWindow;
 
@@ -145,7 +147,7 @@ pub struct MeldApp {
 
 impl MeldApp {
     pub fn new() -> Self {
-        let app = gtk::Application::new(Some(APP_ID), gio::ApplicationFlags::empty());
+        let app = gtk::Application::new(Some(APP_ID), gio::ApplicationFlags::HANDLES_COMMAND_LINE);
         glib::set_application_name(APP_NAME);
         glib::set_prgname(Some(APP_ID));
         gtk::Window::set_default_icon_name(APP_ID);
@@ -160,23 +162,40 @@ impl MeldApp {
         Self { app }
     }
 
-    pub fn run_with_args(&self, args: &[String]) -> ExitCode {
-        let opts = match parse_args(args) {
-            Ok(o) => o,
-            Err(e) => {
-                eprintln!("Error: {e}");
-                return ExitCode::from(2);
-            }
-        };
+    pub fn run_with_args(&self, _args: &[String]) -> ExitCode {
+        let initialized = Rc::new(Cell::new(false));
 
-        let opts = std::sync::Arc::new(std::sync::Mutex::new(Some(opts)));
+        // HANDLES_COMMAND_LINE tells GLib not to process the command line
+        // itself. The `command-line` signal is emitted with the raw args
+        // and we handle all CLI parsing here.
+        let init_cl = Rc::clone(&initialized);
+        self.app.connect_command_line(move |app, cmd_line| {
+            ensure_initialized(app, &init_cl);
+
+            let cmd_args: Vec<String> = cmd_line
+                .arguments()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+
+            let opts = match parse_args(&cmd_args) {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    cmd_line.set_exit_status(2);
+                    return glib::ExitCode::from(2);
+                }
+            };
+
+            open_comparisons(app, &opts);
+            glib::ExitCode::SUCCESS
+        });
+
+        // Activate is still emitted for D-Bus activation (desktop menu, etc.).
+        let init_ac = Rc::clone(&initialized);
         self.app.connect_activate(move |app| {
-            setup_actions(app);
-            setup_css();
-            setup_style_schemes();
-            if let Some(o) = opts.lock().ok().and_then(|mut o| o.take()) {
-                open_comparisons(app, &o);
-            } else if app.windows().iter().count() == 0 {
+            ensure_initialized(app, &init_ac);
+            if app.windows().iter().count() == 0 {
                 let window = MeldWindow::new(app);
                 window.present();
             }
@@ -210,6 +229,20 @@ fn setup_actions(app: &gtk::Application) {
         // Preferences would be shown here
     });
     app.add_action(&prefs);
+}
+
+/// Run one-time application setup (actions, CSS, style schemes).
+///
+/// Guarded by a [`Cell<bool>`] so it is only executed once, whether the
+/// app is launched via the `command-line` signal or D-Bus `activate`.
+fn ensure_initialized(app: &gtk::Application, done: &Cell<bool>) {
+    if done.get() {
+        return;
+    }
+    setup_actions(app);
+    setup_css();
+    setup_style_schemes();
+    done.set(true);
 }
 
 fn setup_css() {
