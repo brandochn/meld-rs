@@ -22,6 +22,10 @@ comparison, 3-way merge, and version control integration (Git, SVN, Mercurial).
 - Session management with multiple tabs
 - Command-line integration (`meld-rs <file1> <file2> [file3]`)
 
+## Screenshots
+
+![Meld-rs screenshot](screenshots/Meld-rs.png)
+
 ## Requirements
 
 - **Rust** 1.81 or later
