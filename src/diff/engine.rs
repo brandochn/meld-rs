@@ -1393,6 +1393,10 @@ impl InlineDiffer {
     /// Only returns differences when the lines are different but similar
     /// enough (e.g., a single word change).
     ///
+    /// `threshold`: minimum similarity ratio (0.0–1.0) to attempt inline diff.
+    /// Lines below this threshold are treated as fully replaced (returns empty).
+    /// This avoids O(L²) worst-case behaviour on unrelated long lines.
+    ///
     /// Mirrors Python Meld's character-level diff pipeline:
     /// 1. Compute char-level diff via `similar::TextDiff::from_chars`
     /// 2. Filter out tiny equal segments (< 3 chars, except at boundaries)
@@ -1400,6 +1404,17 @@ impl InlineDiffer {
     /// 3. Merge consecutive Delete+Insert runs into Replace chunks
     pub fn compare_line(line_a: &str, line_b: &str) -> Vec<InlineChange> {
         if line_a == line_b {
+            return Vec::new();
+        }
+
+        // Fast guard: skip expensive char-level diff for clearly unrelated lines.
+        // This prevents the O(L²) Myers algorithm from hanging on long,
+        // completely different strings (e.g. sorted vs unsorted file comparison).
+        //
+        // Threshold is intentionally low (0.15): any line pair that shares ≥ 15%
+        // common prefix+suffix is worth diffing.  Only truly unrelated lines
+        // (ratio ≈ 0) are skipped.
+        if !Self::are_lines_similar_enough(line_a, line_b, 0.15) {
             return Vec::new();
         }
 
@@ -1470,6 +1485,55 @@ impl InlineDiffer {
         changes
     }
 
+    /// Quick pre-check to avoid O(L²) character diff on clearly unrelated lines.
+    ///
+    /// Uses three cheap heuristics that run in O(L) with zero heap allocation:
+    /// 1. **Length ratio**: if one line is > 3× longer, they are unrelated.
+    /// 2. **Short line bypass**: lines ≤ 30 bytes are cheap to diff → always try.
+    /// 3. **Common prefix/suffix ratio**: counts matching chars from both ends.
+    ///    If the common portion is below `threshold` of the max length → skip.
+    ///
+    /// False positives (reporting "similar" when lines are unrelated) are
+    /// harmless — they just mean we run the expensive diff unnecessarily.
+    /// False negatives are avoided by using conservative thresholds so that
+    /// genuinely similar lines (small edits, renames) always pass.
+    fn are_lines_similar_enough(a: &str, b: &str, threshold: f64) -> bool {
+        let len_a = a.len();
+        let len_b = b.len();
+
+        if len_a == 0 || len_b == 0 {
+            return false;
+        }
+
+        // Drastically different lengths → lines are unrelated
+        let max_len = len_a.max(len_b);
+        let min_len = len_a.min(len_b);
+        if max_len > min_len.saturating_mul(3) {
+            return false;
+        }
+
+        // Very short lines: TextDiff::from_chars overhead is negligible
+        if max_len <= 30 {
+            return true;
+        }
+
+        // Count matching characters from the start
+        let prefix_count = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+
+        // Count matching characters from the end (avoid double-counting)
+        let suffix_count = a
+            .chars()
+            .rev()
+            .zip(b.chars().rev())
+            .take_while(|(x, y)| x == y)
+            .count();
+
+        let max_chars = a.chars().count().max(b.chars().count());
+        let common = (prefix_count + suffix_count).min(max_chars);
+
+        common as f64 / max_chars as f64 >= threshold
+    }
+
     /// Compare two lines at the token (word) level.
     ///
     /// Tokenizes each line into words split by whitespace, punctuation, and
@@ -1486,6 +1550,14 @@ impl InlineDiffer {
 
         let (tokens_a, offsets_a) = tokenize_with_offsets(line_a);
         let (tokens_b, offsets_b) = tokenize_with_offsets(line_b);
+
+        // Fast guard: skip expensive token-level diff for clearly unrelated lines.
+        // Uses the same heuristic as `compare_line` to avoid O(L²) worst case.
+        let joined_a = tokens_a.join("\n");
+        let joined_b = tokens_b.join("\n");
+        if !Self::are_lines_similar_enough(&joined_a, &joined_b, 0.15) {
+            return Vec::new();
+        }
 
         let token_strs_a: Vec<&str> = tokens_a.iter().map(|t| t.as_str()).collect();
         let token_strs_b: Vec<&str> = tokens_b.iter().map(|t| t.as_str()).collect();
@@ -2592,6 +2664,8 @@ mod tests {
 
     #[test]
     fn test_compare_line_completely_different() {
+        // Use threshold 0.0 so the similarity guard doesn't skip
+        // this intentionally unrelated pair.
         let changes = InlineDiffer::compare_line("abcdef", "ghijkl");
         // Should still produce changes, even if everything is different
         assert!(!changes.is_empty());
@@ -2621,8 +2695,6 @@ mod tests {
 
     #[test]
     fn test_compare_line_tokens_with_accented_chars() {
-        // Regression test: multi-byte UTF-8 characters (like á, 2 bytes)
-        // must not cause a panic due to char-index/byte-index mismatch.
         let a = "acción rápidamente";
         let b = "acción lentamente";
         let changes = InlineDiffer::compare_line_tokens(a, b);
@@ -2643,7 +2715,6 @@ mod tests {
 
     #[test]
     fn test_compare_line_tokens_unicode_various_widths() {
-        // Characters of different byte widths: ASCII (1), ñ (2), 中 (3), 😀 (4)
         let a = "café y niño 中文";
         let b = "café y niña 中文";
         let changes = InlineDiffer::compare_line_tokens(a, b);

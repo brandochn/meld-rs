@@ -36,7 +36,6 @@ use crate::ui::statusbar::StatusBar;
 use crate::ui::style;
 use crate::window::MeldPage;
 
-
 /// The main file-comparison view supporting 2 or 3 panes.
 pub struct FileDiff {
     /// Top-level vertical container.
@@ -104,7 +103,6 @@ struct PaneData {
 }
 
 impl FileDiff {
-
     /// Create a new `FileDiff` with the given number of text panes
     /// (typically 2 for file diff, 3 for merge).
     pub fn new(num_panes: usize) -> Self {
@@ -305,7 +303,6 @@ impl FileDiff {
 
         fd
     }
-
 
     fn build_pane_column(index: usize, _num_panes: usize) -> PaneData {
         let scrolled = gtk::ScrolledWindow::new();
@@ -1109,7 +1106,6 @@ impl FileDiff {
         self.panes[pane].view.set_editable(editable);
     }
 
-
     fn apply_diff_tags(&self, pane: usize, chunks: &[Chunk]) {
         if pane >= self.panes.len() {
             return;
@@ -1912,7 +1908,6 @@ impl FileDiff {
     }
 }
 
-
 impl MeldPage for FileDiff {
     fn widget(&self) -> &gtk::Widget {
         self.container.upcast_ref()
@@ -1979,7 +1974,6 @@ impl Drop for FileDiff {
         }
     }
 }
-
 
 fn highlight_range(buffer: &gsv::Buffer, tag_name: &str, start_line: usize, end_line: usize) {
     if start_line >= end_line {
@@ -2214,6 +2208,14 @@ fn apply_inline_diff(
     let count_a = end_a - start_a;
     let count_b = end_b - start_b;
 
+    // Guard: skip inline diff for very large Replace chunks.
+    // A Replace with hundreds of lines is likely a wholesale section
+    // replacement where per-character highlighting adds no value.
+    const MAX_INLINE_CHUNK_LINES: usize = 500;
+    if count_a > MAX_INLINE_CHUNK_LINES || count_b > MAX_INLINE_CHUNK_LINES {
+        return;
+    }
+
     // --- Meld-style full-chunk diff (when line counts differ) ---
     // Extract the complete text of the Replace chunk from both buffers
     // and run character-level diff on it.  Offsets are relative to the
@@ -2395,7 +2397,6 @@ fn ensure_tag(tag_table: &gtk::TextTagTable, name: &str, bg: &str, fg: &str) {
         tag_table.add(&tag);
     }
 }
-
 
 /// Duration of the fading highlight animation for chunk actions (microseconds).
 const FADE_DURATION_US: u32 = 500_000; // 500ms
