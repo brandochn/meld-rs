@@ -246,7 +246,7 @@ impl MeldWindow {
         if let Some(out) = output {
             filediff.set_merge_output_file(out);
         }
-        let label = TabLabel::new("Merge");
+        let label = create_closeable_tab_label("Merge", &self.notebook, &self.pages);
         self.notebook
             .append_page(filediff.widget(), Some(&label.widget));
         self.pages.borrow_mut().push(Box::new(filediff));
@@ -278,7 +278,7 @@ impl MeldWindow {
             );
         });
 
-        let label = TabLabel::new("Version Control");
+        let label = create_closeable_tab_label("Version Control", &self.notebook, &self.pages);
         self.notebook
             .append_page(view.widget(), Some(&label.widget));
         self.pages.borrow_mut().push(Box::new(view));
@@ -315,7 +315,7 @@ impl MeldWindow {
 
     fn create_and_append_new_diff_tab(&self) {
         let tab = crate::ui::new_diff_tab();
-        let label = TabLabel::new("New comparison");
+        let label = create_closeable_tab_label("New comparison", &self.notebook, &self.pages);
         self.wire_new_diff_tab(&tab);
         self.notebook.append_page(tab.widget(), Some(&label.widget));
         self.pages.borrow_mut().push(Box::new(tab));
@@ -366,7 +366,7 @@ impl MeldWindow {
         let w = self.window.clone();
         new_btn.connect_clicked(move |_| {
             let tab = crate::ui::new_diff_tab();
-            let label = TabLabel::new("New comparison");
+            let label = create_closeable_tab_label("New comparison", &nb, &pages);
             wire_new_diff_tab_standalone(&tab, &nb, &pages, &settings, &w);
             nb.append_page(tab.widget(), Some(&label.widget));
             pages.borrow_mut().push(Box::new(tab));
@@ -455,7 +455,7 @@ impl MeldWindow {
         let new_action = gio::SimpleAction::new("new-tab", None);
         new_action.connect_activate(move |_, _| {
             let tab = crate::ui::new_diff_tab();
-            let label = TabLabel::new("New comparison");
+            let label = create_closeable_tab_label("New comparison", &nb, &pages);
             wire_new_diff_tab_standalone(&tab, &nb, &pages, &settings, &w);
             nb.append_page(tab.widget(), Some(&label.widget));
             pages.borrow_mut().push(Box::new(tab));
@@ -545,7 +545,7 @@ fn open_comparison_in_notebook(
         if auto_compare {
             dirdiff.auto_compare();
         }
-        let label = TabLabel::new("Directory Comparison");
+        let label = create_closeable_tab_label("Directory Comparison", notebook, pages);
         notebook.append_page(dirdiff.widget(), Some(&label.widget));
         pages.borrow_mut().push(Box::new(dirdiff));
     } else {
@@ -559,7 +559,7 @@ fn open_comparison_in_notebook(
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(gfiles);
-        let label = TabLabel::new("File Comparison");
+        let label = create_closeable_tab_label("File Comparison", notebook, pages);
         notebook.append_page(filediff.widget(), Some(&label.widget));
         pages.borrow_mut().push(Box::new(filediff));
     }
@@ -622,7 +622,11 @@ fn open_vc_file_comparison(
                     filediff.connect_gutter_key_modes(window);
                     filediff.set_files(&files);
                     filediff.set_labels(&[format!("{} — local", relative_path), String::new()]);
-                    let label = TabLabel::new(&format!("{} (working, repository)", relative_path));
+                    let label = create_closeable_tab_label(
+                        &format!("{} (working, repository)", relative_path),
+                        notebook,
+                        pages,
+                    );
                     notebook.append_page(filediff.widget(), Some(&label.widget));
                     pages.borrow_mut().push(Box::new(filediff));
                     return;
@@ -675,7 +679,7 @@ fn open_vc_file_comparison(
         filediff.set_files(&files);
         filediff.set_labels(&labels);
         filediff.set_merge_output_file(&working_path.to_string_lossy().into_owned());
-        let lbl = TabLabel::new(&tab_label);
+        let lbl = create_closeable_tab_label(&tab_label, notebook, pages);
         notebook.append_page(filediff.widget(), Some(&lbl.widget));
         pages.borrow_mut().push(Box::new(filediff));
     } else {
@@ -726,7 +730,7 @@ fn open_vc_file_comparison(
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
-        let lbl = TabLabel::new(&tab_label);
+        let lbl = create_closeable_tab_label(&tab_label, notebook, pages);
         notebook.append_page(filediff.widget(), Some(&lbl.widget));
         pages.borrow_mut().push(Box::new(filediff));
     }
@@ -805,7 +809,7 @@ fn handle_diff_request(
                     "File Comparison".to_string()
                 }
             };
-            let lbl = TabLabel::new(&label);
+            let lbl = create_closeable_tab_label(&label, notebook, pages);
             notebook.append_page(fd.widget(), Some(&lbl.widget));
             pages.borrow_mut().push(Box::new(fd));
         }
@@ -841,7 +845,7 @@ fn handle_diff_request(
                     "Directory Comparison".to_string()
                 }
             };
-            let lbl = TabLabel::new(&label);
+            let lbl = create_closeable_tab_label(&label, notebook, pages);
             notebook.append_page(dd.widget(), Some(&lbl.widget));
             pages.borrow_mut().push(Box::new(dd));
         }
@@ -850,7 +854,7 @@ fn handle_diff_request(
             if let Some(path) = req.paths.first().and_then(|o| o.as_ref()) {
                 let vc = VcView::new();
                 vc.set_location(&path.to_string_lossy().to_string());
-                let lbl = TabLabel::new("Version Control");
+                let lbl = create_closeable_tab_label("Version Control", notebook, pages);
                 notebook.append_page(vc.widget(), Some(&lbl.widget));
                 pages.borrow_mut().push(Box::new(vc));
             }
@@ -902,6 +906,48 @@ fn wire_new_diff_tab_standalone(
             glib::ControlFlow::Break
         });
     }));
+}
+
+/// Create a tab label whose close button actually closes the tab.
+///
+/// The close button triggers [`MeldPage::close`] and, if the page agrees
+/// (returns [`gtk::ResponseType::Ok`]), removes the tab from the notebook.
+fn create_closeable_tab_label(
+    text: &str,
+    notebook: &gtk::Notebook,
+    pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+) -> TabLabel {
+    let label = TabLabel::new(text);
+    let nb = notebook.clone();
+    let p = Rc::clone(pages);
+    let label_widget = label.widget.clone();
+
+    label.connect_close(move || {
+        // Find the page by matching our tab label widget against
+        // each page's tab label.  `page_num()` looks up by child
+        // widget, not by tab widget, so we iterate instead.
+        let n = nb.n_pages() as i32;
+        for i in 0..n {
+            if let Some(child) = nb.nth_page(Some(i as u32)) {
+                if let Some(tab) = nb.tab_label(&child) {
+                    if tab == label_widget {
+                        let resp = p
+                            .borrow()
+                            .get(i as usize)
+                            .map(|pg| pg.close())
+                            .unwrap_or(gtk::ResponseType::Cancel);
+                        if resp == gtk::ResponseType::Ok {
+                            p.borrow_mut().remove(i as usize);
+                            nb.remove_page(Some(i as u32));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    label
 }
 
 /// Build the complete gear menu matching `menus.ui`.

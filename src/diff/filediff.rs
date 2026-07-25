@@ -381,6 +381,17 @@ impl FileDiff {
     /// Load files from disk into the panes.
     pub fn set_files(&self, gfiles: &[gio::File]) {
         self.loading.set(true);
+
+        // Store file paths so Save / Discard can read and write them later.
+        {
+            let mut paths = self.file_paths.borrow_mut();
+            for (i, gfile) in gfiles.iter().enumerate().take(self.num_panes) {
+                if i < paths.len() {
+                    paths[i] = Some(gfile.clone());
+                }
+            }
+        }
+
         for (i, gfile) in gfiles.iter().enumerate().take(self.num_panes) {
             if let Some(path) = gfile.path() {
                 let path_str = path.to_string_lossy().into_owned();
@@ -1361,13 +1372,35 @@ impl FileDiff {
     }
 
     fn connect_save_buttons(&self) {
-        for pane in &self.panes {
+        for (i, pane) in self.panes.iter().enumerate() {
             let buffer = pane.buffer.clone();
             let msgarea = Rc::clone(&pane.msgarea);
+            let file_paths = Rc::clone(&self.file_paths);
             pane.save_button.connect_clicked(move |_| {
                 let text = buffer_text_lines(&buffer).join("\n");
-                log::info!("Save requested ({} bytes)", text.len());
-                msgarea.show_info("Save functionality: use Ctrl+S or menu");
+                if let Some(path) = file_paths
+                    .borrow()
+                    .get(i)
+                    .and_then(|f| f.as_ref())
+                    .and_then(|f| f.path())
+                {
+                    match std::fs::write(&path, &text) {
+                        Ok(()) => {
+                            buffer.set_modified(false);
+                            msgarea.show_info(&format!(
+                                "Saved {}",
+                                path.file_name()
+                                    .map(|n| n.to_string_lossy())
+                                    .unwrap_or_else(|| path.to_string_lossy().into())
+                            ));
+                        }
+                        Err(e) => {
+                            msgarea.show_error(&format!("Save failed: {e}"));
+                        }
+                    }
+                } else {
+                    msgarea.show_info("No file path to save to.");
+                }
             });
         }
     }
@@ -1915,13 +1948,148 @@ impl MeldPage for FileDiff {
 
     fn close(&self) -> gtk::ResponseType {
         self.diff_state.borrow_mut().cancel_all();
-        if let Some(out) = self.merge_output.borrow().as_ref() {
-            if self.num_panes >= 3 {
-                let text = buffer_text_lines(&self.panes[self.num_panes - 1].buffer).join("\n");
-                let _ = std::fs::write(out, &text);
+
+        // Check for unsaved changes before closing.
+        let modified: Vec<(usize, &PaneData)> = self
+            .panes
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.buffer.is_modified())
+            .collect();
+
+        if !modified.is_empty() {
+            let file_names: Vec<String> = modified
+                .iter()
+                .map(|(i, _)| {
+                    self.file_paths
+                        .borrow()
+                        .get(*i)
+                        .and_then(|f| f.as_ref())
+                        .and_then(|f| f.path())
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| format!("Pane {}", i + 1))
+                })
+                .collect();
+
+            let msg = if modified.len() == 1 {
+                format!(
+                    "Save changes to \"{}\" before closing?",
+                    file_names[0]
+                )
+            } else {
+                format!("Save changes to {} files before closing?", modified.len())
+            };
+
+            // Find the toplevel window so the dialog is centered on the app.
+            let parent = self
+                .container
+                .root()
+                .and_then(|r| r.downcast::<gtk::Window>().ok());
+
+            let dialog = gtk::MessageDialog::new(
+                parent.as_ref(),
+                gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+                gtk::MessageType::Question,
+                gtk::ButtonsType::None,
+                &msg,
+            );
+            dialog.set_secondary_text(Some("If you don't save, changes will be lost."));
+            dialog.add_button("_Cancel", gtk::ResponseType::Cancel);
+            dialog.add_button("_Discard", gtk::ResponseType::No);
+            dialog.add_button("_Save", gtk::ResponseType::Yes);
+
+            // GTK4 removed gtk_dialog_run(); run a nested event loop
+            // via MainContext::iteration() to wait for the user response.
+            // Use ResponseType::None (-1) as sentinel so that every button
+            // (including Cancel, which also maps to ResponseType::Cancel)
+            // breaks out of the loop.
+            let response = Rc::new(Cell::new(gtk::ResponseType::None));
+            let resp_clone = Rc::clone(&response);
+            // Do NOT call d.close() or d.destroy() here: closing the
+            // dialog emits a second "response" signal with DELETE_EVENT
+            // which would overwrite the button's response ID.
+            dialog.connect_response(move |_d, resp| {
+                resp_clone.set(resp);
+            });
+            dialog.present();
+
+            let ctx = glib::MainContext::default();
+            while response.get() == gtk::ResponseType::None {
+                ctx.iteration(true);
             }
+
+            // Destroy the dialog now — unlike close(), destroy() does
+            // NOT emit another response signal (GTK4 docs guarantee this).
+            dialog.destroy();
+
+            match response.get() {
+                gtk::ResponseType::Yes => {
+                    for (i, pane) in &modified {
+                        let text =
+                            buffer_text_lines(&pane.buffer).join("\n");
+                        if let Some(path) = self
+                            .file_paths
+                            .borrow()
+                            .get(*i)
+                            .and_then(|f| f.as_ref())
+                            .and_then(|f| f.path())
+                        {
+                            if let Err(e) = std::fs::write(&path, &text) {
+                                log::error!(
+                                    "Failed to save {}: {}",
+                                    path.display(),
+                                    e
+                                );
+                                return gtk::ResponseType::Cancel;
+                            }
+                            pane.buffer.set_modified(false);
+                        }
+                    }
+                    gtk::ResponseType::Ok
+                }
+                gtk::ResponseType::No => {
+                    // Discard — reload original content from disk
+                    // but keep the tab open so the user can verify.
+                    self.loading.set(true);
+                    for (i, pane) in &modified {
+                        let path_opt = self
+                            .file_paths
+                            .borrow()
+                            .get(*i)
+                            .and_then(|f| f.as_ref())
+                            .and_then(|f| f.path());
+
+                        if let Some(ref path) = path_opt {
+                            let path_str = path.to_string_lossy().into_owned();
+                            self.load_file_sync(*i, &path_str);
+                        } else {
+                            log::warn!(
+                                "Discard: no file path for pane {} — ",
+                                i + 1
+                            );
+                        }
+                        pane.buffer.set_modified(false);
+                    }
+                    self.loading.set(false);
+                    self.compute_diff();
+                    // Return Cancel so the tab stays open.
+                    gtk::ResponseType::Cancel
+                }
+                _ => gtk::ResponseType::Cancel,
+            }
+        } else {
+            // No unsaved changes in regular panes.
+            // For 3-way merge, write the merged output if configured.
+            if let Some(out) = self.merge_output.borrow().as_ref() {
+                if self.num_panes >= 3 {
+                    let text =
+                        buffer_text_lines(&self.panes[self.num_panes - 1].buffer)
+                            .join("\n");
+                    let _ = std::fs::write(out, &text);
+                }
+            }
+            gtk::ResponseType::Ok
         }
-        gtk::ResponseType::Ok
     }
 
     fn label(&self) -> String {
