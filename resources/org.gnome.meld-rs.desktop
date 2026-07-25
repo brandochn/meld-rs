@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Meld-rs
+Comment=Visual diff and merge tool
+Exec=meld-rs %F
+Icon=org.gnome.meld-rs
+Type=Application
+Terminal=false
+Categories=GTK;Development;
+MimeType=text/plain;text/x-patch;inode/directory;
+StartupNotify=true
+Keywords=diff;merge;compare;files;directories;version control;

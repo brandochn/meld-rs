@@ -3,6 +3,12 @@
 //! On start, locates the GSettings schema directory (needed by GTK4 file
 //! dialogs on all platforms) via `XDG_DATA_DIRS`, then initialises GTK4.
 
+// Hide the console window on Windows in release builds.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -33,11 +39,14 @@ fn init_data_dir() {
     }
 
     // 2. MSYS2 MINGW64/share — GTK4 system schemas (FileChooser, etc.)
-    //    Detected via MINGW_PREFIX env var (set by scripts/run.ps1)
-    //    or by walking PATH to find the GTK4 DLL location.
+    //    Detected via MINGW_PREFIX env var (set by scripts/run.ps1 or
+    //    the git wrapper).  If the path does not exist on this platform
+    //    (e.g. Unix-style /mingw64 on Windows), fall back to scanning
+    //    PATH for the GTK4 DLL.
     let system_share = std::env::var("MINGW_PREFIX")
         .ok()
         .map(|p| PathBuf::from(&p).join("share"))
+        .filter(|p| p.exists())
         .or_else(|| {
             // Fallback: find libgtk-4-1.dll in PATH and use its share/
             std::env::var("PATH").ok().and_then(|path| {
@@ -88,6 +97,7 @@ fn main() -> ExitCode {
         gtk4::init().expect("Failed to initialize GTK4");
 
         let args: Vec<String> = std::env::args().collect();
+
         let app = meld_rs::app::MeldApp::new();
         app.run_with_args(&args)
     }
