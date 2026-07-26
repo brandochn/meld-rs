@@ -162,7 +162,7 @@ impl MeldApp {
         Self { app }
     }
 
-    pub fn run_with_args(&self, _args: &[String]) -> ExitCode {
+    pub fn run_with_args(&self, args: &[String]) -> ExitCode {
         let initialized = Rc::new(Cell::new(false));
 
         // HANDLES_COMMAND_LINE tells GLib not to process the command line
@@ -178,10 +178,13 @@ impl MeldApp {
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect();
 
+            log::info!("command-line args: {:?}", &cmd_args);
+
             let opts = match parse_args(&cmd_args) {
                 Ok(o) => o,
                 Err(e) => {
-                    eprintln!("Error: {e}");
+                    log::error!("CLI parse error: {e}");
+                    crate::log_diag(&format!("Error parsing arguments: {e}"));
                     cmd_line.set_exit_status(2);
                     return glib::ExitCode::from(2);
                 }
@@ -201,8 +204,16 @@ impl MeldApp {
             }
         });
 
-        self.app.run();
-        ExitCode::SUCCESS
+        // Pass explicit args to GLib so the `command-line` signal receives
+        // them reliably on all platforms (especially Windows GUI-subsystem).
+        let string_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let exit_code = self.app.run_with_args(&string_args);
+
+        if exit_code == glib::ExitCode::SUCCESS {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        }
     }
 }
 

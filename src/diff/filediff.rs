@@ -293,6 +293,7 @@ impl FileDiff {
         // Wire up everything
         fd.sync_scroll();
         fd.connect_save_buttons();
+        fd.connect_save_shortcut();
         fd.connect_buffer_signals(loading);
         fd.connect_gutter_signals();
         fd.connect_focus_tracking();
@@ -431,6 +432,9 @@ impl FileDiff {
         match std::fs::read_to_string(path) {
             Ok(content) => {
                 buffer.set_text(&content);
+                // set_text marks the buffer as modified; clear it since
+                // the buffer now matches the on-disk content.
+                buffer.set_modified(false);
                 statusbar.set_encoding("UTF-8");
                 // GtkTextBuffer leaves the cursor at the end after set_text;
                 // move it to the start so the status bar reads "Ln 1, Col 1".
@@ -1405,6 +1409,57 @@ impl FileDiff {
         }
     }
 
+    /// Wire Ctrl+S to save the currently focused pane.
+    fn connect_save_shortcut(&self) {
+        let focused = Rc::clone(&self.focused_pane);
+        let file_paths = Rc::clone(&self.file_paths);
+        let panes: Vec<_> = self
+            .panes
+            .iter()
+            .map(|p| (p.buffer.clone(), p.msgarea.clone()))
+            .collect();
+
+        let key_ctrl = gtk::EventControllerKey::builder()
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+
+        key_ctrl.connect_key_pressed(move |_, keyval, _, modifier| {
+            let is_ctrl = modifier.contains(gdk::ModifierType::CONTROL_MASK);
+            let is_s =
+                keyval.name().as_deref() == Some("s") || keyval.name().as_deref() == Some("S");
+
+            if is_ctrl && is_s {
+                let fp = focused.get().min(panes.len().saturating_sub(1));
+                let (ref buffer, ref msgarea) = panes[fp];
+                let text = buffer_text_lines(buffer).join("\n");
+                if let Some(path) = file_paths
+                    .borrow()
+                    .get(fp)
+                    .and_then(|f| f.as_ref())
+                    .and_then(|f| f.path())
+                {
+                    match std::fs::write(&path, &text) {
+                        Ok(()) => {
+                            buffer.set_modified(false);
+                            let name = path
+                                .file_name()
+                                .map(|n| n.to_string_lossy())
+                                .unwrap_or_else(|| path.to_string_lossy().into());
+                            msgarea.show_info(&format!("Saved {name}"));
+                        }
+                        Err(e) => {
+                            msgarea.show_error(&format!("Save failed: {e}"));
+                        }
+                    }
+                }
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+
+        self.container.add_controller(key_ctrl);
+    }
+
     fn connect_buffer_signals(&self, loading: Rc<Cell<bool>>) {
         let diff_state = Rc::clone(&self.diff_state);
         let chunks = Rc::clone(&self.chunks);
@@ -1972,10 +2027,7 @@ impl MeldPage for FileDiff {
                 .collect();
 
             let msg = if modified.len() == 1 {
-                format!(
-                    "Save changes to \"{}\" before closing?",
-                    file_names[0]
-                )
+                format!("Save changes to \"{}\" before closing?", file_names[0])
             } else {
                 format!("Save changes to {} files before closing?", modified.len())
             };
@@ -2025,8 +2077,7 @@ impl MeldPage for FileDiff {
             match response.get() {
                 gtk::ResponseType::Yes => {
                     for (i, pane) in &modified {
-                        let text =
-                            buffer_text_lines(&pane.buffer).join("\n");
+                        let text = buffer_text_lines(&pane.buffer).join("\n");
                         if let Some(path) = self
                             .file_paths
                             .borrow()
@@ -2035,11 +2086,7 @@ impl MeldPage for FileDiff {
                             .and_then(|f| f.path())
                         {
                             if let Err(e) = std::fs::write(&path, &text) {
-                                log::error!(
-                                    "Failed to save {}: {}",
-                                    path.display(),
-                                    e
-                                );
+                                log::error!("Failed to save {}: {}", path.display(), e);
                                 return gtk::ResponseType::Cancel;
                             }
                             pane.buffer.set_modified(false);
@@ -2063,10 +2110,7 @@ impl MeldPage for FileDiff {
                             let path_str = path.to_string_lossy().into_owned();
                             self.load_file_sync(*i, &path_str);
                         } else {
-                            log::warn!(
-                                "Discard: no file path for pane {} — ",
-                                i + 1
-                            );
+                            log::warn!("Discard: no file path for pane {} — ", i + 1);
                         }
                         pane.buffer.set_modified(false);
                     }
@@ -2082,9 +2126,7 @@ impl MeldPage for FileDiff {
             // For 3-way merge, write the merged output if configured.
             if let Some(out) = self.merge_output.borrow().as_ref() {
                 if self.num_panes >= 3 {
-                    let text =
-                        buffer_text_lines(&self.panes[self.num_panes - 1].buffer)
-                            .join("\n");
+                    let text = buffer_text_lines(&self.panes[self.num_panes - 1].buffer).join("\n");
                     let _ = std::fs::write(out, &text);
                 }
             }

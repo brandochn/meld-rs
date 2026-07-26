@@ -13,6 +13,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::config::recent::RecentType;
 use crate::config::settings::{MeldSettings, PaneOrder};
 use crate::diff::dirdiff::DirDiff;
 use crate::diff::filediff::FileDiff;
@@ -250,6 +251,12 @@ impl MeldWindow {
         self.notebook
             .append_page(filediff.widget(), Some(&label.widget));
         self.pages.borrow_mut().push(Box::new(filediff));
+
+        let paths: Vec<String> = gfiles
+            .iter()
+            .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
+            .collect();
+        save_recent_comparison(RecentType::Merge, &paths);
     }
 
     /// Open a version-control view for the given repository location.
@@ -282,6 +289,8 @@ impl MeldWindow {
         self.notebook
             .append_page(view.widget(), Some(&label.widget));
         self.pages.borrow_mut().push(Box::new(view));
+
+        save_recent_comparison(RecentType::VersionControl, &[location.to_string()]);
     }
 
     pub fn set_labels(&self, _labels: &[String]) {}
@@ -372,9 +381,25 @@ impl MeldWindow {
             pages.borrow_mut().push(Box::new(tab));
         });
 
-        let selector = crate::ui::recent_selector::RecentSelector::new();
         let popover = gtk::Popover::new();
-        popover.set_child(Some(selector.widget()));
+        let nb_sel = self.notebook.clone();
+        let p_sel = Rc::clone(&self.pages);
+        let s_sel = Rc::clone(&self.settings);
+        let w_sel = self.window.clone();
+        popover.connect_show(move |pop| {
+            let selector = crate::ui::recent_selector::RecentSelector::new({
+                let nb = nb_sel.clone();
+                let p = Rc::clone(&p_sel);
+                let s = Rc::clone(&s_sel);
+                let w = w_sel.clone();
+                move |paths| {
+                    let gfiles: Vec<gio::File> =
+                        paths.iter().map(|p| gio::File::for_path(p)).collect();
+                    open_comparison_in_notebook(&nb, &p, &gfiles, false, false, &s, &w);
+                }
+            });
+            pop.set_child(Some(selector.widget()));
+        });
         recent_btn.set_popover(Some(&popover));
 
         let pages_nav = self.pages.clone();
@@ -548,6 +573,13 @@ fn open_comparison_in_notebook(
         let label = create_closeable_tab_label("Directory Comparison", notebook, pages);
         notebook.append_page(dirdiff.widget(), Some(&label.widget));
         pages.borrow_mut().push(Box::new(dirdiff));
+
+        // Save to recent history
+        let paths: Vec<String> = gfiles
+            .iter()
+            .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
+            .collect();
+        save_recent_comparison(RecentType::Folder, &paths);
     } else {
         // For file comparisons, always use at least 2 panes.
         // A single file opens alongside a blank pane for editing.
@@ -562,6 +594,13 @@ fn open_comparison_in_notebook(
         let label = create_closeable_tab_label("File Comparison", notebook, pages);
         notebook.append_page(filediff.widget(), Some(&label.widget));
         pages.borrow_mut().push(Box::new(filediff));
+
+        // Save to recent history
+        let paths: Vec<String> = gfiles
+            .iter()
+            .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
+            .collect();
+        save_recent_comparison(RecentType::File, &paths);
     }
 }
 
@@ -812,6 +851,11 @@ fn handle_diff_request(
             let lbl = create_closeable_tab_label(&label, notebook, pages);
             notebook.append_page(fd.widget(), Some(&lbl.widget));
             pages.borrow_mut().push(Box::new(fd));
+            let paths: Vec<String> = gfiles
+                .iter()
+                .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
+                .collect();
+            save_recent_comparison(RecentType::File, &paths);
         }
         DiffType::Folder => {
             // Folder comparison: always create DirDiff, regardless of actual
@@ -848,6 +892,11 @@ fn handle_diff_request(
             let lbl = create_closeable_tab_label(&label, notebook, pages);
             notebook.append_page(dd.widget(), Some(&lbl.widget));
             pages.borrow_mut().push(Box::new(dd));
+            let paths: Vec<String> = gfiles
+                .iter()
+                .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
+                .collect();
+            save_recent_comparison(RecentType::Folder, &paths);
         }
         DiffType::VersionControl => {
             // Version control view: opens the first path as a VC location.
@@ -857,6 +906,10 @@ fn handle_diff_request(
                 let lbl = create_closeable_tab_label("Version Control", notebook, pages);
                 notebook.append_page(vc.widget(), Some(&lbl.widget));
                 pages.borrow_mut().push(Box::new(vc));
+                save_recent_comparison(
+                    RecentType::VersionControl,
+                    &[path.to_string_lossy().to_string()],
+                );
             }
         }
         DiffType::Unselected => {
@@ -948,6 +1001,27 @@ fn create_closeable_tab_label(
     });
 
     label
+}
+
+/// Save a comparison to the recent history.
+fn save_recent_comparison(comparison_type: RecentType, paths: &[String]) {
+    if paths.is_empty() {
+        return;
+    }
+    if let Ok(mut mgr) = crate::config::recent::RecentManager::load() {
+        mgr.add(crate::config::recent::RecentEntry {
+            comparison_type,
+            paths: paths.to_vec(),
+            label: None,
+        });
+        if let Err(e) = mgr.save() {
+            log::warn!("Failed to save recent comparisons: {e}");
+        } else {
+            log::info!("Saved recent comparison: {paths:?}");
+        }
+    } else {
+        log::warn!("Failed to load recent manager");
+    }
 }
 
 /// Build the complete gear menu matching `menus.ui`.
