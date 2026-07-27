@@ -672,10 +672,15 @@ fn open_vc_file_comparison(
                 }
             };
 
-        // Write VCS content to temp files so FileDiff can read them
-        let tmp_local = write_temp_file(&local_content, "meld-local-");
-        let tmp_base = write_temp_file(&base_content, "meld-base-");
-        let tmp_remote = write_temp_file(&remote_content, "meld-remote-");
+        // Write VCS content to temp files so FileDiff can read them.
+        // Preserve the original file extension so that GtkSourceView's
+        // language manager can detect the programming language.
+        let ext = std::path::Path::new(relative_path)
+            .extension()
+            .and_then(|e| e.to_str());
+        let tmp_local = write_temp_file(&local_content, "meld-local-", ext);
+        let tmp_base = write_temp_file(&base_content, "meld-base-", ext);
+        let tmp_remote = write_temp_file(&remote_content, "meld-remote-", ext);
 
         let (files, labels, tab_label) = match settings.resolve_merge_order() {
             PaneOrder::LocalMergeRemote => (
@@ -730,7 +735,10 @@ fn open_vc_file_comparison(
             }
         };
 
-        let tmp_repo = write_temp_file(&repo_content, "meld-repo-");
+        let ext = std::path::Path::new(relative_path)
+            .extension()
+            .and_then(|e| e.to_str());
+        let tmp_repo = write_temp_file(&repo_content, "meld-repo-", ext);
         let repo_label = format!("{} — repository", relative_path);
 
         let (files, labels, tab_label) = match settings.resolve_two_pane_order() {
@@ -776,11 +784,22 @@ fn open_vc_file_comparison(
 }
 
 /// Write `content` to a temporary file with the given prefix.
+///
+/// If `extension` is provided, it is appended to the temp file name so
+/// that GtkSourceView's language manager can detect the programming
+/// language from the file extension.
+///
 /// Returns the path to the temporary file.
-fn write_temp_file(content: &str, prefix: &str) -> std::path::PathBuf {
+fn write_temp_file(content: &str, prefix: &str, extension: Option<&str>) -> std::path::PathBuf {
     let mut tmp = std::env::temp_dir();
     let mut name = prefix.to_owned();
     name.push_str(&uuid::Uuid::new_v4().to_string());
+    if let Some(ext) = extension {
+        if !ext.is_empty() {
+            name.push('.');
+            name.push_str(ext);
+        }
+    }
     tmp.push(&name);
     if let Err(e) = std::fs::write(&tmp, content) {
         log::error!("Failed to write temp file {}: {}", tmp.display(), e);

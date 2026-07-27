@@ -393,33 +393,100 @@ impl FileDiff {
             }
         }
 
+        // Load files and detect languages using the content-type-aware
+        // approach that mirrors Python Meld's LanguageManager.get_language_from_file().
+        let lang_mgr = gsv::LanguageManager::default();
+        let mut detected_langs: Vec<Option<gsv::Language>> = Vec::with_capacity(self.num_panes);
+
         for (i, gfile) in gfiles.iter().enumerate().take(self.num_panes) {
             if let Some(path) = gfile.path() {
                 let path_str = path.to_string_lossy().into_owned();
-                self.load_file_sync(i, &path_str);
+                let lang = self.load_file_sync(i, gfile);
+                detected_langs.push(lang);
                 if let Some(name) = path.file_name() {
                     let name_str = name.to_string_lossy().into_owned();
                     self.labels.borrow_mut()[i] = name_str;
                 }
                 self.panes[i].file_label.set_path(&path_str);
+            } else {
+                detected_langs.push(None);
             }
         }
+
+        // Language unification (mirrors Python Meld's logic):
+        // if all identified languages are the same, apply that language
+        // to every pane — even panes where detection failed (e.g. temp
+        // files without a recognisable extension).
+        //
+        // Comparison uses language **IDs** (e.g. "rust"), not display
+        // names (e.g. "Rust") — LanguageManager::language() looks up by id.
+        let real_langs: Vec<&gsv::Language> =
+            detected_langs.iter().filter_map(|l| l.as_ref()).collect();
+        if !real_langs.is_empty() && real_langs.windows(2).all(|w| w[0].id() == w[1].id()) {
+            let unified_id = real_langs[0].id();
+            if let Some(lang) = lang_mgr.language(&unified_id) {
+                for i in 0..self.num_panes {
+                    let matches = detected_langs
+                        .get(i)
+                        .and_then(|l| l.as_ref())
+                        .map(|l| l.id() == unified_id)
+                        .unwrap_or(false);
+                    if !matches {
+                        self.panes[i].buffer.set_language(Some(&lang));
+                        self.panes[i].statusbar.set_language(&lang.name());
+                    }
+                }
+            }
+        }
+
         self.loading.set(false);
         self.compute_diff();
     }
 
-    fn load_file_sync(&self, pane_idx: usize, path: &str) {
+    /// Load a file into the given pane and detect its source language.
+    ///
+    /// Returns the detected language (if any) for unification across panes.
+    /// Mirrors Python Meld's `LanguageManager.get_language_from_file()`
+    /// by querying the file's content type and using it alongside the
+    /// basename for language detection via GtkSourceView.
+    ///
+    /// The language is set on the buffer **before** the text is loaded
+    /// so that GtkSourceView applies syntax highlighting during text insertion.
+    fn load_file_sync(&self, pane_idx: usize, gfile: &gio::File) -> Option<gsv::Language> {
         if pane_idx >= self.panes.len() {
-            return;
+            return None;
         }
         let buffer = &self.panes[pane_idx].buffer;
         let statusbar = &self.panes[pane_idx].statusbar;
 
-        // Detect and apply the source language, mirroring it in the status bar.
-        let lang_mgr = gsv::LanguageManager::new();
-        let lang_name = match lang_mgr.guess_language(Some(path), None) {
+        // Step 1: detect the source language BEFORE loading text so
+        // that GtkSourceView can apply syntax highlighting during
+        // text insertion (mirrors the original Meld order).
+        let lang_mgr = gsv::LanguageManager::default();
+        let content_type: Option<String> = gfile
+            .query_info(
+                "standard::content-type",
+                gio::FileQueryInfoFlags::NONE,
+                gio::Cancellable::NONE,
+            )
+            .ok()
+            .and_then(|info| info.content_type())
+            .map(|ct| ct.to_string());
+
+        let basename = gfile.basename().map(|b| b.to_string_lossy().into_owned());
+        let basename_str: Option<&str> = basename.as_deref();
+
+        // Two-stage detection (mirrors Python Meld's LanguageManager):
+        // 1. Use basename + content type (most reliable)
+        // 2. Fall back to filename-only guess.
+        let detected = match content_type.as_deref() {
+            Some(ct) => lang_mgr.guess_language(basename_str, Some(ct)),
+            None => lang_mgr.guess_language(basename_str, None),
+        };
+
+        let lang_name = match &detected {
             Some(lang) => {
-                buffer.set_language(Some(&lang));
+                buffer.set_language(Some(lang));
                 lang.name().to_string()
             }
             None => {
@@ -429,15 +496,19 @@ impl FileDiff {
         };
         statusbar.set_language(&lang_name);
 
-        match std::fs::read_to_string(path) {
+        // Step 2: load file content (language already set, so highlighting
+        // is applied during text insertion).
+        let path = gfile.path();
+        let path_str = path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        match std::fs::read_to_string(&path_str) {
             Ok(content) => {
                 buffer.set_text(&content);
-                // set_text marks the buffer as modified; clear it since
-                // the buffer now matches the on-disk content.
                 buffer.set_modified(false);
                 statusbar.set_encoding("UTF-8");
-                // GtkTextBuffer leaves the cursor at the end after set_text;
-                // move it to the start so the status bar reads "Ln 1, Col 1".
                 buffer.place_cursor(&buffer.start_iter());
             }
             Err(e) => {
@@ -445,6 +516,12 @@ impl FileDiff {
                     .msgarea
                     .show_error(&format!("Error loading file: {e}"));
             }
+        }
+
+        if lang_name == "Plain Text" {
+            None
+        } else {
+            detected
         }
     }
 
@@ -2099,16 +2176,14 @@ impl MeldPage for FileDiff {
                     // but keep the tab open so the user can verify.
                     self.loading.set(true);
                     for (i, pane) in &modified {
-                        let path_opt = self
+                        let gfile = self
                             .file_paths
                             .borrow()
                             .get(*i)
-                            .and_then(|f| f.as_ref())
-                            .and_then(|f| f.path());
+                            .and_then(|f| f.as_ref().cloned());
 
-                        if let Some(ref path) = path_opt {
-                            let path_str = path.to_string_lossy().into_owned();
-                            self.load_file_sync(*i, &path_str);
+                        if let Some(ref gf) = gfile {
+                            self.load_file_sync(*i, gf);
                         } else {
                             log::warn!("Discard: no file path for pane {} — ", i + 1);
                         }
@@ -2169,6 +2244,12 @@ impl MeldPage for FileDiff {
         self.set_inline_diff_mode(&settings.inline_diff_mode);
         let active_patterns: Vec<String> = settings.active_text_filter_regexes();
         self.set_text_filter_patterns(&active_patterns);
+
+        // Mirror Python Meld's MeldBuffer gsettings binding:
+        //   __gsettings_bindings__ = (("highlight-syntax", "highlight-syntax"),)
+        for pane in &self.panes {
+            pane.buffer.set_highlight_syntax(settings.highlight_syntax);
+        }
     }
 }
 

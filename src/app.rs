@@ -13,6 +13,11 @@ use std::rc::Rc;
 
 use crate::window::MeldWindow;
 
+/// Compiled GResource providing the missing `language2.rng` RelaxNG schema.
+#[cfg(gresource_available)]
+const LANGUAGE_SCHEMA_GRESOURCE: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/meld-language-schema.gresource"));
+
 pub const APP_ID: &str = "org.gnome.meld-rs";
 pub const APP_NAME: &str = "Meld-rs";
 pub const RESOURCE_BASE: &str = "/org/gnome/meld-rs";
@@ -253,6 +258,7 @@ fn ensure_initialized(app: &gtk::Application, done: &Cell<bool>) {
     setup_actions(app);
     setup_css();
     setup_style_schemes();
+    setup_language_schema();
     done.set(true);
 }
 
@@ -290,6 +296,188 @@ fn setup_style_schemes() {
     let manager = sourceview5::StyleSchemeManager::default();
     manager.append_search_path(&dir.to_string_lossy());
     manager.force_rescan();
+}
+
+/// Ensure GtkSourceView can load its `.lang` syntax-highlighting definitions.
+///
+/// On correctly-packaged systems (Linux, most distributions) the GtkSourceView
+/// library bundles a complete GResource that includes the RelaxNG schema
+/// (`language2.rng`) alongside the language definition files.  On those
+/// systems this function is a no-op.
+///
+/// On MSYS2/Windows the bundled GResource is sometimes missing `language2.rng`,
+/// which causes all `.lang` loading to fail with "could not find the RelaxNG
+/// schema file".  When we detect this situation we:
+/// 1. Extract the `.lang` files from the DLL's globally-registered GResources.
+/// 2. Write them — plus our embedded `language2.rng` — to the user cache dir.
+/// 3. Add that directory to the `LanguageManager` search path so that
+///    GtkSourceView loads language specs from the filesystem instead of
+///    the incomplete GResource.
+fn setup_language_schema() {
+    // Quick check: if the schema is already available globally, the system
+    // is correctly packaged and we don't need any workaround.  This is the
+    // common case on Linux and properly-built Windows packages.
+    if gio::resources_lookup_data(
+        "/org/gnome/gtksourceview/language-specs/language2.rng",
+        gio::ResourceLookupFlags::NONE,
+    )
+    .is_ok()
+    {
+        log::info!("GtkSourceView language2.rng schema found in GResources — no workaround needed");
+        return;
+    }
+
+    log::info!(
+        "GtkSourceView language2.rng schema missing from GResources; \
+         extracting language specs to filesystem"
+    );
+
+    // ── Determine the cache directory ──────────────────────────────────
+    let Some(base_dir) = dirs::cache_dir().map(|d| d.join("meld-rs").join("language-specs")) else {
+        log::warn!("Cannot determine cache directory; syntax highlighting may not work");
+        return;
+    };
+
+    // Only extract once per application version
+    let marker = base_dir.join(".meld-extracted");
+    if marker.exists() {
+        add_language_search_path(&base_dir);
+        return;
+    }
+
+    // Clean any previously-failed partial extraction
+    let _ = std::fs::remove_dir_all(&base_dir);
+    if std::fs::create_dir_all(&base_dir).is_err() {
+        log::warn!(
+            "Cannot create language-specs cache dir: {}",
+            base_dir.display()
+        );
+        return;
+    }
+
+    // ── Write the missing RelaxNG schema ───────────────────────────────
+    if !write_language2_rng(&base_dir) {
+        log::warn!("Failed to provide language2.rng; syntax highlighting may not work");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        return;
+    }
+
+    // ── Extract .lang files from the DLL's GResources ──────────────────
+    let count = extract_lang_files_from_resources(&base_dir);
+    if count == 0 {
+        log::warn!("Could not extract any .lang files; syntax highlighting will not work");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        return;
+    }
+
+    // ── Register the search path ───────────────────────────────────────
+    add_language_search_path(&base_dir);
+
+    // ── Mark extraction complete ───────────────────────────────────────
+    let _ = std::fs::write(&marker, VERSION);
+    log::info!(
+        "Extracted {} GtkSourceView language spec(s) to {}",
+        count,
+        base_dir.display()
+    );
+}
+
+/// Write the `language2.rng` RelaxNG schema to `base_dir`.
+///
+/// Prefers our embedded (compile-time) copy; falls back to searching the
+/// filesystem if the embed is unavailable (e.g. `glib-compile-resources`
+/// was not found at build time).
+fn write_language2_rng(base_dir: &std::path::Path) -> bool {
+    #[cfg(gresource_available)]
+    {
+        // Register our compiled GResource so the file is available via
+        // the global resource lookup, then extract it.
+        let bytes = glib::Bytes::from_static(LANGUAGE_SCHEMA_GRESOURCE);
+        if let Ok(resource) = gio::Resource::from_data(&bytes) {
+            gio::resources_register(&resource);
+        }
+        if let Ok(data) = gio::resources_lookup_data(
+            "/org/gnome/gtksourceview/language-specs/language2.rng",
+            gio::ResourceLookupFlags::NONE,
+        ) {
+            return std::fs::write(base_dir.join("language2.rng"), data).is_ok();
+        }
+    }
+
+    // Fallback: search the filesystem
+    search_and_copy_language2_rng(base_dir)
+}
+
+/// Search common locations for `language2.rng` and copy it to `base_dir`.
+fn search_and_copy_language2_rng(base_dir: &std::path::Path) -> bool {
+    // MSYS2 prefix (MINGW_PREFIX or UCRT64_PREFIX)
+    for env_var in &["MINGW_PREFIX", "UCRT64_PREFIX"] {
+        if let Ok(prefix) = std::env::var(env_var) {
+            let src = std::path::PathBuf::from(&prefix)
+                .join("share")
+                .join("gtksourceview-5")
+                .join("language-specs")
+                .join("language2.rng");
+            if src.exists() {
+                return std::fs::copy(&src, base_dir.join("language2.rng")).is_ok();
+            }
+        }
+    }
+
+    // XDG_DATA_DIRS (standard on Linux)
+    if let Ok(dirs) = std::env::var("XDG_DATA_DIRS") {
+        for d in std::env::split_paths(&dirs) {
+            let src = d
+                .join("gtksourceview-5")
+                .join("language-specs")
+                .join("language2.rng");
+            if src.exists() {
+                return std::fs::copy(&src, base_dir.join("language2.rng")).is_ok();
+            }
+        }
+    }
+
+    false
+}
+
+/// Try to extract `.lang` files from globally registered GResources.
+///
+/// Returns the number of files successfully extracted.
+fn extract_lang_files_from_resources(base_dir: &std::path::Path) -> usize {
+    let path = "/org/gnome/gtksourceview/language-specs";
+    let Ok(children) = gio::resources_enumerate_children(path, gio::ResourceLookupFlags::NONE)
+    else {
+        return 0;
+    };
+
+    let mut count = 0;
+    for child in children {
+        if !child.ends_with(".lang") {
+            continue;
+        }
+        let resource_path = format!("{}/{}", path, child);
+        if let Ok(data) = gio::resources_lookup_data(&resource_path, gio::ResourceLookupFlags::NONE)
+        {
+            if std::fs::write(base_dir.join(&*child), &data).is_ok() {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Add `base_dir` to GtkSourceView's `LanguageManager` search path.
+fn add_language_search_path(base_dir: &std::path::Path) {
+    let lang_mgr = sourceview5::LanguageManager::default();
+    let path_str = base_dir.to_string_lossy();
+
+    // Avoid adding duplicates (search_path returns platform-specific paths,
+    // so this check is best-effort).
+    let existing: Vec<glib::GString> = lang_mgr.search_path();
+    if !existing.iter().any(|p| p.as_str() == path_str.as_ref()) {
+        lang_mgr.append_search_path(&path_str);
+        log::info!("Added language search path: {}", path_str);
+    }
 }
 
 fn show_about_dialog() {
