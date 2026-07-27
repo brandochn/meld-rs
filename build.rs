@@ -1,14 +1,18 @@
-/// Build script: compiles GSettings schemas for the `gui` feature.
+/// Build script: compiles GSettings schemas and GResources for the `gui` feature.
 ///
-/// Copies the schema XML to `target/share/glib-2.0/schemas/` and runs
-/// `glib-compile-schemas` if available. This is non-fatal — if the tool
-/// is not present, the schema is still copied and can be compiled later
-/// by the packaging step.
+/// 1. Copies GSettings schema XML to `target/share/glib-2.0/schemas/`
+///    and runs `glib-compile-schemas` if available.
+/// 2. Compiles the missing RelaxNG schema into a GResource so that
+///    GtkSourceView can load language-spec `.lang` files on Windows/MSYS2
+///    (where the bundled `language-specs.gresource` is missing `language2.rng`).
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(gresource_available)");
+
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
 
+    // ── GSettings schema ──────────────────────────────────────────────
     // Navigate from OUT_DIR (target/debug/build/meld-rs-xxx/out) up to target/
     let schema_dir = out_dir
         .parent()
@@ -33,7 +37,6 @@ fn main() {
             return;
         }
 
-        // Non-fatal: glib-compile-schemas may not be on PATH
         match std::process::Command::new("glib-compile-schemas")
             .arg(dir)
             .status()
@@ -45,8 +48,34 @@ fn main() {
                 eprintln!("build.rs: glib-compile-schemas exited with {status}");
             }
             Err(e) => {
-                eprintln!("build.rs: glib-compile-schemas not found ({e}) — schemas not compiled");
+                eprintln!("build.rs: glib-compile-schemas not found ({e})");
             }
+        }
+    }
+
+    // ── GResource: language2.rng schema ────────────────────────────────
+    let gresource_xml = "resources/gresources/meld-language-schema.gresource.xml";
+    let gresource_out = out_dir.join("meld-language-schema.gresource");
+
+    match std::process::Command::new("glib-compile-resources")
+        .arg("--target")
+        .arg(&gresource_out)
+        .arg(&format!(
+            "--sourcedir={}",
+            std::path::Path::new("resources/gresources").display()
+        ))
+        .arg(gresource_xml)
+        .status()
+    {
+        Ok(status) if status.success() => {
+            println!("cargo:warning=GResource compiled successfully");
+            println!("cargo:rustc-cfg=gresource_available");
+        }
+        Ok(status) => {
+            eprintln!("build.rs: glib-compile-resources exited with {status}");
+        }
+        Err(e) => {
+            eprintln!("build.rs: glib-compile-resources not found ({e})");
         }
     }
 }
