@@ -282,6 +282,24 @@ impl ActionGutter {
                 (y as f64 - scroll + src_off).round()
             };
 
+            // ---- Clip drawing to source-text-viewport bounds ----
+            //
+            // Defensive clipping so gutter icons/arrows never bleed
+            // outside the visible text area (the GtkGrid layout already
+            // constrains the widget height to the content row, but this
+            // ensures correctness when a per-pane message area above
+            // the scrolled window is visible).
+            {
+                let sh = src_w.allocated_height() as f64;
+                let h = height as f64;
+                let clip_y0 = src_off.max(0.0).min(h);
+                let clip_y1 = (src_off + sh).max(0.0).min(h);
+                if clip_y1 > clip_y0 {
+                    cr.rectangle(0.0, clip_y0, w, clip_y1 - clip_y0);
+                    cr.clip();
+                }
+            }
+
             // Background is handled by CSS (.action-gutter { background: transparent })
             // so paragraph backgrounds from the text view can visually bridge
             // across the gutter to the link-map bezier curves.

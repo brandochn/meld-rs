@@ -1,15 +1,17 @@
 #![cfg(feature = "gui")]
 //! Full file comparison view matching the original Meld `filediff.py`.
 //!
-//! Layout (left-to-right):
-//!   [pane0] [action_gutter0] [link_map0] [action_gutter1] [pane1]
-//!     optionally [action_gutter2] [link_map1] [action_gutter3] [pane2]
+//! Layout uses a GtkGrid with three rows (toolbars, content, statusbars)
+//! and shared columns so that the link-map and action-gutter widgets are
+//! structurally constrained to the content row only, preventing bezier
+//! curves from bleeding into the status-bar and action-bar areas.
 //!
-//! Each pane contains an ActionBar (save button + file label), MsgArea,
-//! ScrolledWindow with GtkSourceView, and StatusBar.
+//! Columns (2-pane):  [pane0] [g0] [lm0] [g1] [pane1] [maps]
+//! Columns (3-pane):  [pane0] [g0] [lm0] [g1] [pane1] [g2] [lm1] [g3] [pane2] [maps]
 //!
-//! Action gutters sit between panes and display per-chunk action buttons
-//! (push/replace, delete, copy-up, copy-down).
+//! Row 0: toolbars + dummy spacers for separator columns
+//! Row 1: content (msgarea + scrolled, gutters, linkmaps, maps) — vexpand
+//! Row 2: statusbars + dummy spacers for separator columns
 
 use gdk4 as gdk;
 use gio::prelude::*;
@@ -117,9 +119,41 @@ impl FileDiff {
         let shared_msgarea = Rc::new(MsgArea::new());
         container.append(shared_msgarea.widget());
 
-        let grid = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        grid.set_vexpand(true);
-        grid.set_hexpand(true);
+        // Use a GtkGrid instead of a single horizontal GtkBox so that the
+        // linkmap and action-gutter widgets are structurally constrained to
+        // the content row only. This mirrors the original Meld's
+        // filediff.ui GtkGrid layout and prevents bezier curves from
+        // bleeding into the status bar and action bar areas.
+        //
+        // Column layout (2-pane):
+        //   [pane0] [g0] [lm0] [g1] [pane1] [maps]
+        // Column layout (3-pane):
+        //   [pane0] [g0] [lm0] [g1] [pane1] [g2] [lm1] [g3] [pane2] [maps]
+        //
+        // Row 0: toolbars + dummy spacers
+        // Row 1: content (msgarea + scrolled, gutters, linkmaps, maps) → vexpand
+        // Row 2: statusbars + dummy spacers
+        let content_grid = gtk::Grid::new();
+        content_grid.set_vexpand(true);
+        content_grid.set_hexpand(true);
+        content_grid.set_row_spacing(0);
+        content_grid.set_column_spacing(0);
+
+        // Column indices
+        let col_pane0: i32 = 0;
+        let col_gutter0: i32 = 1;
+        let col_linkmap0: i32 = 2;
+        let col_gutter1: i32 = 3;
+        let col_pane1: i32 = 4;
+        let col_gutter2: i32 = 5;
+        let col_linkmap1: i32 = 6;
+        let col_gutter3: i32 = 7;
+        let col_pane2: i32 = 8;
+        let col_maps: i32 = if num_panes == 3 { 9 } else { 5 };
+
+        let gutter_width: i32 = 20;
+        let linkmap_width: i32 = 50;
+        let sep_width: i32 = gutter_width * 2 + linkmap_width; // 90
 
         let mut panes: Vec<PaneData> = Vec::with_capacity(num_panes);
         let mut labels: Vec<String> = Vec::with_capacity(num_panes);
@@ -130,12 +164,42 @@ impl FileDiff {
             panes.push(pane);
         }
 
+        // ── Per-pane toolbar widgets ──
+        let pane_toolbars: Vec<gtk::Box> = panes
+            .iter()
+            .map(|p| {
+                let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                toolbar.add_css_class("toolbar");
+                toolbar.add_css_class("meld-actionbar");
+                toolbar.append(&p.save_button);
+                let fl = p.file_label.widget();
+                fl.set_hexpand(true);
+                toolbar.append(fl);
+                toolbar
+            })
+            .collect();
+
+        // ── Per-pane content overlays (msgarea + scrolled, with insert_overlay on top) ──
+        let pane_overlays: Vec<gtk::Overlay> = panes
+            .iter()
+            .map(|p| {
+                let content_vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                content_vbox.append(p.msgarea.widget());
+                content_vbox.append(&p.scrolled);
+
+                let overlay = gtk::Overlay::new();
+                overlay.set_child(Some(&content_vbox));
+                overlay.add_overlay(&p.insert_overlay);
+                overlay
+            })
+            .collect();
+
+        // ── Gutters and link maps ──
         let mut gutters: Vec<Rc<ActionGutter>> = Vec::new();
         let mut link_maps: Vec<Rc<LinkMap>> = Vec::new();
 
         // Between pane 0 and pane 1
         if num_panes >= 2 {
-            // Gutter: push from left (0â†’1)
             let ag0 = Rc::new(ActionGutter::new(
                 panes[0].view.clone().upcast::<gtk::TextView>(),
                 panes[1].view.clone().upcast::<gtk::TextView>(),
@@ -143,7 +207,6 @@ impl FileDiff {
             ));
             gutters.push(Rc::clone(&ag0));
 
-            // Link map between 0 and 1
             let lm0 = Rc::new(LinkMap::new(
                 &[],
                 panes[0].buffer.line_count().max(0) as usize,
@@ -152,7 +215,6 @@ impl FileDiff {
             lm0.associate(&panes[0].view, &panes[1].view);
             link_maps.push(Rc::clone(&lm0));
 
-            // Gutter: push from right (1â†’0)
             let ag1 = Rc::new(ActionGutter::new(
                 panes[1].view.clone().upcast::<gtk::TextView>(),
                 panes[0].view.clone().upcast::<gtk::TextView>(),
@@ -186,59 +248,8 @@ impl FileDiff {
             gutters.push(Rc::clone(&ag3));
         }
 
-        // Layout: [pane0_vbox] [gutter] [linkmap] [gutter] [pane1_vbox] [gutter] [linkmap] [gutter] [pane2_vbox]
-        // We use a GtkBox for each pane and insert gutters/linkmaps between.
-
-        let pane_widgets: Vec<gtk::Widget> = panes
-            .iter()
-            .map(|p| {
-                let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-
-                // Action bar
-                let action_bar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-                action_bar.add_css_class("toolbar");
-                action_bar.add_css_class("meld-actionbar");
-                action_bar.append(&p.save_button);
-                let file_label_widget = p.file_label.widget();
-                file_label_widget.set_hexpand(true);
-                action_bar.append(file_label_widget);
-                vbox.append(&action_bar);
-
-                // MsgArea
-                vbox.append(p.msgarea.widget());
-
-                // Scrolled window
-                vbox.append(&p.scrolled);
-
-                // Status bar
-                vbox.append(p.statusbar.widget());
-
-                let overlay_stack = gtk::Overlay::new();
-                overlay_stack.set_child(Some(&vbox));
-                overlay_stack.add_overlay(&p.insert_overlay);
-
-                overlay_stack.upcast::<gtk::Widget>()
-            })
-            .collect();
-
-        // Build the horizontal assembly
-        grid.append(&pane_widgets[0]);
-
-        if num_panes >= 2 {
-            // Gutter 0 (0â†’1)
-            grid.append(gutters[0].widget());
-            // Link map 0
-            grid.append(link_maps[0].widget());
-            // Gutter 1 (1â†’0)
-            grid.append(gutters[1].widget());
-            // Pane 1
-            grid.append(&pane_widgets[1]);
-        }
-
-        // Shared chunk list, read by the overview maps and per-pane overlays.
+        // ── Diff overview maps ──
         let chunks: Rc<RefCell<Vec<Chunk>>> = Rc::new(RefCell::new(Vec::new()));
-
-        // One narrow strip per displayed pane, mirroring Meld's sourcemap.
         let map_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         map_box.add_css_class("sourcemap-container");
         let mut diff_maps: Vec<Rc<DiffMap>> = Vec::new();
@@ -247,9 +258,101 @@ impl FileDiff {
             map_box.append(dm.widget());
             diff_maps.push(dm);
         }
-        grid.append(&map_box);
 
-        container.append(&grid);
+        // ── Helper: make a spacer for non-content rows ──
+        let make_row_spacer = |width: i32, css: &[&str]| -> gtk::Box {
+            let b = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            b.set_width_request(width);
+            for c in css {
+                b.add_css_class(c);
+            }
+            b
+        };
+
+        // ── Row 0: Toolbars ──
+        content_grid.attach(&pane_toolbars[0], col_pane0, 0, 1, 1);
+        if num_panes >= 2 {
+            content_grid.attach(
+                &make_row_spacer(gutter_width, &["meld-actionbar"]),
+                col_gutter0,
+                0,
+                1,
+                1,
+            );
+            content_grid.attach(
+                &make_row_spacer(linkmap_width, &["meld-actionbar"]),
+                col_linkmap0,
+                0,
+                1,
+                1,
+            );
+            content_grid.attach(
+                &make_row_spacer(gutter_width, &["meld-actionbar"]),
+                col_gutter1,
+                0,
+                1,
+                1,
+            );
+            content_grid.attach(&pane_toolbars[1], col_pane1, 0, 1, 1);
+        }
+        if num_panes >= 3 {
+            content_grid.attach(
+                &make_row_spacer(gutter_width, &["meld-actionbar"]),
+                col_gutter2,
+                0,
+                1,
+                1,
+            );
+            content_grid.attach(
+                &make_row_spacer(linkmap_width, &["meld-actionbar"]),
+                col_linkmap1,
+                0,
+                1,
+                1,
+            );
+            content_grid.attach(
+                &make_row_spacer(gutter_width, &["meld-actionbar"]),
+                col_gutter3,
+                0,
+                1,
+                1,
+            );
+            content_grid.attach(&pane_toolbars[2], col_pane2, 0, 1, 1);
+        }
+        content_grid.attach(&make_row_spacer(0, &["meld-actionbar"]), col_maps, 0, 1, 1);
+
+        // ── Row 1: Content (vexpand) ──
+        content_grid.attach(&pane_overlays[0], col_pane0, 1, 1, 1);
+        if num_panes >= 2 {
+            content_grid.attach(gutters[0].widget(), col_gutter0, 1, 1, 1);
+            content_grid.attach(link_maps[0].widget(), col_linkmap0, 1, 1, 1);
+            content_grid.attach(gutters[1].widget(), col_gutter1, 1, 1, 1);
+            content_grid.attach(&pane_overlays[1], col_pane1, 1, 1, 1);
+        }
+        if num_panes >= 3 {
+            content_grid.attach(gutters[2].widget(), col_gutter2, 1, 1, 1);
+            content_grid.attach(link_maps[1].widget(), col_linkmap1, 1, 1, 1);
+            content_grid.attach(gutters[3].widget(), col_gutter3, 1, 1, 1);
+            content_grid.attach(&pane_overlays[2], col_pane2, 1, 1, 1);
+        }
+        content_grid.attach(&map_box, col_maps, 1, 1, 1);
+
+        // ── Row 2: Status bars ──
+        content_grid.attach(panes[0].statusbar.widget(), col_pane0, 2, 1, 1);
+        if num_panes >= 2 {
+            // Single spacer spanning the three separator columns
+            let ss0 = make_row_spacer(sep_width, &["meld-status-bar"]);
+            content_grid.attach(&ss0, col_gutter0, 2, 3, 1);
+            content_grid.attach(panes[1].statusbar.widget(), col_pane1, 2, 1, 1);
+        }
+        if num_panes >= 3 {
+            let ss1 = make_row_spacer(sep_width, &["meld-status-bar"]);
+            content_grid.attach(&ss1, col_gutter2, 2, 3, 1);
+            content_grid.attach(panes[2].statusbar.widget(), col_pane2, 2, 1, 1);
+        }
+        content_grid.attach(&make_row_spacer(0, &["meld-status-bar"]), col_maps, 2, 1, 1);
+
+        container.append(&content_grid);
 
         let loading = Rc::new(Cell::new(false));
         let current_chunk_idx = Rc::new(Cell::new(None));
