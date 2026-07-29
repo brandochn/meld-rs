@@ -100,8 +100,9 @@ impl LinkMap {
             let left_view_opt = draw_left_view.borrow();
             let right_view_opt = draw_right_view.borrow();
 
-            // Background handled by CSS class "link-map"
-            // (matching Meld original: background-color: @theme_bg_color)
+            // CSS class "link-map" provides the background fill.
+            // Drawing is clipped to the text-viewport bounds below so
+            // bezier curves never bleed outside the visible text area.
 
             // ---- Match Python Meld's do_draw exactly ----
             //
@@ -128,6 +129,43 @@ impl LinkMap {
                 } else {
                     (0.0, 0.0, 0.0, 0.0)
                 };
+
+            // ---- Clip drawing to text-viewport bounds ----
+            //
+            // Mirror the original Meld's clip_y / clip_height
+            // approach: only render curves within the area that
+            // overlaps with the two text views' allocated rectangles.
+            // This is a defensive measure — the GtkGrid layout already
+            // constrains the widget height to the content row — that
+            // prevents connector lines from ever reaching the action
+            // bar (above) or status bar (below).
+            {
+                // Use the allocated height of each text view as the
+                // viewport height (it is the size given by the
+                // GtkScrolledWindow).
+                let lh = left_view_opt
+                    .as_ref()
+                    .map(|v| {
+                        let w: &gtk::Widget = v.upcast_ref();
+                        w.allocated_height() as f64
+                    })
+                    .unwrap_or(h);
+                let rh = right_view_opt
+                    .as_ref()
+                    .map(|v| {
+                        let w: &gtk::Widget = v.upcast_ref();
+                        w.allocated_height() as f64
+                    })
+                    .unwrap_or(h);
+                let top = off_left.min(off_right);
+                let bottom = (off_left + lh).max(off_right + rh);
+                let clip_y0 = top.max(0.0).min(h);
+                let clip_y1 = bottom.max(0.0).min(h);
+                if clip_y1 > clip_y0 {
+                    cr.rectangle(0.0, clip_y0, w, clip_y1 - clip_y0);
+                    cr.clip();
+                }
+            }
 
             // Python Meld:
             //   def view_offset_line(view_idx, line_num):
