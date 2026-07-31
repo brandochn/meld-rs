@@ -31,6 +31,7 @@ use crate::diff::inline_cache::InlineDiffCache;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
 use crate::ui::diff_map::DiffMap;
+use crate::ui::find_bar::FindBar;
 use crate::ui::link_map::LinkMap;
 use crate::ui::msgarea::MsgArea;
 use crate::ui::pathlabel::PathLabel;
@@ -83,6 +84,8 @@ pub struct FileDiff {
     inline_diff_mode: Rc<RefCell<String>>,
     /// Cached compiled text-filter patterns for visual dimming.
     text_filter_patterns: Rc<RefCell<Vec<regex::bytes::Regex>>>,
+    /// Shared find bar (Ctrl+F) for in-file text search.
+    find_bar: Rc<FindBar>,
     /// File monitors for detecting external file changes.
     file_monitors: Rc<RefCell<Vec<Option<gio::FileMonitor>>>>,
     /// Tracked file paths for each pane.
@@ -337,20 +340,25 @@ impl FileDiff {
         }
         content_grid.attach(&map_box, col_maps, 1, 1, 1);
 
-        // ── Row 2: Status bars ──
-        content_grid.attach(panes[0].statusbar.widget(), col_pane0, 2, 1, 1);
+        // ── Row 2: Find bar (shared across all panes, hidden by default) ──
+        let find_cols: i32 = col_maps + 1;
+        let find_bar = Rc::new(FindBar::new());
+        content_grid.attach(find_bar.widget(), col_pane0, 2, find_cols, 1);
+
+        // ── Row 3: Status bars ──
+        content_grid.attach(panes[0].statusbar.widget(), col_pane0, 3, 1, 1);
         if num_panes >= 2 {
             // Single spacer spanning the three separator columns
             let ss0 = make_row_spacer(sep_width, &["meld-status-bar"]);
-            content_grid.attach(&ss0, col_gutter0, 2, 3, 1);
-            content_grid.attach(panes[1].statusbar.widget(), col_pane1, 2, 1, 1);
+            content_grid.attach(&ss0, col_gutter0, 3, 3, 1);
+            content_grid.attach(panes[1].statusbar.widget(), col_pane1, 3, 1, 1);
         }
         if num_panes >= 3 {
             let ss1 = make_row_spacer(sep_width, &["meld-status-bar"]);
-            content_grid.attach(&ss1, col_gutter2, 2, 3, 1);
-            content_grid.attach(panes[2].statusbar.widget(), col_pane2, 2, 1, 1);
+            content_grid.attach(&ss1, col_gutter2, 3, 3, 1);
+            content_grid.attach(panes[2].statusbar.widget(), col_pane2, 3, 1, 1);
         }
-        content_grid.attach(&make_row_spacer(0, &["meld-status-bar"]), col_maps, 2, 1, 1);
+        content_grid.attach(&make_row_spacer(0, &["meld-status-bar"]), col_maps, 3, 1, 1);
 
         container.append(&content_grid);
 
@@ -391,6 +399,7 @@ impl FileDiff {
             text_filter_patterns,
             file_monitors,
             file_paths,
+            find_bar,
         };
 
         // Wire up everything
@@ -403,6 +412,7 @@ impl FileDiff {
         fd.connect_cursor_tracking();
         fd.connect_link_map_hover();
         fd.setup_insert_overlays();
+        fd.connect_find_key_controllers();
         fd.compute_diff();
 
         fd
@@ -2172,6 +2182,31 @@ impl FileDiff {
                     }
                 }
             });
+        }
+    }
+    /// Connect Ctrl+F (find) and Escape (hide) key controllers to each
+    /// pane's text view so the shared find bar activates on the focused pane.
+    fn connect_find_key_controllers(&self) {
+        let find_bar = Rc::clone(&self.find_bar);
+        let key_f = gdk::Key::from_name("f").expect("GDK key 'f' not found");
+        let key_escape = gdk::Key::from_name("Escape").expect("GDK key 'Escape' not found");
+        for (_i, pane) in self.panes.iter().enumerate() {
+            let fb = Rc::clone(&find_bar);
+            let view = pane.view.clone();
+            let key_ctrl = gtk::EventControllerKey::new();
+            key_ctrl.connect_key_pressed(move |_ctrl, keyval, _keycode, state| {
+                let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
+                if ctrl && keyval == key_f {
+                    fb.start_find(view.upcast_ref::<gtk::TextView>());
+                    return glib::Propagation::Stop;
+                }
+                if keyval == key_escape && fb.is_visible() {
+                    fb.hide();
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            });
+            pane.view.add_controller(key_ctrl);
         }
     }
 }
