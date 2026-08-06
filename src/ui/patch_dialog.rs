@@ -47,6 +47,11 @@ impl PatchDialog {
 
         Self { dialog, text_view }
     }
+
+    /// Show the dialog modally.
+    pub fn present(&self) {
+        self.dialog.present();
+    }
 }
 
 /// Generate a unified diff patch from two text buffers.
