@@ -671,9 +671,17 @@ impl FileDiff {
         } else {
             "monospace 12".to_string()
         };
+        // Parse with Pango to extract family and size, then build proper
+        // CSS (Pango's `to_string()` format is NOT valid CSS).
         let desc = pango::FontDescription::from_string(&font_str);
+        let family = desc.family().unwrap_or_else(|| "monospace".into());
+        let size_pt = desc.size() / pango::SCALE;
+        let font_css = if size_pt > 0 {
+            format!("textview {{ font-family: {family}; font-size: {size_pt}pt; }}")
+        } else {
+            format!("textview {{ font-family: {family}; }}")
+        };
         let provider = gtk::CssProvider::new();
-        let font_css = format!("textview {{ font: {}; }}", desc.to_string());
         provider.load_from_data(&font_css);
         for pane in &self.panes {
             pane.view
@@ -2405,18 +2413,37 @@ impl MeldPage for FileDiff {
     }
 
     fn apply_settings(&self, settings: &MeldSettings) {
+        // Editor properties — note: line numbers are rendered by the
+        // ChunkGutterRenderer, not the built-in GtkSourceView gutter.
+        // Calling set_show_line_numbers would create a duplicate column.
+        for pane in &self.panes {
+            pane.line_gutter.set_visible(settings.show_line_numbers);
+            pane.buffer.set_highlight_syntax(settings.highlight_syntax);
+            pane.view
+                .set_highlight_current_line(settings.highlight_current_line);
+            let wrap = match settings.wrap_mode.as_str() {
+                "word" => gtk::WrapMode::Word,
+                "char" => gtk::WrapMode::Char,
+                _ => gtk::WrapMode::None,
+            };
+            pane.view.set_wrap_mode(wrap);
+        }
+
+        // Font
+        self.set_font(settings.use_system_font, &settings.custom_font);
+
+        // Diff behaviour
         self.set_ignore_blanks(settings.ignore_blank_lines);
         self.set_show_connectors(settings.show_connectors);
         self.set_show_overview_map(settings.show_overview_map);
         self.set_inline_diff_mode(&settings.inline_diff_mode);
+
+        // Text filters
         let active_patterns: Vec<String> = settings.active_text_filter_regexes();
         self.set_text_filter_patterns(&active_patterns);
 
-        // Mirror Python Meld's MeldBuffer gsettings binding:
-        //   __gsettings_bindings__ = (("highlight-syntax", "highlight-syntax"),)
-        for pane in &self.panes {
-            pane.buffer.set_highlight_syntax(settings.highlight_syntax);
-        }
+        // Recompute diff so that ignore_blank_lines and text filters take effect
+        self.compute_diff();
     }
 
     // ── Gear-menu action handlers ──────────────────────────────────
@@ -3388,4 +3415,3 @@ fn execute_copy(src_buffer: &gsv::Buffer, dst_buffer: &gsv::Buffer, chunk: &Chun
     let hl_end = iter_at_line_or_end(dst_buffer, (insert_line + line_count) as i32);
     add_fading_highlight(dst_buffer, &hl_start, &hl_end);
 }
-

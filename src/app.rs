@@ -233,9 +233,11 @@ fn setup_actions(app: &gtk::Application) {
     app.add_action(&quit);
     app.set_accels_for_action("app.quit", &["<Ctrl>Q"]);
 
+    let app_w = app.downgrade();
     let about = gio::SimpleAction::new("about", None);
-    about.connect_activate(|_, _| {
-        show_about_dialog();
+    about.connect_activate(move |_, _| {
+        let parent = app_w.upgrade().and_then(|a| a.active_window());
+        show_about_dialog(parent.as_ref().map(|w| w.upcast_ref::<gtk::Window>()));
     });
     app.add_action(&about);
 
@@ -508,8 +510,9 @@ fn add_language_search_path(base_dir: &std::path::Path) {
     }
 }
 
-fn show_about_dialog() {
+fn show_about_dialog(parent: Option<&gtk::Window>) {
     let dialog = gtk::AboutDialog::new();
+    dialog.set_transient_for(parent);
     dialog.set_program_name(Some(APP_NAME));
     dialog.set_version(Some(VERSION));
     dialog.set_comments(Some(

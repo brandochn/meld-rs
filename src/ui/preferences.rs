@@ -2,6 +2,8 @@
 //! Full preferences dialog with tabs for General, Font, Filters, and Columns.
 //!
 //! Ported from the original `meld/preferences.py` (380 lines).
+//! Settings are applied in real-time via a callback, matching the original
+//! Meld's live GSettings binding behaviour.
 
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -10,50 +12,79 @@ use std::rc::Rc;
 
 use crate::config::settings::{FilterEntry, MeldSettings};
 
-/// Full preferences dialog with tabbed sections.
+/// Callback invoked every time a setting is modified in the dialog.
+/// The dialog saves to disk before calling this, so `apply_settings`
+/// can simply read from the shared `RefCell` or reload from disk.
+pub type SettingsChangedCallback = Box<dyn Fn()>;
+
+/// Full preferences dialog with tabbed sections.  Modeless — settings
+/// take effect immediately as the user changes them (no OK/Cancel).
 pub struct PreferencesDialog {
-    dialog: gtk::Dialog,
+    dialog: gtk::Window,
     settings: Rc<RefCell<MeldSettings>>,
+    on_changed: Rc<RefCell<Option<SettingsChangedCallback>>>,
 }
 
 impl PreferencesDialog {
-    /// Create a new preferences dialog loaded with current settings.
-    pub fn new() -> Self {
+    /// Create a new preferences dialog.
+    ///
+    /// `on_changed` is called after every setting modification so that
+    /// the caller can apply the new values to open documents.
+    /// `parent` is the transient parent window (centers the dialog).
+    pub fn new(on_changed: SettingsChangedCallback, parent: Option<&gtk::Window>) -> Self {
         let settings = MeldSettings::load().unwrap_or_default();
         let settings_rc = Rc::new(RefCell::new(settings));
+        let on_changed_rc = Rc::new(RefCell::new(Some(on_changed)));
 
-        let dialog = gtk::Dialog::new();
+        let dialog = gtk::Window::new();
         dialog.set_title(Some("Preferences"));
         dialog.set_default_size(600, 480);
-        dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-        dialog.add_button("OK", gtk::ResponseType::Ok);
+        dialog.set_transient_for(parent);
 
-        let content = dialog.content_area();
+        let main_vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let notebook = gtk::Notebook::new();
         notebook.set_scrollable(true);
+        notebook.set_vexpand(true);
 
-        let general_page = build_general_page(&settings_rc);
+        let general_page = build_general_page(&settings_rc, &on_changed_rc);
         notebook.append_page(&general_page, Some(&gtk::Label::new(Some("General"))));
 
-        let font_page = build_font_page(&settings_rc);
+        let font_page = build_font_page(&settings_rc, &on_changed_rc);
         notebook.append_page(&font_page, Some(&gtk::Label::new(Some("Font & Display"))));
 
-        let filters_page = build_filters_page(&settings_rc);
+        let filters_page = build_filters_page(&settings_rc, &on_changed_rc);
         notebook.append_page(&filters_page, Some(&gtk::Label::new(Some("Filters"))));
 
-        content.append(&notebook);
+        main_vbox.append(&notebook);
 
-        let settings_save = Rc::clone(&settings_rc);
-        dialog.connect_response(move |d, resp| {
-            if resp == gtk::ResponseType::Ok {
-                let _ = settings_save.borrow().save();
-            }
-            d.close();
+        // Close button at the bottom, matching the old OK/Cancel layout
+        let btn_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        btn_box.set_halign(gtk::Align::End);
+        btn_box.set_margin_top(6);
+        btn_box.set_margin_bottom(6);
+        btn_box.set_margin_start(12);
+        btn_box.set_margin_end(12);
+        let close_btn = gtk::Button::with_label("Close");
+        close_btn.set_focus_on_click(false);
+        btn_box.append(&close_btn);
+        main_vbox.append(&btn_box);
+
+        dialog.set_child(Some(&main_vbox));
+
+        let w = dialog.clone();
+        close_btn.connect_clicked(move |_| w.close());
+
+        // Save on close (belt-and-suspenders — every change already saves).
+        let s = Rc::clone(&settings_rc);
+        dialog.connect_close_request(move |_| {
+            let _ = s.borrow().save();
+            glib::Propagation::Proceed
         });
 
         Self {
             dialog,
             settings: settings_rc,
+            on_changed: on_changed_rc,
         }
     }
 
@@ -62,13 +93,30 @@ impl PreferencesDialog {
         self.dialog.present();
     }
 
-    /// Expose the underlying dialog for connecting external response handlers.
-    pub fn dialog(&self) -> &gtk::Dialog {
-        &self.dialog
+    /// Returns the shared settings being edited by this dialog.
+    pub fn settings(&self) -> &Rc<RefCell<MeldSettings>> {
+        &self.settings
     }
 }
 
-fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
+// ── Helper: persist + notify ──────────────────────────────────────
+
+fn notify(
+    settings: &Rc<RefCell<MeldSettings>>,
+    on_changed: &Rc<RefCell<Option<SettingsChangedCallback>>>,
+) {
+    let _ = settings.borrow().save();
+    if let Some(ref cb) = *on_changed.borrow() {
+        cb();
+    }
+}
+
+// ── Page builders ──────────────────────────────────────────────────
+
+fn build_general_page(
+    settings: &Rc<RefCell<MeldSettings>>,
+    on_changed: &Rc<RefCell<Option<SettingsChangedCallback>>>,
+) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_margin_top(12);
     page.set_margin_start(16);
@@ -76,51 +124,77 @@ fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
 
     // Dark theme toggle
     let dark_row = labeled_switch("Prefer dark theme", settings.borrow().prefer_dark_theme);
-    let s_dark = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     dark_row.1.connect_state_set(move |_, state| {
-        s_dark.borrow_mut().prefer_dark_theme = state;
+        s.borrow_mut().prefer_dark_theme = state;
+        notify(&s, &oc);
         glib::Propagation::Proceed
     });
     page.append(&dark_row.0);
 
     // Show line numbers
     let ln_row = labeled_switch("Show line numbers", settings.borrow().show_line_numbers);
-    let s_ln = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     ln_row.1.connect_state_set(move |_, state| {
-        s_ln.borrow_mut().show_line_numbers = state;
+        s.borrow_mut().show_line_numbers = state;
+        notify(&s, &oc);
         glib::Propagation::Proceed
     });
     page.append(&ln_row.0);
 
     // Highlight syntax
     let hs_row = labeled_switch("Highlight syntax", settings.borrow().highlight_syntax);
-    let s_hs = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     hs_row.1.connect_state_set(move |_, state| {
-        s_hs.borrow_mut().highlight_syntax = state;
+        s.borrow_mut().highlight_syntax = state;
+        notify(&s, &oc);
         glib::Propagation::Proceed
     });
     page.append(&hs_row.0);
 
-    // Ignore whitespace
+    // Highlight current line
+    let hcl_row = labeled_switch(
+        "Highlight current line",
+        settings.borrow().highlight_current_line,
+    );
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
+    hcl_row.1.connect_state_set(move |_, state| {
+        s.borrow_mut().highlight_current_line = state;
+        notify(&s, &oc);
+        glib::Propagation::Proceed
+    });
+    page.append(&hcl_row.0);
+
+    // Show whitespace
     let ws_row = labeled_switch("Show whitespace", settings.borrow().enable_space_drawer);
-    let s_ws = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     ws_row.1.connect_state_set(move |_, state| {
-        s_ws.borrow_mut().enable_space_drawer = state;
+        s.borrow_mut().enable_space_drawer = state;
+        notify(&s, &oc);
         gtk::glib::Propagation::Stop
     });
     page.append(&ws_row.0);
 
+    // Wrap lines
     let wl_row = labeled_switch(
         "Wrap lines",
         !settings.borrow().wrap_mode.is_empty() && settings.borrow().wrap_mode != "none",
     );
-    let s_wl = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     wl_row.1.connect_state_set(move |_, state| {
-        s_wl.borrow_mut().wrap_mode = if state { "word".into() } else { "none".into() };
+        s.borrow_mut().wrap_mode = if state { "word".into() } else { "none".into() };
+        notify(&s, &oc);
         gtk::glib::Propagation::Stop
     });
     page.append(&wl_row.0);
 
+    // Indent width
     let tw_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let tw_label = gtk::Label::new(Some("Indent width:"));
     tw_label.set_halign(gtk::Align::Start);
@@ -130,16 +204,14 @@ fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
     tw_spin.set_value(settings.borrow().indent_width as f64);
     tw_row.append(&tw_spin);
     page.append(&tw_row);
-    let s_tw = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     tw_spin.connect_value_changed(move |spin| {
-        s_tw.borrow_mut().indent_width = spin.value() as i32;
+        s.borrow_mut().indent_width = spin.value() as i32;
+        notify(&s, &oc);
     });
 
-    // Font picker button
-    let font_btn = gtk::Button::with_label("Choose Font...");
-    font_btn.set_halign(gtk::Align::Start);
-    page.append(&font_btn);
-
+    // Diff section
     let diff_section = gtk::Label::new(Some("Diff Visualization"));
     diff_section.set_halign(gtk::Align::Start);
     diff_section.set_xalign(0.0);
@@ -147,7 +219,7 @@ fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
     diff_section.add_css_class("heading");
     page.append(&diff_section);
 
-    // Inline diff mode dropdown
+    // Inline diff mode
     let id_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let id_label = gtk::Label::new(Some("Inline highlighting:"));
     id_label.set_halign(gtk::Align::Start);
@@ -164,14 +236,16 @@ fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
     id_dropdown.set_selected(selected);
     id_row.append(&id_dropdown);
     page.append(&id_row);
-    let s_id = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     id_dropdown.connect_selected_notify(move |dd| {
         let mode = match dd.selected() {
             1 => "characters",
             2 => "tokens",
             _ => "none",
         };
-        s_id.borrow_mut().inline_diff_mode = mode.to_string();
+        s.borrow_mut().inline_diff_mode = mode.to_string();
+        notify(&s, &oc);
     });
 
     // Ignore blank lines
@@ -179,9 +253,11 @@ fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
         "Ignore blank lines in diffs",
         settings.borrow().ignore_blank_lines,
     );
-    let s_bl = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     bl_row.1.connect_state_set(move |_, state| {
-        s_bl.borrow_mut().ignore_blank_lines = state;
+        s.borrow_mut().ignore_blank_lines = state;
+        notify(&s, &oc);
         glib::Propagation::Proceed
     });
     page.append(&bl_row.0);
@@ -189,7 +265,10 @@ fn build_general_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
     page
 }
 
-fn build_font_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
+fn build_font_page(
+    settings: &Rc<RefCell<MeldSettings>>,
+    on_changed: &Rc<RefCell<Option<SettingsChangedCallback>>>,
+) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_margin_top(12);
     page.set_margin_start(16);
@@ -200,9 +279,11 @@ fn build_font_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
         "Use system monospace font",
         settings.borrow().use_system_font,
     );
-    let s_sf = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     sf_row.1.connect_state_set(move |_, state| {
-        s_sf.borrow_mut().use_system_font = state;
+        s.borrow_mut().use_system_font = state;
+        notify(&s, &oc);
         glib::Propagation::Proceed
     });
     page.append(&sf_row.0);
@@ -215,31 +296,30 @@ fn build_font_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
 
     let font_entry = gtk::Entry::new();
     font_entry.set_text(&settings.borrow().custom_font);
-    font_entry.set_placeholder_text(Some("monospace 11"));
+    font_entry.set_placeholder_text(Some("monospace 12"));
     font_entry.set_hexpand(true);
     font_row.append(&font_entry);
     page.append(&font_row);
 
-    let s_font = Rc::clone(settings);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
     font_entry.connect_changed(move |entry| {
-        s_font.borrow_mut().custom_font = entry.text().to_string();
+        s.borrow_mut().custom_font = entry.text().to_string();
+        notify(&s, &oc);
     });
-
-    // Font picker button (future enhancement)
-    let font_btn = gtk::Button::with_label("Choose Font...");
-    font_btn.set_halign(gtk::Align::Start);
-    page.append(&font_btn);
 
     page
 }
 
-fn build_filters_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
+fn build_filters_page(
+    settings: &Rc<RefCell<MeldSettings>>,
+    on_changed: &Rc<RefCell<Option<SettingsChangedCallback>>>,
+) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_margin_top(12);
     page.set_margin_start(16);
     page.set_margin_end(16);
 
-    // Text filters section
     let tf_label = gtk::Label::new(Some("Text Filters (regex patterns to ignore in diffs):"));
     tf_label.set_halign(gtk::Align::Start);
     tf_label.set_xalign(0.0);
@@ -252,10 +332,10 @@ fn build_filters_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
     tf_scrolled.set_child(Some(&tf_list));
     page.append(&tf_scrolled);
 
-    let s_tf = Rc::clone(settings);
-    wire_filter_list(&tf_list, s_tf, true);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
+    wire_filter_list(&tf_list, s, oc, true);
 
-    // Filename filters section
     let ff_label = gtk::Label::new(Some("Filename Filters (shell glob patterns):"));
     ff_label.set_halign(gtk::Align::Start);
     ff_label.set_xalign(0.0);
@@ -269,13 +349,15 @@ fn build_filters_page(settings: &Rc<RefCell<MeldSettings>>) -> gtk::Box {
     ff_scrolled.set_child(Some(&ff_list));
     page.append(&ff_scrolled);
 
-    let s_ff = Rc::clone(settings);
-    wire_filter_list(&ff_list, s_ff, false);
+    let s = Rc::clone(settings);
+    let oc = Rc::clone(on_changed);
+    wire_filter_list(&ff_list, s, oc, false);
 
     page
 }
 
-/// Build a vertical list of filter rows, each with a checkbox, name, and pattern.
+// ── Filter list helpers ───────────────────────────────────────────
+
 fn build_filter_list(entries: &[FilterEntry]) -> gtk::ListBox {
     let list = gtk::ListBox::new();
     list.add_css_class("rich-list");
@@ -287,7 +369,6 @@ fn build_filter_list(entries: &[FilterEntry]) -> gtk::ListBox {
     list
 }
 
-/// Build a single filter row: [✓] Name — Pattern
 fn build_filter_row(entry: &FilterEntry) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row.set_margin_top(4);
@@ -306,28 +387,35 @@ fn build_filter_row(entry: &FilterEntry) -> gtk::Box {
     row
 }
 
-/// Wire up the filter list so that toggling checkboxes updates the backing
-/// `Vec<FilterEntry>` in settings. Pass `is_text` = true for text_filters.
-fn wire_filter_list(list: &gtk::ListBox, settings: Rc<RefCell<MeldSettings>>, is_text: bool) {
+fn wire_filter_list(
+    list: &gtk::ListBox,
+    settings: Rc<RefCell<MeldSettings>>,
+    on_changed: Rc<RefCell<Option<SettingsChangedCallback>>>,
+    is_text: bool,
+) {
     let mut i = 0;
     while let Some(child) = list.row_at_index(i) {
         if let Some(row) = child.child().and_downcast::<gtk::Box>() {
             if let Some(check) = row.first_child().and_downcast::<gtk::CheckButton>() {
                 let s = Rc::clone(&settings);
-                let l = list.clone();
+                let oc = Rc::clone(&on_changed);
                 let idx = i;
+                // Clone `settings` before moving into the closure so the
+                // outer loop can reuse it for the next row.
+                let settings2 = Rc::clone(&settings);
                 check.connect_toggled(move |cb| {
-                    let mut s = s.borrow_mut();
-                    let filters: &mut Vec<FilterEntry> = if is_text {
-                        &mut s.text_filters
-                    } else {
-                        &mut s.filename_filters
-                    };
-                    if let Some(entry) = filters.get_mut(idx as usize) {
-                        entry.enabled = cb.is_active();
+                    {
+                        let mut s = s.borrow_mut();
+                        let filters: &mut Vec<FilterEntry> = if is_text {
+                            &mut s.text_filters
+                        } else {
+                            &mut s.filename_filters
+                        };
+                        if let Some(entry) = filters.get_mut(idx as usize) {
+                            entry.enabled = cb.is_active();
+                        }
                     }
-                    // Suppress unused
-                    let _ = &l;
+                    notify(&settings2, &oc);
                 });
             }
         }
@@ -335,7 +423,8 @@ fn wire_filter_list(list: &gtk::ListBox, settings: Rc<RefCell<MeldSettings>>, is
     }
 }
 
-/// Helper: creates a labeled switch row.
+// ── Widget helpers ─────────────────────────────────────────────────
+
 fn labeled_switch(label: &str, active: bool) -> (gtk::Box, gtk::Switch) {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let lbl = gtk::Label::new(Some(label));

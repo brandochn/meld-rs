@@ -283,6 +283,7 @@ impl MeldWindow {
             filediff.set_ignore_blanks(self.settings.ignore_blank_lines);
             filediff.set_show_connectors(self.settings.show_connectors);
             filediff.set_inline_diff_mode(&self.settings.inline_diff_mode);
+            filediff.apply_settings(&self.settings);
             filediff.connect_gutter_key_modes(&self.window);
             filediff.set_files(gfiles);
             let label = create_closeable_tab_label("File Comparison", &self.notebook, &self.pages);
@@ -299,6 +300,7 @@ impl MeldWindow {
         filediff.set_ignore_blanks(self.settings.ignore_blank_lines);
         filediff.set_show_connectors(self.settings.show_connectors);
         filediff.set_inline_diff_mode(&self.settings.inline_diff_mode);
+        filediff.apply_settings(&self.settings);
         filediff.connect_gutter_key_modes(&self.window);
         filediff.set_files(gfiles);
         if let Some(out) = output {
@@ -539,27 +541,25 @@ impl MeldWindow {
     }
 
     fn setup_preferences_action(&self) {
-        let nb = self.notebook.clone();
         let pages = self.pages.clone();
-        let settings = Rc::clone(&self.settings);
+        let window = self.window.clone();
 
         let prefs_action = gio::SimpleAction::new("preferences", None);
+        let pages_cb = pages.clone();
+        let w = window.clone();
         prefs_action.connect_activate(move |_, _| {
-            let dialog = crate::ui::preferences::PreferencesDialog::new();
-            let nb = nb.clone();
-            let pages = pages.clone();
-            let settings = settings.clone();
-            dialog.dialog().connect_response(move |_, resp| {
-                if resp == gtk::ResponseType::Ok {
+            let p = pages_cb.clone();
+            let parent = Some(w.upcast_ref::<gtk::Window>());
+            let dialog = crate::ui::preferences::PreferencesDialog::new(
+                Box::new(move || {
                     if let Ok(reloaded) = MeldSettings::load() {
-                        for page in pages.borrow().iter() {
+                        for page in p.borrow().iter() {
                             page.apply_settings(&reloaded);
                         }
                     }
-                }
-                let _ = &nb;
-                let _ = &settings;
-            });
+                }),
+                parent,
+            );
             dialog.present();
         });
         self.window.add_action(&prefs_action);
@@ -898,6 +898,7 @@ fn open_comparison_in_notebook(
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+        filediff.apply_settings(settings);
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(gfiles);
         let label = create_closeable_tab_label("File Comparison", notebook, pages);
@@ -967,6 +968,7 @@ fn open_vc_file_comparison(
                     filediff.set_ignore_blanks(settings.ignore_blank_lines);
                     filediff.set_show_connectors(settings.show_connectors);
                     filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+                    filediff.apply_settings(settings);
                     filediff.connect_gutter_key_modes(window);
                     filediff.set_files(&files);
                     filediff.set_labels(&[format!("{} — local", relative_path), String::new()]);
@@ -1028,6 +1030,7 @@ fn open_vc_file_comparison(
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+        filediff.apply_settings(settings);
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
@@ -1083,6 +1086,7 @@ fn open_vc_file_comparison(
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+        filediff.apply_settings(settings);
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
@@ -1156,6 +1160,7 @@ fn handle_diff_request(
             fd.set_ignore_blanks(settings.ignore_blank_lines);
             fd.set_show_connectors(settings.show_connectors);
             fd.set_inline_diff_mode(&settings.inline_diff_mode);
+            fd.apply_settings(settings);
             fd.connect_gutter_key_modes(window);
             if !gfiles.is_empty() {
                 fd.set_files(&gfiles);
