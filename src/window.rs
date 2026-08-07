@@ -247,6 +247,13 @@ impl MeldWindow {
     pub fn append_new_comparison(&self) {
         let tab = crate::ui::new_diff_tab();
         let label = create_closeable_tab_label("New comparison", &self.notebook, &self.pages);
+        wire_new_diff_tab_standalone(
+            &tab,
+            &self.notebook,
+            &self.pages,
+            &self.settings,
+            &self.window,
+        );
         self.notebook.append_page(tab.widget(), Some(&label.widget));
         self.pages.borrow_mut().push(Box::new(tab));
     }
@@ -606,49 +613,198 @@ impl MeldWindow {
 
     /// Register view-level actions (`view.*` prefix) that dispatch to the
     /// currently active notebook page via [`MeldPage`] trait methods.
+
     fn setup_view_actions(&self) {
         let pages = self.pages.clone();
         let nb = self.notebook.clone();
 
-        /// Helper: call a method on the current page, if any.
-        macro_rules! dispatch {
-            ($action_name:expr, $method:ident) => {
-                dispatch!($action_name, $method, ())
-            };
-            ($action_name:expr, $method:ident, ()) => {{
-                let p = pages.clone();
-                let n = nb.clone();
-                let action = gio::SimpleAction::new($action_name, None);
-                let an = $action_name;
-                action.connect_activate(move |_, _| {
-                    let pages = p.borrow();
-                    if let Some(idx) = n.current_page() {
-                        if let Some(page) = pages.get(idx as usize) {
-                            log::info!("view.{} triggered on page {}", an, idx);
-                            page.$method();
-                        }
-                    }
-                });
-                self.window.add_action(&action);
-            }};
-        }
+        // Each view.* action is registered explicitly below.
+        // Pattern: clone Rc pointers, create action, connect_activate
+        // dispatches to the current page's trait method.
 
-        dispatch!("save-as", action_save_as);
-        dispatch!("save-all", action_save_all);
-        dispatch!("revert", action_revert);
-        dispatch!("open-external", action_open_external);
-        dispatch!("refresh", action_refresh);
-        dispatch!("find", action_find);
-        dispatch!("find-replace", action_find_replace);
-        dispatch!("show-overview-map", toggle_overview_map);
-        dispatch!("lock-scrolling", toggle_lock_scrolling);
-        dispatch!("swap-2-panes", action_swap_panes);
-        dispatch!("merge-all-left", action_merge_all_left);
-        dispatch!("merge-all-right", action_merge_all_right);
-        dispatch!("merge-all", action_merge_all);
-        dispatch!("format-as-patch", action_format_as_patch);
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("save-as", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_save_as();
+                }
+            }
+        });
+        self.window.add_action(&action);
 
-        // vc-console-visible: stub for now — requires VcView console support.
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("save-all", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_save_all();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("revert", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_revert();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("open-external", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_open_external();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("refresh", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_refresh();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("find", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_find();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("find-replace", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_find_replace();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("show-overview-map", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.toggle_overview_map();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("lock-scrolling", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.toggle_lock_scrolling();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("swap-2-panes", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_swap_panes();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("merge-all-left", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_merge_all_left();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("merge-all-right", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_merge_all_right();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("merge-all", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_merge_all();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("format-as-patch", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_format_as_patch();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        // vc-console-visible: stub for now.
         let vc_console_action = gio::SimpleAction::new("vc-console-visible", None);
         vc_console_action.connect_activate(|_, _| {
             log::info!("view.vc-console-visible triggered (not yet implemented)");
