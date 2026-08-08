@@ -233,18 +233,48 @@ fn setup_actions(app: &gtk::Application) {
     app.add_action(&quit);
     app.set_accels_for_action("app.quit", &["<Ctrl>Q"]);
 
+    let app_w = app.downgrade();
     let about = gio::SimpleAction::new("about", None);
-    about.connect_activate(|_, _| {
-        show_about_dialog();
+    about.connect_activate(move |_, _| {
+        let parent = app_w.upgrade().and_then(|a| a.active_window());
+        show_about_dialog(parent.as_ref().map(|w| w.upcast_ref::<gtk::Window>()));
     });
     app.add_action(&about);
 
-    let prefs = gio::SimpleAction::new("preferences", None);
+    // Preferences: delegates to the active window's `preferences` action
+    // (registered by each MeldWindow in `setup_preferences_action()`).
+    // Uses `activate_action` (WidgetExt) which works on any GtkWindow.
     let app_w = app.downgrade();
+    let prefs = gio::SimpleAction::new("preferences", None);
     prefs.connect_activate(move |_, _| {
-        // Preferences would be shown here
+        if let Some(a) = app_w.upgrade() {
+            if let Some(win) = a.active_window() {
+                win.activate_action("preferences", None).ok();
+                return;
+            }
+            log::warn!("app.preferences: no active window found");
+        }
     });
     app.add_action(&prefs);
+
+    // Help: open the project website in the default browser.
+    let help = gio::SimpleAction::new("help", None);
+    help.connect_activate(|_, _| {
+        let url = "https://github.com/brandochn/meld-rs";
+        let result = if cfg!(target_os = "windows") {
+            std::process::Command::new("cmd")
+                .args(["/c", "start", url])
+                .spawn()
+        } else if cfg!(target_os = "macos") {
+            std::process::Command::new("open").arg(url).spawn()
+        } else {
+            std::process::Command::new("xdg-open").arg(url).spawn()
+        };
+        if let Err(e) = result {
+            log::error!("Failed to open help URL '{}': {}", url, e);
+        }
+    });
+    app.add_action(&help);
 }
 
 /// Run one-time application setup (actions, CSS, style schemes).
@@ -480,8 +510,9 @@ fn add_language_search_path(base_dir: &std::path::Path) {
     }
 }
 
-fn show_about_dialog() {
+fn show_about_dialog(parent: Option<&gtk::Window>) {
     let dialog = gtk::AboutDialog::new();
+    dialog.set_transient_for(parent);
     dialog.set_program_name(Some(APP_NAME));
     dialog.set_version(Some(VERSION));
     dialog.set_comments(Some(

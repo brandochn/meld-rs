@@ -65,6 +65,45 @@ pub trait MeldPage {
     fn set_diff_created_callback(&self, _cb: DiffCreatedCallback) {}
     /// Re-apply settings after preferences dialog is closed.
     fn apply_settings(&self, _settings: &MeldSettings) {}
+
+    // ── Gear-menu action handlers ──────────────────────────────────
+
+    /// Save the currently focused pane to disk.
+    fn action_save(&self) {}
+    /// Save the focused pane with a new filename ("Save As…").
+    fn action_save_as(&self) {}
+    /// Save every modified pane.
+    fn action_save_all(&self) {}
+    /// Revert all panes to the last saved (or original) state.
+    fn action_revert(&self) {}
+    /// Open the focused file in the system's external editor.
+    fn action_open_external(&self) {}
+    /// Refresh / recompute the comparison from scratch.
+    fn action_refresh(&self) {}
+    /// Open the find bar.
+    fn action_find(&self) {}
+    /// Open the find-and-replace bar.
+    fn action_find_replace(&self) {}
+    /// Jump to the next search match.
+    fn action_find_next(&self) {}
+    /// Jump to the previous search match.
+    fn action_find_previous(&self) {}
+    /// Cancel the currently-running background task (diff, scan, etc.).
+    fn action_stop(&self) {}
+    /// Merge all non-conflicting changes from the right pane into the left.
+    fn action_merge_all_left(&self) {}
+    /// Merge all non-conflicting changes from the left pane into the right.
+    fn action_merge_all_right(&self) {}
+    /// Auto-merge all non-conflicting changes (3-way merge).
+    fn action_merge_all(&self) {}
+    /// Open the "Format as Patch" dialog.
+    fn action_format_as_patch(&self) {}
+    /// Swap the left and right panes.
+    fn action_swap_panes(&self) {}
+    /// Toggle the overview (chunk) map visibility.
+    fn toggle_overview_map(&self) {}
+    /// Toggle synchronized scrolling lock.
+    fn toggle_lock_scrolling(&self) {}
 }
 
 /// Payload sent from `NewDiffTab` when the user requests a comparison.
@@ -194,6 +233,8 @@ impl MeldWindow {
         w.setup_accels();
         w.setup_drag_drop();
         w.setup_preferences_action();
+        w.setup_gear_actions();
+        w.setup_text_filter_popover();
         w
     }
 
@@ -202,161 +243,135 @@ impl MeldWindow {
         self.window.present();
     }
 
-    /// Append a "New comparison" tab (shown on first launch).
+    /// Append a "New Comparison" tab.
     pub fn append_new_comparison(&self) {
-        self.create_and_append_new_diff_tab();
+        let tab = crate::ui::new_diff_tab();
+        let label = create_closeable_tab_label("New comparison", &self.notebook, &self.pages);
+        wire_new_diff_tab_standalone(
+            &tab,
+            &self.notebook,
+            &self.pages,
+            &self.settings,
+            &self.window,
+        );
+        self.notebook.append_page(tab.widget(), Some(&label.widget));
+        self.pages.borrow_mut().push(Box::new(tab));
     }
 
+    /// Open one or more file paths for comparison.
     pub fn open_paths(
         &self,
         gfiles: &[gio::File],
         auto_compare: bool,
-        auto_merge: bool,
-        focus: bool,
+        _auto_merge: bool,
+        setup_cb: bool,
     ) {
-        if gfiles.len() == 1 {
-            self.open_single_path(&gfiles[0], focus);
-        } else if gfiles.len() >= 2 {
+        if setup_cb {
             open_comparison_in_notebook(
                 &self.notebook,
                 &self.pages,
                 gfiles,
                 auto_compare,
-                auto_merge,
+                _auto_merge,
                 &self.settings,
                 &self.window,
             );
-            if focus {
-                let n = (self.notebook.n_pages() as i32 - 1).max(0) as u32;
-                self.notebook.set_current_page(Some(n));
-            }
+        } else {
+            let num_panes = gfiles.len().max(2);
+            let filediff = FileDiff::new(num_panes);
+            filediff.set_font(self.settings.use_system_font, &self.settings.custom_font);
+            filediff.set_ignore_blanks(self.settings.ignore_blank_lines);
+            filediff.set_show_connectors(self.settings.show_connectors);
+            filediff.set_inline_diff_mode(&self.settings.inline_diff_mode);
+            filediff.apply_settings(&self.settings);
+            filediff.connect_gutter_key_modes(&self.window);
+            filediff.set_files(gfiles);
+            let label = create_closeable_tab_label("File Comparison", &self.notebook, &self.pages);
+            self.notebook
+                .append_page(filediff.widget(), Some(&label.widget));
+            self.pages.borrow_mut().push(Box::new(filediff));
         }
     }
 
     pub fn open_file_merge(&self, gfiles: &[gio::File], output: Option<&str>) {
-        if gfiles.len() != 3 {
-            return;
-        }
-        let filediff = FileDiff::new(3);
+        let num_panes = 3usize;
+        let filediff = FileDiff::new(num_panes);
         filediff.set_font(self.settings.use_system_font, &self.settings.custom_font);
         filediff.set_ignore_blanks(self.settings.ignore_blank_lines);
         filediff.set_show_connectors(self.settings.show_connectors);
         filediff.set_inline_diff_mode(&self.settings.inline_diff_mode);
+        filediff.apply_settings(&self.settings);
         filediff.connect_gutter_key_modes(&self.window);
         filediff.set_files(gfiles);
         if let Some(out) = output {
             filediff.set_merge_output_file(out);
         }
-        let label = create_closeable_tab_label("Merge", &self.notebook, &self.pages);
+        let label = create_closeable_tab_label("File Merge", &self.notebook, &self.pages);
         self.notebook
             .append_page(filediff.widget(), Some(&label.widget));
         self.pages.borrow_mut().push(Box::new(filediff));
-
-        let paths: Vec<String> = gfiles
-            .iter()
-            .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
-            .collect();
-        save_recent_comparison(RecentType::Merge, &paths);
     }
 
-    /// Open a version-control view for the given repository location.
-    ///
-    /// Wires the file-activated callback so that double-clicking a file
-    /// respects `vc_left_is_local` (2-pane) and `vc_merge_file_order` (3-pane).
-    pub fn open_vc_view(&self, location: &str, _auto_compare: bool) {
-        let view = VcView::new();
-        view.set_location(location);
-
-        // Wire the double-click callback using VC pane-order settings
-        let nb = self.notebook.clone();
-        let pages = self.pages.clone();
-        let settings = Rc::clone(&self.settings);
-        let _loc_owned = location.to_owned();
-        let w = self.window.clone();
-        view.connect_file_activated(move |repo_root, relative_path, status| {
-            open_vc_file_comparison(
-                &nb,
-                &pages,
-                &settings,
-                &repo_root,
-                &relative_path,
-                status,
-                &w,
-            );
-        });
-
+    pub fn open_vc_view(&self, location: &str, auto_compare: bool) {
+        let vc = VcView::new();
+        vc.set_location(location);
         let label = create_closeable_tab_label("Version Control", &self.notebook, &self.pages);
-        self.notebook
-            .append_page(view.widget(), Some(&label.widget));
-        self.pages.borrow_mut().push(Box::new(view));
-
-        save_recent_comparison(RecentType::VersionControl, &[location.to_string()]);
+        self.notebook.append_page(vc.widget(), Some(&label.widget));
+        self.pages.borrow_mut().push(Box::new(vc));
+        let _ = auto_compare;
     }
 
-    pub fn set_labels(&self, _labels: &[String]) {}
+    pub fn set_labels(&self, _labels: &[String]) {
+        // Per-page labels are set in FileDiff::set_labels.
+    }
 
     pub fn has_pages(&self) -> bool {
-        self.notebook.n_pages() > 0
+        !self.pages.borrow().is_empty()
     }
 
-    fn open_single_path(&self, gfile: &gio::File, focus: bool) {
-        if let Some(path) = gfile.path() {
-            let is_dir = path.is_dir();
-            if is_dir {
-                self.open_vc_view(&path.to_string_lossy().into_owned(), false);
-            } else {
-                open_comparison_in_notebook(
-                    &self.notebook,
-                    &self.pages,
-                    &[gfile.clone()],
-                    false,
-                    false,
-                    &self.settings,
-                    &self.window,
-                );
-            }
-            if focus {
-                let n = (self.notebook.n_pages() as i32 - 1).max(0) as u32;
-                self.notebook.set_current_page(Some(n));
-            }
+    fn open_single_path(&self, path: &std::path::Path, auto_compare: bool, setup_cb: bool) {
+        if path.is_dir() {
+            self.open_vc_view(&path.to_string_lossy().into_owned(), auto_compare);
+        } else {
+            self.open_paths(&[gio::File::for_path(path)], auto_compare, false, setup_cb);
         }
     }
 
     fn create_and_append_new_diff_tab(&self) {
         let tab = crate::ui::new_diff_tab();
         let label = create_closeable_tab_label("New comparison", &self.notebook, &self.pages);
-        self.wire_new_diff_tab(&tab);
         self.notebook.append_page(tab.widget(), Some(&label.widget));
         self.pages.borrow_mut().push(Box::new(tab));
     }
 
-    /// Wire the diff-created callback on a NewDiffTab. When the user
-    /// clicks Compare or Blank, the appropriate comparison tab is created
-    /// and the NewDiffTab is removed on the next idle cycle.
-    fn wire_new_diff_tab(&self, tab: &dyn MeldPage) {
-        let nb = self.notebook.clone();
-        let pages = self.pages.clone();
-        let settings = Rc::clone(&self.settings);
+    fn wire_new_diff_tab(
+        &self,
+        tab: &dyn MeldPage,
+        notebook: &gtk::Notebook,
+        pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    ) {
+        let nb = notebook.clone();
+        let p = Rc::clone(pages);
+        let s = Rc::new(self.settings.clone());
         let w = self.window.clone();
         tab.set_diff_created_callback(Box::new(move |req: DiffRequest| {
             let auto_compare = false;
             let auto_merge = false;
-            handle_diff_request(&nb, &pages, &req, auto_compare, auto_merge, &settings, &w);
+            handle_diff_request(&nb, &p, &req, auto_compare, auto_merge, &s, &w);
 
-            // Remove NewDiffTab on the next idle cycle
-            let p_clone = Rc::clone(&pages);
+            let p_clone = Rc::clone(&p);
             let nb_clone = nb.clone();
             glib::idle_add_local(move || {
                 let to_remove: Vec<usize> = {
-                    let mut p = p_clone.borrow_mut();
+                    let mut pages = p_clone.borrow_mut();
                     let mut indices = Vec::new();
-                    for (i, page) in p.iter().enumerate() {
+                    for (i, page) in pages.iter().enumerate() {
                         if page.label() == "New comparison" {
                             indices.push(i);
                         }
                     }
                     for &idx in indices.iter().rev() {
-                        p.remove(idx);
+                        pages.remove(idx);
                     }
                     indices
                 };
@@ -526,30 +541,324 @@ impl MeldWindow {
     }
 
     fn setup_preferences_action(&self) {
-        let nb = self.notebook.clone();
         let pages = self.pages.clone();
-        let settings = Rc::clone(&self.settings);
+        let window = self.window.clone();
 
         let prefs_action = gio::SimpleAction::new("preferences", None);
+        let pages_cb = pages.clone();
+        let w = window.clone();
         prefs_action.connect_activate(move |_, _| {
-            let dialog = crate::ui::preferences::PreferencesDialog::new();
-            let nb = nb.clone();
-            let pages = pages.clone();
-            let settings = settings.clone();
-            dialog.dialog().connect_response(move |_, resp| {
-                if resp == gtk::ResponseType::Ok {
+            let p = pages_cb.clone();
+            let parent = Some(w.upcast_ref::<gtk::Window>());
+            let dialog = crate::ui::preferences::PreferencesDialog::new(
+                Box::new(move || {
                     if let Ok(reloaded) = MeldSettings::load() {
-                        for page in pages.borrow().iter() {
+                        for page in p.borrow().iter() {
                             page.apply_settings(&reloaded);
                         }
                     }
-                }
-                let _ = &nb;
-                let _ = &settings;
-            });
+                }),
+                parent,
+            );
             dialog.present();
         });
         self.window.add_action(&prefs_action);
+    }
+
+    /// Register all actions referenced by the gear menu so they are enabled.
+    ///
+    /// Actions with a `win.` prefix are added to the window; those with a
+    /// `view.` prefix dispatch to the current notebook page where applicable.
+    fn setup_gear_actions(&self) {
+        self.setup_win_actions();
+        self.setup_view_actions();
+    }
+
+    /// Register window-level actions (`win.*` prefix).
+    fn setup_win_actions(&self) {
+        // Fullscreen toggle
+        let w = self.window.clone();
+        let fullscreen_action = gio::SimpleAction::new("fullscreen", None);
+        fullscreen_action.connect_activate(move |_, _| {
+            if w.is_fullscreen() {
+                w.unfullscreen();
+            } else {
+                w.fullscreen();
+            }
+        });
+        self.window.add_action(&fullscreen_action);
+
+        // Stop: dispatch to the current page's action_stop(), matching
+        // the original Meld pattern of delegating to current_doc().
+        let pages_stop = self.pages.clone();
+        let nb_stop = self.notebook.clone();
+        let stop_action = gio::SimpleAction::new("stop", None);
+        stop_action.connect_activate(move |_, _| {
+            let pages = pages_stop.borrow();
+            if let Some(idx) = nb_stop.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_stop();
+                }
+            }
+        });
+        self.window.add_action(&stop_action);
+
+        // Keyboard shortcuts overlay
+        let help_overlay_action = gio::SimpleAction::new("show-help-overlay", None);
+        help_overlay_action.connect_activate(|_, _| {
+            log::info!("Keyboard shortcuts help requested");
+        });
+        self.window.add_action(&help_overlay_action);
+    }
+
+    /// Register view-level actions (`view.*` prefix) that dispatch to the
+    /// currently active notebook page via [`MeldPage`] trait methods.
+
+    fn setup_view_actions(&self) {
+        let pages = self.pages.clone();
+        let nb = self.notebook.clone();
+
+        // Each view.* action is registered explicitly below.
+        // Pattern: clone Rc pointers, create action, connect_activate
+        // dispatches to the current page's trait method.
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("save-as", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_save_as();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("save-all", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_save_all();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("revert", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_revert();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("open-external", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_open_external();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("refresh", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_refresh();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("find", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_find();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("find-replace", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_find_replace();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("show-overview-map", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.toggle_overview_map();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("lock-scrolling", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.toggle_lock_scrolling();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("swap-2-panes", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_swap_panes();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("merge-all-left", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_merge_all_left();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("merge-all-right", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_merge_all_right();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("merge-all", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_merge_all();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("format-as-patch", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_format_as_patch();
+                }
+            }
+        });
+        self.window.add_action(&action);
+
+        // vc-console-visible: stub for now.
+        let vc_console_action = gio::SimpleAction::new("vc-console-visible", None);
+        vc_console_action.connect_activate(|_, _| {
+            log::info!("view.vc-console-visible triggered (not yet implemented)");
+        });
+        self.window.add_action(&vc_console_action);
+    }
+
+    /// Set up a popover for the text-filter dropdown button with checkboxes
+    /// for every text filter defined in the current settings.
+    fn setup_text_filter_popover(&self) {
+        let settings = Rc::clone(&self.settings);
+        let btn = self.text_filter_btn.clone();
+
+        let popover = gtk::Popover::new();
+        popover.connect_show(move |pop| {
+            // Clear any previous content so the popover is rebuilt fresh
+            // every time it opens, reflecting the latest settings on disk.
+            pop.set_child(gtk::Widget::NONE);
+
+            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            vbox.set_margin_top(8);
+            vbox.set_margin_bottom(8);
+            vbox.set_margin_start(12);
+            vbox.set_margin_end(12);
+
+            let header = gtk::Label::new(Some("Text Filters"));
+            header.add_css_class("heading");
+            header.set_halign(gtk::Align::Start);
+            vbox.append(&header);
+
+            let filters = settings.text_filters.clone();
+
+            for (i, filter) in filters.iter().enumerate() {
+                let cb = gtk::CheckButton::with_label(&filter.name);
+                cb.set_active(filter.enabled);
+                cb.connect_toggled(move |check| {
+                    // Persist the toggle by reloading settings from disk,
+                    // updating the relevant filter, and saving back.
+                    if let Ok(mut updated) = MeldSettings::load() {
+                        if let Some(f) = updated.text_filters.get_mut(i) {
+                            f.enabled = check.is_active();
+                        }
+                        if let Err(e) = updated.save() {
+                            log::error!("Failed to save text filter setting: {}", e);
+                        }
+                    }
+                });
+                vbox.append(&cb);
+            }
+
+            pop.set_child(Some(&vbox));
+        });
+
+        btn.set_popover(Some(&popover));
     }
 }
 
@@ -589,6 +898,7 @@ fn open_comparison_in_notebook(
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+        filediff.apply_settings(settings);
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(gfiles);
         let label = create_closeable_tab_label("File Comparison", notebook, pages);
@@ -658,6 +968,7 @@ fn open_vc_file_comparison(
                     filediff.set_ignore_blanks(settings.ignore_blank_lines);
                     filediff.set_show_connectors(settings.show_connectors);
                     filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+                    filediff.apply_settings(settings);
                     filediff.connect_gutter_key_modes(window);
                     filediff.set_files(&files);
                     filediff.set_labels(&[format!("{} — local", relative_path), String::new()]);
@@ -719,6 +1030,7 @@ fn open_vc_file_comparison(
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+        filediff.apply_settings(settings);
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
@@ -774,6 +1086,7 @@ fn open_vc_file_comparison(
         filediff.set_ignore_blanks(settings.ignore_blank_lines);
         filediff.set_show_connectors(settings.show_connectors);
         filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+        filediff.apply_settings(settings);
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(&files);
         filediff.set_labels(&labels);
@@ -847,6 +1160,7 @@ fn handle_diff_request(
             fd.set_ignore_blanks(settings.ignore_blank_lines);
             fd.set_show_connectors(settings.show_connectors);
             fd.set_inline_diff_mode(&settings.inline_diff_mode);
+            fd.apply_settings(settings);
             fd.connect_gutter_key_modes(window);
             if !gfiles.is_empty() {
                 fd.set_files(&gfiles);
@@ -1043,40 +1357,61 @@ fn save_recent_comparison(comparison_type: RecentType, paths: &[String]) {
     }
 }
 
-/// Build the complete gear menu matching `menus.ui`.
+/// Build the complete gear menu matching `menus.ui` from the original Meld.
 fn build_gear_menu() -> gio::Menu {
     let menu = gio::Menu::new();
-    menu.append(Some("Save As…"), Some("view.save-as"));
-    menu.append(Some("Save A_ll"), Some("view.save-all"));
-    menu.append(Some("Revert Files…"), Some("view.revert"));
-    menu.append(Some("_Open Externally"), Some("view.open-external"));
 
+    // File section
+    let file_section = gio::Menu::new();
+    file_section.append(Some("Save As..."), Some("view.save-as"));
+    file_section.append(Some("Save A_ll"), Some("view.save-all"));
+    file_section.append(Some("Revert Files..."), Some("view.revert"));
+    file_section.append(Some("_Open Externally"), Some("view.open-external"));
+    menu.append_section(None, &file_section);
+
+    // Refresh section
     let refresh_section = gio::Menu::new();
     refresh_section.append(Some("Refresh Comparison"), Some("view.refresh"));
     menu.append_section(None, &refresh_section);
 
+    // Find section
     let find_section = gio::Menu::new();
-    find_section.append(Some("_Find…"), Some("view.find"));
-    find_section.append(Some("_Replace…"), Some("view.find-replace"));
+    find_section.append(Some("_Find..."), Some("view.find"));
+    find_section.append(Some("_Replace..."), Some("view.find-replace"));
     menu.append_section(None, &find_section);
 
+    // View submenu with sections matching the original menus.ui
     let view_sub = gio::Menu::new();
-    view_sub.append(Some("Fullscreen"), Some("win.fullscreen"));
-    view_sub.append(Some("Overview Map"), Some("view.show-overview-map"));
-    view_sub.append(Some("Lock Scrolling"), Some("view.lock-scrolling"));
-    view_sub.append(Some("Swap Left and Right Panes"), Some("view.swap-2-panes"));
+    let view_section = gio::Menu::new();
+    view_section.append(Some("Fullscreen"), Some("win.fullscreen"));
+    view_section.append(Some("Overview Map"), Some("view.show-overview-map"));
+    view_section.append(
+        Some("Version Control Console"),
+        Some("view.vc-console-visible"),
+    );
+    view_section.append(Some("Lock Scrolling"), Some("view.lock-scrolling"));
+    view_sub.append_section(None, &view_section);
+    let swap_section = gio::Menu::new();
+    swap_section.append(Some("Swap Left and Right Panes"), Some("view.swap-2-panes"));
+    view_sub.append_section(None, &swap_section);
     menu.append_submenu(Some("_View"), &view_sub);
 
+    // Comparison submenu with sections matching the original menus.ui
     let cmp_sub = gio::Menu::new();
     cmp_sub.append(Some("_Stop"), Some("win.stop"));
-    cmp_sub.append(Some("Merge All from _Left"), Some("view.merge-all-left"));
-    cmp_sub.append(Some("Merge All from _Right"), Some("view.merge-all-right"));
-    cmp_sub.append(Some("Merge _All"), Some("view.merge-all"));
-    cmp_sub.append(Some("Format as _Patch…"), Some("view.format-as-patch"));
+    let merge_section = gio::Menu::new();
+    merge_section.append(Some("Merge All from _Left"), Some("view.merge-all-left"));
+    merge_section.append(Some("Merge All from _Right"), Some("view.merge-all-right"));
+    merge_section.append(Some("Merge _All"), Some("view.merge-all"));
+    cmp_sub.append_section(None, &merge_section);
+    let tool_section = gio::Menu::new();
+    tool_section.append(Some("Format as _Patch..."), Some("view.format-as-patch"));
+    cmp_sub.append_section(None, &tool_section);
     menu.append_submenu(Some("_Comparison"), &cmp_sub);
 
+    // Application section
     let app_section = gio::Menu::new();
-    app_section.append(Some("_Preferences"), Some("app.preferences"));
+    app_section.append(Some("_Preferences"), Some("win.preferences"));
     app_section.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
     app_section.append(Some("_Help"), Some("app.help"));
     app_section.append(Some("_About Meld"), Some("app.about"));

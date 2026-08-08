@@ -275,6 +275,27 @@ impl MeldPage for VcView {
     fn show_filters(&self) -> (bool, bool, bool) {
         (true, false, false)
     }
+
+    fn action_refresh(&self) {
+        if let Some(loc) = self.location.borrow().clone() {
+            self.set_location(&loc);
+        }
+    }
+
+    fn action_open_external(&self) {
+        if let Some(loc) = self.location.borrow().as_ref() {
+            let result = if cfg!(target_os = "windows") {
+                std::process::Command::new("explorer").arg(loc).spawn()
+            } else if cfg!(target_os = "macos") {
+                std::process::Command::new("open").arg(loc).spawn()
+            } else {
+                std::process::Command::new("xdg-open").arg(loc).spawn()
+            };
+            if let Err(e) = result {
+                log::error!("Failed to open location '{}': {}", loc, e);
+            }
+        }
+    }
 }
 
 fn get_selected_path(tv: &gtk::TreeView) -> Option<String> {
