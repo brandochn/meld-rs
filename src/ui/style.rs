@@ -25,7 +25,8 @@
 //! All accessors are theme-aware: they return the dark variants when the GTK
 //! application is using a dark theme (see [`is_dark`]).
 
-use gtk4 as gtk;
+use libadwaita as adw;
+use sourceview5 as gsv;
 
 use crate::diff::engine::DiffOp;
 
@@ -48,11 +49,34 @@ const REPLACE_LINE_DARK: Rgb = (0.0, 0.3255, 0.6510); // #0053a6
 const CONFLICT_FILL_DARK: Rgb = (0.4784, 0.1647, 0.1569); // #7a2a28
 const CONFLICT_LINE_DARK: Rgb = (0.6745, 0.2314, 0.2235); // #ac3b39
 
-/// Whether the GTK application is currently using a dark theme.
+/// Whether the application is currently using a dark appearance.
+///
+/// Consults the Adwaita style manager so that forced colour schemes from the
+/// `style-variant` setting (`force-light` / `force-dark`) are honoured;
+/// otherwise the system preference applies.
 pub fn is_dark() -> bool {
-    gtk::Settings::default()
-        .map(|s| s.is_gtk_application_prefer_dark_theme())
-        .unwrap_or(false)
+    let manager = adw::StyleManager::default();
+    match manager.color_scheme() {
+        adw::ColorScheme::ForceDark => true,
+        adw::ColorScheme::ForceLight => false,
+        // Follow the system (also covers PreferLight / PreferDark).
+        _ => manager.is_dark(),
+    }
+}
+
+/// Apply the `style-variant` setting to the Adwaita style manager.
+///
+/// Mirrors the original Meld's `MeldSettings.on_setting_changed` handling of
+/// `style-variant`: `"force-light"` / `"force-dark"` override the system
+/// colour scheme, anything else (including `"default"`) follows the system.
+pub fn apply_style_variant(variant: &str) {
+    let manager = adw::StyleManager::default();
+    let scheme = match variant {
+        "force-light" => adw::ColorScheme::ForceLight,
+        "force-dark" => adw::ColorScheme::ForceDark,
+        _ => adw::ColorScheme::Default,
+    };
+    manager.set_color_scheme(scheme);
 }
 
 /// Fill (light paragraph-background) colour for a chunk of the given op.
@@ -126,6 +150,16 @@ pub fn fill_hex(op: DiffOp) -> Option<&'static str> {
     }
 }
 
+/// Line (saturated chunk-outline) colour as a CSS hex string.
+pub fn line_hex(op: DiffOp) -> Option<&'static str> {
+    let dark = is_dark();
+    match op {
+        DiffOp::Insert | DiffOp::Delete => Some(if dark { "#245515" } else { "#a5ff4c" }),
+        DiffOp::Replace => Some(if dark { "#0053a6" } else { "#65b2ff" }),
+        DiffOp::Equal => None,
+    }
+}
+
 /// Hex string for the conflict fill colour.
 pub fn conflict_fill_hex() -> &'static str {
     if is_dark() {
@@ -167,6 +201,60 @@ pub fn inline_replace_hex() -> &'static str {
     } else {
         "#4488ff"
     }
+}
+
+/// Select the GtkSourceView style scheme to use, tied to the current
+/// appearance so the source view always follows the Interface Style
+/// setting (mirrors the original Meld's `set_base_style_scheme` +
+/// `adapt_style_scheme`).
+///
+/// - Meld's own base schemes (`meld-base` / `meld-dark`) and the gschema
+///   default (`classic`) map directly onto the appearance: `meld-dark`
+///   when dark, `meld-base` otherwise (preserving meld-rs's default look).
+/// - Any other explicitly chosen scheme is adapted to the current
+///   appearance via GtkSourceView's `variant` / `dark-variant` /
+///   `light-variant` metadata: e.g. `Adwaita-dark` becomes `Adwaita` in
+///   light mode, so switching Interface Style always re-themes the view.
+///
+/// Called both at pane creation and from `FileDiff::apply_settings` so
+/// interface-style switches apply live.
+pub fn resolve_style_scheme(
+    manager: &gsv::StyleSchemeManager,
+    chosen: &str,
+) -> Option<gsv::StyleScheme> {
+    let scheme = match chosen {
+        "classic" | "meld-base" | "meld-dark" => {
+            preferred_scheme_id(|id| manager.scheme(id).is_some()).and_then(|id| manager.scheme(id))
+        }
+        other => manager.scheme(other),
+    };
+    scheme.map(|scheme| adapt_style_scheme(manager, &scheme))
+}
+
+/// Swap `scheme` for its light/dark counterpart when its variant metadata
+/// does not match the current appearance.
+///
+/// Mirrors the original Meld's `adapt_style_scheme`: GtkSourceView schemes
+/// declare a `variant` (light/dark) plus a `dark-variant` / `light-variant`
+/// metadata entry naming the paired scheme.
+fn adapt_style_scheme(
+    manager: &gsv::StyleSchemeManager,
+    scheme: &gsv::StyleScheme,
+) -> gsv::StyleScheme {
+    let desired = if is_dark() { "dark" } else { "light" };
+    let Some(variant) = scheme.metadata("variant") else {
+        // No variant metadata — trust the scheme as-is.
+        return scheme.clone();
+    };
+    if variant.as_str() == desired {
+        return scheme.clone();
+    }
+    if let Some(other) = scheme.metadata(&format!("{desired}-variant")) {
+        if let Some(alt) = manager.scheme(other.as_str()) {
+            return alt;
+        }
+    }
+    scheme.clone()
 }
 
 /// Select the GtkSourceView style-scheme id to use for syntax highlighting,

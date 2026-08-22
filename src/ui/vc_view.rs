@@ -282,6 +282,10 @@ impl MeldPage for VcView {
         }
     }
 
+    fn supports_refresh(&self) -> bool {
+        true
+    }
+
     fn action_open_external(&self) {
         if let Some(loc) = self.location.borrow().as_ref() {
             let result = if cfg!(target_os = "windows") {

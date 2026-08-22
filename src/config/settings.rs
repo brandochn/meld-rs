@@ -33,8 +33,13 @@ pub struct FilterEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeldSettings {
     // GtkSettings overrides
-    #[serde(default)]
+    /// Legacy key from older meld-rs versions.  On load it is migrated into
+    /// `style_variant` (see `MeldSettings::load`); it is no longer serialised.
+    #[serde(default, skip_serializing)]
     pub prefer_dark_theme: bool,
+    /// Colour scheme override: `"default"`, `"force-light"`, or `"force-dark"`.
+    #[serde(default = "default_style_variant")]
+    pub style_variant: String,
 
     // File loading
     #[serde(default)]
@@ -135,6 +140,9 @@ pub struct MeldSettings {
 
 fn default_indent_width() -> i32 {
     8
+}
+fn default_style_variant() -> String {
+    "default".into()
 }
 fn default_style_scheme() -> String {
     "classic".into()
@@ -269,6 +277,7 @@ impl Default for MeldSettings {
     fn default() -> Self {
         Self {
             prefer_dark_theme: false,
+            style_variant: "default".into(),
             detect_encodings: Vec::new(),
             indent_width: 8,
             insert_spaces_instead_of_tabs: false,
@@ -393,7 +402,14 @@ impl MeldSettings {
     pub fn load() -> Result<Self, SettingsError> {
         let path = settings_path()?;
         if path.exists() {
-            Ok(serde_json::from_str(&std::fs::read_to_string(&path)?)?)
+            let mut settings: Self = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+            // Migrate the legacy boolean dark-theme key to `style_variant`
+            // (older meld-rs versions stored `prefer_dark_theme`).
+            if settings.prefer_dark_theme && settings.style_variant == "default" {
+                settings.style_variant = "force-dark".into();
+                let _ = settings.save();
+            }
+            Ok(settings)
         } else {
             Ok(Self::default())
         }

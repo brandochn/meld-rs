@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::rc::Rc;
 
+use crate::config::settings::MeldSettings;
 use crate::window::MeldWindow;
 
 /// Compiled GResource providing the missing `language2.rng` RelaxNG schema.
@@ -289,7 +290,16 @@ fn ensure_initialized(app: &gtk::Application, done: &Cell<bool>) {
     setup_css();
     setup_style_schemes();
     setup_language_schema();
+    apply_style_variant();
     done.set(true);
+}
+
+/// Apply the saved `style-variant` colour-scheme override on startup.
+fn apply_style_variant() {
+    let variant = MeldSettings::load()
+        .map(|s| s.style_variant)
+        .unwrap_or_else(|_| "default".into());
+    crate::ui::style::apply_style_variant(&variant);
 }
 
 fn setup_css() {

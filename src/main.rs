@@ -12,6 +12,9 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[cfg(feature = "gui")]
+use libadwaita as adw;
+
 /// Populate `XDG_DATA_DIRS` so GLib can find GSettings schemas at runtime.
 ///
 /// Two schema sources are needed:
@@ -121,6 +124,17 @@ fn main() -> ExitCode {
             let msg = format!(
                 "Failed to initialize GTK4: {e}\n\
                  Make sure GTK4 runtime libraries are installed and on PATH."
+            );
+            meld_rs::log_diag(&msg);
+            return ExitCode::from(1);
+        }
+
+        // libadwaita provides the preferences dialog (Adw.PreferencesDialog)
+        // and the colour-scheme override used by the style-variant setting.
+        if let Err(e) = adw::init() {
+            let msg = format!(
+                "Failed to initialize libadwaita: {e}\n\
+                 Make sure libadwaita runtime libraries are installed and on PATH."
             );
             meld_rs::log_diag(&msg);
             return ExitCode::from(1);
