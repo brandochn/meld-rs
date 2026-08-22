@@ -9,6 +9,7 @@ use gio::prelude::*;
 use gtk4 as gtk;
 use gtk4::glib;
 use gtk4::prelude::*;
+use libadwaita as adw;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -27,6 +28,8 @@ pub struct MeldWindow {
     window: gtk::ApplicationWindow,
     notebook: gtk::Notebook,
     pages: Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    /// Action group behind the gear menu's `view.*` entries.
+    view_group: gio::SimpleActionGroup,
     view_toolbar: gtk::Box,
     _spinner: gtk::Spinner,
     prev_change_btn: gtk::Button,
@@ -80,6 +83,13 @@ pub trait MeldPage {
     fn action_open_external(&self) {}
     /// Refresh / recompute the comparison from scratch.
     fn action_refresh(&self) {}
+    /// Whether the page has a refreshable comparison (file, folder and
+    /// version-control comparisons do; the new-comparison tab does not).
+    /// Mirrors the original Meld, which only registers `view.refresh` on
+    /// those pages.
+    fn supports_refresh(&self) -> bool {
+        false
+    }
     /// Open the find bar.
     fn action_find(&self) {}
     /// Open the find-and-replace bar.
@@ -212,11 +222,13 @@ impl MeldWindow {
         let pages: Rc<RefCell<Vec<Box<dyn MeldPage>>>> = Rc::new(RefCell::new(Vec::new()));
         let menu = build_gear_menu();
         gear_btn.set_menu_model(Some(&menu));
+        let view_group = gio::SimpleActionGroup::new();
 
         let w = Self {
             window,
             notebook,
             pages,
+            view_group,
             view_toolbar,
             _spinner: spinner,
             prev_change_btn: prev_change_btn.clone(),
@@ -233,6 +245,7 @@ impl MeldWindow {
         w.setup_accels();
         w.setup_drag_drop();
         w.setup_preferences_action();
+        w.setup_theme_watcher();
         w.setup_gear_actions();
         w.setup_text_filter_popover();
         w
@@ -468,6 +481,7 @@ impl MeldWindow {
         let nc = self.next_conflict_btn.clone();
         let view_tb = self.view_toolbar.clone();
         let pages_switch = self.pages.clone();
+        let view_group_sw = self.view_group.clone();
 
         self.notebook.connect_switch_page(move |_, _, idx| {
             while let Some(child) = view_tb.first_child() {
@@ -483,6 +497,13 @@ impl MeldWindow {
                 pc.set_visible(show_conf);
                 nc.set_visible(show_conf);
                 page.on_container_switch_in();
+                // Refresh Comparison is only available on pages that
+                // hold an actual comparison.
+                if let Some(refresh) = view_group_sw.lookup_action("refresh") {
+                    if let Some(refresh) = refresh.downcast_ref::<gio::SimpleAction>() {
+                        refresh.set_enabled(page.supports_refresh());
+                    }
+                }
             }
         });
     }
@@ -565,12 +586,36 @@ impl MeldWindow {
         self.window.add_action(&prefs_action);
     }
 
+    /// Re-apply settings to open pages when the system appearance changes,
+    /// mirroring the original Meld's `on_style_manager_setting_notify`.
+    ///
+    /// Uses weak references so the handler does not keep closed windows
+    /// (and their documents) alive.
+    fn setup_theme_watcher(&self) {
+        let pages_weak = Rc::downgrade(&self.pages);
+        adw::StyleManager::default().connect_dark_notify(move |_| {
+            let Some(pages) = pages_weak.upgrade() else {
+                return;
+            };
+            if let Ok(reloaded) = MeldSettings::load() {
+                for page in pages.borrow().iter() {
+                    page.apply_settings(&reloaded);
+                }
+            }
+        });
+    }
+
     /// Register all actions referenced by the gear menu so they are enabled.
     ///
     /// Actions with a `win.` prefix are added to the window; those with a
     /// `view.` prefix dispatch to the current notebook page where applicable.
     fn setup_gear_actions(&self) {
         self.setup_win_actions();
+        // The gear menu references `view.*` actions, so they must live in a
+        // group registered with that prefix (GtkWindow's own action map is
+        // addressed as `win.*`).
+        self.window
+            .insert_action_group("view", Some(&self.view_group));
         self.setup_view_actions();
     }
 
@@ -633,7 +678,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -646,7 +691,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -659,7 +704,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -672,11 +717,12 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
         let action = gio::SimpleAction::new("refresh", None);
+        action.set_enabled(false);
         action.connect_activate(move |_, _| {
             let pages = p.borrow();
             if let Some(idx) = n.current_page() {
@@ -685,7 +731,10 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
+        if let Some(app) = self.window.application() {
+            app.set_accels_for_action("view.refresh", &["<Control>R", "F5"]);
+        }
 
         let p = pages.clone();
         let n = nb.clone();
@@ -698,7 +747,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -711,7 +760,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -724,7 +773,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -737,7 +786,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -750,7 +799,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -763,7 +812,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -776,7 +825,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -789,7 +838,7 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         let p = pages.clone();
         let n = nb.clone();
@@ -802,14 +851,14 @@ impl MeldWindow {
                 }
             }
         });
-        self.window.add_action(&action);
+        self.view_group.add_action(&action);
 
         // vc-console-visible: stub for now.
         let vc_console_action = gio::SimpleAction::new("vc-console-visible", None);
         vc_console_action.connect_activate(|_, _| {
             log::info!("view.vc-console-visible triggered (not yet implemented)");
         });
-        self.window.add_action(&vc_console_action);
+        self.view_group.add_action(&vc_console_action);
     }
 
     /// Set up a popover for the text-filter dropdown button with checkboxes

@@ -1,11 +1,16 @@
 # Copy GTK4 runtime DLLs to the build output directory
 # Required because C:\Program Files\Meld\ has conflicting GTK3 DLLs in the system PATH
-
-$msys2 = "C:\msys64\ucrt64\bin"
+#
+# Uses the MINGW64 runtime set, matching scripts/run.ps1 and scripts/build.ps1.
+# (The UCRT64 set was observed to crash with STATUS_ENTRYPOINT_NOT_FOUND.)
+$msys2 = "C:\msys64\mingw64\bin"
+if (-not (Test-Path "$msys2\libgtk-4-1.dll")) {
+    $msys2 = "C:\msys2\mingw64\bin"
+}
 $target = "$PSScriptRoot\..\target\release"
 
 if (-not (Test-Path $msys2)) {
-    Write-Error "MSYS2 UCRT64 not found at $msys2"
+    Write-Error "MSYS2 MINGW64 not found at $msys2"
     exit 1
 }
 

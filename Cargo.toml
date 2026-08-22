@@ -23,7 +23,7 @@ cairo-rs = { version = "0.21", optional = true }
 pango = { version = "0.21", optional = true }
 gdk4 = { version = "0.10", optional = true }
 sourceview5 = { version = "0.10", features = ["v5_12"], optional = true }
-libadwaita = { version = "0.8", optional = true }
+libadwaita = { version = "0.8", features = ["v1_5"], optional = true }
 
 # Utilities
 anyhow = "1"

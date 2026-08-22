@@ -562,83 +562,16 @@ impl FileDiff {
     /// Load a file into the given pane and detect its source language.
     ///
     /// Returns the detected language (if any) for unification across panes.
-    /// Mirrors Python Meld's `LanguageManager.get_language_from_file()`
-    /// by querying the file's content type and using it alongside the
-    /// basename for language detection via GtkSourceView.
-    ///
-    /// The language is set on the buffer **before** the text is loaded
-    /// so that GtkSourceView applies syntax highlighting during text insertion.
     fn load_file_sync(&self, pane_idx: usize, gfile: &gio::File) -> Option<gsv::Language> {
         if pane_idx >= self.panes.len() {
             return None;
         }
-        let buffer = &self.panes[pane_idx].buffer;
-        let statusbar = &self.panes[pane_idx].statusbar;
-
-        // Step 1: detect the source language BEFORE loading text so
-        // that GtkSourceView can apply syntax highlighting during
-        // text insertion (mirrors the original Meld order).
-        let lang_mgr = gsv::LanguageManager::default();
-        let content_type: Option<String> = gfile
-            .query_info(
-                "standard::content-type",
-                gio::FileQueryInfoFlags::NONE,
-                gio::Cancellable::NONE,
-            )
-            .ok()
-            .and_then(|info| info.content_type())
-            .map(|ct| ct.to_string());
-
-        let basename = gfile.basename().map(|b| b.to_string_lossy().into_owned());
-        let basename_str: Option<&str> = basename.as_deref();
-
-        // Two-stage detection (mirrors Python Meld's LanguageManager):
-        // 1. Use basename + content type (most reliable)
-        // 2. Fall back to filename-only guess.
-        let detected = match content_type.as_deref() {
-            Some(ct) => lang_mgr.guess_language(basename_str, Some(ct)),
-            None => lang_mgr.guess_language(basename_str, None),
-        };
-
-        let lang_name = match &detected {
-            Some(lang) => {
-                buffer.set_language(Some(lang));
-                lang.name().to_string()
-            }
-            None => {
-                buffer.set_language(None);
-                "Plain Text".to_string()
-            }
-        };
-        statusbar.set_language(&lang_name);
-
-        // Step 2: load file content (language already set, so highlighting
-        // is applied during text insertion).
-        let path = gfile.path();
-        let path_str = path
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
-        match std::fs::read_to_string(&path_str) {
-            Ok(content) => {
-                buffer.set_text(&content);
-                buffer.set_modified(false);
-                statusbar.set_encoding("UTF-8");
-                buffer.place_cursor(&buffer.start_iter());
-            }
-            Err(e) => {
-                self.panes[pane_idx]
-                    .msgarea
-                    .show_error(&format!("Error loading file: {e}"));
-            }
-        }
-
-        if lang_name == "Plain Text" {
-            None
-        } else {
-            detected
-        }
+        load_file_into_buffer(
+            &self.panes[pane_idx].buffer,
+            &self.panes[pane_idx].statusbar,
+            &self.panes[pane_idx].msgarea,
+            gfile,
+        )
     }
 
     /// Set the output file path for merge operations.
@@ -848,15 +781,106 @@ impl FileDiff {
 
         self.file_monitors.borrow_mut()[pane] = Some(monitor.clone());
 
+        // Reloading re-reads the file from disk into the buffer; the
+        // buffer's `changed` handler then recomputes the diff (mirrors the
+        // original Meld's "File has changed on disk" Reload action).
+        let buffer = self.panes[pane].buffer.clone();
+        let statusbar = Rc::clone(&self.panes[pane].statusbar);
+        let pane_msgarea = Rc::clone(&self.panes[pane].msgarea);
+        let gfile_reload = gfile.clone();
+
         let msgarea_weak = Rc::downgrade(&msgarea);
         monitor.connect_changed(move |_monitor, _f, _other, event| {
             if let Some(msgarea) = msgarea_weak.upgrade() {
                 if event == gio::FileMonitorEvent::ChangesDoneHint {
-                    let msg = format!("File {} has changed on disk. Reload to update.", file_name);
-                    msgarea.show_warning(&msg);
+                    let msg = format!("File {} has changed on disk.", file_name);
+                    let buffer_cb = buffer.clone();
+                    let statusbar_cb = statusbar.clone();
+                    let msgarea_cb = pane_msgarea.clone();
+                    let gfile_cb = gfile_reload.clone();
+                    msgarea.show_warning_action(&msg, "Reload", move || {
+                        load_file_into_buffer(&buffer_cb, &statusbar_cb, &msgarea_cb, &gfile_cb);
+                    });
                 }
             }
         });
+    }
+}
+
+/// Load `gfile` from disk into `buffer`, detecting the source language.
+///
+/// Mirrors Python Meld's `LanguageManager.get_language_from_file()` and the
+/// load path of `FileDiff::set_files`; also used by the Reload action shown
+/// when a file changes on disk.  Returns the detected language (if any).
+///
+/// The language is set on the buffer **before** the text is loaded so that
+/// GtkSourceView applies syntax highlighting during text insertion.
+fn load_file_into_buffer(
+    buffer: &gsv::Buffer,
+    statusbar: &StatusBar,
+    msgarea: &MsgArea,
+    gfile: &gio::File,
+) -> Option<gsv::Language> {
+    // Step 1: detect the source language BEFORE loading text so
+    // that GtkSourceView can apply syntax highlighting during
+    // text insertion (mirrors the original Meld order).
+    let lang_mgr = gsv::LanguageManager::default();
+    let content_type: Option<String> = gfile
+        .query_info(
+            "standard::content-type",
+            gio::FileQueryInfoFlags::NONE,
+            gio::Cancellable::NONE,
+        )
+        .ok()
+        .and_then(|info| info.content_type())
+        .map(|ct| ct.to_string());
+
+    let basename = gfile.basename().map(|b| b.to_string_lossy().into_owned());
+    let basename_str: Option<&str> = basename.as_deref();
+
+    // Two-stage detection (mirrors Python Meld's LanguageManager):
+    // 1. Use basename + content type (most reliable)
+    // 2. Fall back to filename-only guess.
+    let detected = match content_type.as_deref() {
+        Some(ct) => lang_mgr.guess_language(basename_str, Some(ct)),
+        None => lang_mgr.guess_language(basename_str, None),
+    };
+
+    let lang_name = match &detected {
+        Some(lang) => {
+            buffer.set_language(Some(lang));
+            lang.name().to_string()
+        }
+        None => {
+            buffer.set_language(None);
+            "Plain Text".to_string()
+        }
+    };
+    statusbar.set_language(&lang_name);
+
+    // Step 2: load file content (language already set, so highlighting
+    // is applied during text insertion).
+    let path_str = gfile
+        .path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    match std::fs::read_to_string(&path_str) {
+        Ok(content) => {
+            buffer.set_text(&content);
+            buffer.set_modified(false);
+            statusbar.set_encoding("UTF-8");
+            buffer.place_cursor(&buffer.start_iter());
+        }
+        Err(e) => {
+            msgarea.show_error(&format!("Error loading file: {e}"));
+        }
+    }
+
+    if lang_name == "Plain Text" {
+        None
+    } else {
+        detected
     }
 }
 
@@ -2427,6 +2451,26 @@ impl MeldPage for FileDiff {
                 _ => gtk::WrapMode::None,
             };
             pane.view.set_wrap_mode(wrap);
+
+            // Whitespace markers (mirrors the original Meld's
+            // enable-space-drawer handling).
+            let drawer = pane.view.space_drawer();
+            drawer.set_enable_matrix(settings.enable_space_drawer);
+            drawer.set_types_for_locations(gsv::SpaceLocationFlags::ALL, gsv::SpaceTypeFlags::ALL);
+        }
+
+        // Re-apply the style scheme so interface-style switches (dark/
+        // light) and explicitly chosen colour schemes update live, matching
+        // the original Meld's behaviour.
+        let manager = gsv::StyleSchemeManager::default();
+        let scheme = style::resolve_style_scheme(&manager, &settings.style_scheme);
+        for pane in &self.panes {
+            if let Some(ref s) = scheme {
+                pane.buffer.set_style_scheme(Some(s));
+            }
+            // The diff text tags cache their colours; refresh them for the
+            // new appearance.
+            refresh_diff_tags(&pane.buffer.tag_table());
         }
 
         // Font
@@ -2437,6 +2481,21 @@ impl MeldPage for FileDiff {
         self.set_show_connectors(settings.show_connectors);
         self.set_show_overview_map(settings.show_overview_map);
         self.set_inline_diff_mode(&settings.inline_diff_mode);
+
+        // Repaint the custom-drawn diff decorations, which re-read theme
+        // colours on every draw.
+        for gutter in &self.gutters {
+            gutter.widget().queue_draw();
+        }
+        for link_map in &self.link_maps {
+            link_map.widget().queue_draw();
+        }
+        for diff_map in &self.diff_maps {
+            diff_map.widget().queue_draw();
+        }
+        for pane in &self.panes {
+            pane.insert_overlay.queue_draw();
+        }
 
         // Text filters
         let active_patterns: Vec<String> = settings.active_text_filter_regexes();
@@ -2666,30 +2725,17 @@ impl MeldPage for FileDiff {
             iter.line() + 1
         };
 
-        let result = if cfg!(target_os = "windows") {
-            std::process::Command::new("cmd")
-                .args(["/c", "start", "", &path_str])
-                .spawn()
-        } else if cfg!(target_os = "macos") {
-            std::process::Command::new("open").arg(&path_str).spawn()
-        } else {
-            std::process::Command::new("xdg-open")
-                .arg(&path_str)
-                .spawn()
-        };
-
-        if let Err(e) = result {
-            log::error!(
-                "Failed to open external editor for '{}' (line {}): {}",
-                path_str,
-                line,
-                e
-            );
-        }
+        // Launch the configured external editor (custom command or system
+        // default), mirroring the original Meld's `open_files_external`.
+        crate::utils::external::open_with_editor(&path_str, Some(line));
     }
 
     fn action_refresh(&self) {
         self.compute_diff();
+    }
+
+    fn supports_refresh(&self) -> bool {
+        true
     }
 
     fn action_find(&self) {
@@ -3013,9 +3059,43 @@ fn ensure_diff_tags(tag_table: &gtk::TextTagTable) {
     if tag_table.lookup("diff-insert-marker").is_none() {
         let tag = gtk::TextTag::builder()
             .name("diff-insert-marker")
-            .paragraph_background("#a5ff4c")
+            .paragraph_background(style::line_hex(DiffOp::Insert).unwrap_or("#a5ff4c"))
             .build();
         tag_table.add(&tag);
+    }
+}
+
+/// Re-apply the current theme colours to the diff text tags in `tag_table`.
+///
+/// `ensure_diff_tags` creates each tag once with fixed colours; when the
+/// appearance changes (interface style, dark/light switch) the tags must be
+/// recoloured in place — the ranges already applied to the buffers
+/// reference these same tag objects.
+fn refresh_diff_tags(tag_table: &gtk::TextTagTable) {
+    for (name, color) in [
+        ("diff-insert", style::fill_hex(DiffOp::Insert)),
+        ("diff-replace", style::fill_hex(DiffOp::Replace)),
+        ("diff-delete", style::fill_hex(DiffOp::Delete)),
+        ("diff-conflict", Some(style::conflict_fill_hex())),
+        ("diff-insert-marker", style::line_hex(DiffOp::Insert)),
+    ] {
+        if let Some(tag) = tag_table.lookup(name) {
+            if let Some(color) = color {
+                tag.set_property("paragraph-background", color);
+            }
+        }
+    }
+    for (name, color) in [
+        ("diff-inline", style::inline_hex()),
+        ("diff-inline-delete", style::inline_delete_hex()),
+        ("diff-inline-insert", style::inline_insert_hex()),
+        ("diff-inline-replace", style::inline_replace_hex()),
+    ] {
+        if let Some(tag) = tag_table.lookup(name) {
+            if let Some(tag) = tag.downcast_ref::<gsv::Tag>() {
+                tag.set_background(Some(color));
+            }
+        }
     }
 }
 

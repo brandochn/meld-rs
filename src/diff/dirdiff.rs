@@ -332,6 +332,10 @@ impl MeldPage for DirDiff {
         self.auto_compare();
     }
 
+    fn supports_refresh(&self) -> bool {
+        true
+    }
+
     fn action_stop(&self) {
         self.cancel_scan();
     }
