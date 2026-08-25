@@ -1,5 +1,19 @@
 /* Meld-rs application stylesheet — matches original Meld visual design */
 
+/* ── Popover menu hover highlight ────────────────────────────────
+   libadwaita's Adwaita theme only paints modelbutton:hover at 10%
+   currentColor, which is too subtle to notice on most displays.  The
+   original Meld (GTK3) uses a visible selected-colour tint, so we
+   restore that here.  `@theme_selected_bg_color` adapts automatically
+   to light and dark schemes. */
+popover.menu modelbutton:hover,
+popover.menu modelbutton:selected {
+    background-color: alpha(@theme_selected_bg_color, 0.15);
+}
+popover.menu modelbutton:active {
+    background-color: alpha(@theme_selected_bg_color, 0.25);
+}
+
 /* ── Action bar and toolbar styling ── */
 .meld-actionbar {
     padding: 2px 4px;

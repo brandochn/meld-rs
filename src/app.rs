@@ -6,6 +6,7 @@
 use glib::prelude::*;
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use libadwaita as adw;
 use std::cell::Cell;
 use std::path::Path;
 use std::process::ExitCode;
@@ -148,12 +149,15 @@ fn print_usage() {
 }
 
 pub struct MeldApp {
-    app: gtk::Application,
+    app: adw::Application,
 }
 
 impl MeldApp {
     pub fn new() -> Self {
-        let app = gtk::Application::new(Some(APP_ID), gio::ApplicationFlags::HANDLES_COMMAND_LINE);
+        // Use libadwaita's AdwApplication rather than a bare GtkApplication so
+        // the app is fully integrated with libadwaita (colour-scheme management
+        // and the Adwaita theme, including popover-menu hover styling).
+        let app = adw::Application::new(Some(APP_ID), gio::ApplicationFlags::HANDLES_COMMAND_LINE);
         glib::set_application_name(APP_NAME);
         glib::set_prgname(Some(APP_ID));
         gtk::Window::set_default_icon_name(APP_ID);
@@ -176,7 +180,7 @@ impl MeldApp {
         // and we handle all CLI parsing here.
         let init_cl = Rc::clone(&initialized);
         self.app.connect_command_line(move |app, cmd_line| {
-            ensure_initialized(app, &init_cl);
+            ensure_initialized(app.upcast_ref(), &init_cl);
 
             let cmd_args: Vec<String> = cmd_line
                 .arguments()
@@ -196,16 +200,16 @@ impl MeldApp {
                 }
             };
 
-            open_comparisons(app, &opts);
+            open_comparisons(app.upcast_ref(), &opts);
             glib::ExitCode::SUCCESS
         });
 
         // Activate is still emitted for D-Bus activation (desktop menu, etc.).
         let init_ac = Rc::clone(&initialized);
         self.app.connect_activate(move |app| {
-            ensure_initialized(app, &init_ac);
+            ensure_initialized(app.upcast_ref(), &init_ac);
             if app.windows().iter().count() == 0 {
-                let window = MeldWindow::new(app);
+                let window = MeldWindow::new(app.upcast_ref());
                 window.present();
             }
         });
