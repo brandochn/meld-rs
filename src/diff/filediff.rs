@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use crate::config::settings::MeldSettings;
 use crate::diff::diff_state::{DiffResult, DiffState};
-use crate::diff::engine::{Chunk, DiffOp, InlineDiffer, LineCache};
+use crate::diff::engine::{Chunk, DiffOp, InlineDiffer, LineCache, ThreeWayDiffer};
 use crate::diff::inline_cache::InlineDiffCache;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
@@ -37,6 +37,7 @@ use crate::ui::msgarea::MsgArea;
 use crate::ui::pathlabel::PathLabel;
 use crate::ui::statusbar::StatusBar;
 use crate::ui::style;
+use crate::undo::UndoSequence;
 use crate::window::MeldPage;
 
 /// The main file-comparison view supporting 2 or 3 panes.
@@ -90,8 +91,17 @@ pub struct FileDiff {
     file_monitors: Rc<RefCell<Vec<Option<gio::FileMonitor>>>>,
     /// Tracked file paths for each pane.
     file_paths: Rc<RefCell<Vec<Option<gio::File>>>>,
+    /// Detected encoding name for each pane ("UTF-8", "ISO-8859-1", …).
+    encodings: Rc<RefCell<Vec<Option<String>>>>,
+    /// Modification time of each file when last loaded/saved, used to detect
+    /// external changes before overwriting (mirrors Meld's `current_on_disk`).
+    mtimes: Rc<RefCell<Vec<Option<std::time::SystemTime>>>>,
     /// Lock synchronized scrolling across panes.
     lock_scrolling: Rc<Cell<bool>>,
+    /// Undo/redo sequence shared across panes.
+    undo_sequence: Rc<UndoSequence>,
+    /// Suppress undo recording while loading file contents.
+    suppress_undo: Rc<Cell<bool>>,
 }
 
 /// Per-pane data bundles the widgets that make up one column.
@@ -376,6 +386,10 @@ impl FileDiff {
         let text_filter_patterns = Rc::new(RefCell::new(Vec::new()));
         let file_monitors = Rc::new(RefCell::new(vec![None, None, None]));
         let file_paths = Rc::new(RefCell::new(vec![None, None, None]));
+        let encodings = Rc::new(RefCell::new(vec![None, None, None]));
+        let mtimes = Rc::new(RefCell::new(vec![None, None, None]));
+        let undo_sequence = Rc::new(UndoSequence::new(&(0..num_panes).collect::<Vec<usize>>()));
+        let suppress_undo = Rc::new(Cell::new(false));
 
         let fd = Self {
             container,
@@ -401,14 +415,19 @@ impl FileDiff {
             text_filter_patterns,
             file_monitors,
             file_paths,
+            encodings,
+            mtimes,
             find_bar,
             lock_scrolling: Rc::new(Cell::new(false)),
+            undo_sequence,
+            suppress_undo,
         };
 
         // Wire up everything
         fd.sync_scroll();
         fd.connect_save_buttons();
         fd.connect_save_shortcut();
+        fd.connect_undo_signals();
         fd.connect_buffer_signals(loading);
         fd.connect_gutter_signals();
         fd.connect_focus_tracking();
@@ -428,6 +447,9 @@ impl FileDiff {
 
         let buffer = gsv::Buffer::new(None::<&gtk::TextTagTable>);
         buffer.set_highlight_syntax(true);
+        // Disable GtkTextView's built-in undo; FileDiff records its own
+        // undo actions so the modified flag can track the saved checkpoint.
+        buffer.set_enable_undo(false);
 
         // Apply Meld's style scheme so syntax highlighting matches the
         // original, preferring `meld-base`/`meld-dark` and falling back to
@@ -498,6 +520,7 @@ impl FileDiff {
     /// Load files from disk into the panes.
     pub fn set_files(&self, gfiles: &[gio::File]) {
         self.loading.set(true);
+        self.undo_sequence.clear();
 
         // Store file paths so Save / Discard can read and write them later.
         {
@@ -517,7 +540,7 @@ impl FileDiff {
         for (i, gfile) in gfiles.iter().enumerate().take(self.num_panes) {
             if let Some(path) = gfile.path() {
                 let path_str = path.to_string_lossy().into_owned();
-                let lang = self.load_file_sync(i, gfile);
+                let lang = self.load_file_sync(i, gfile, None);
                 detected_langs.push(lang);
                 if let Some(name) = path.file_name() {
                     let name_str = name.to_string_lossy().into_owned();
@@ -562,16 +585,40 @@ impl FileDiff {
     /// Load a file into the given pane and detect its source language.
     ///
     /// Returns the detected language (if any) for unification across panes.
-    fn load_file_sync(&self, pane_idx: usize, gfile: &gio::File) -> Option<gsv::Language> {
+    fn load_file_sync(
+        &self,
+        pane_idx: usize,
+        gfile: &gio::File,
+        preferred: Option<&str>,
+    ) -> Option<gsv::Language> {
         if pane_idx >= self.panes.len() {
             return None;
         }
-        load_file_into_buffer(
+        self.suppress_undo.set(true);
+        let (lang, encoding) = load_file_into_buffer(
             &self.panes[pane_idx].buffer,
             &self.panes[pane_idx].statusbar,
             &self.panes[pane_idx].msgarea,
             gfile,
-        )
+            preferred,
+        );
+        self.suppress_undo.set(false);
+        self.undo_sequence.checkpoint(pane_idx);
+        let mut encodings = self.encodings.borrow_mut();
+        if pane_idx < encodings.len() {
+            encodings[pane_idx] = Some(encoding);
+        }
+        drop(encodings);
+
+        let mtime = gfile
+            .path()
+            .and_then(|p| std::fs::metadata(&p).and_then(|m| m.modified()).ok());
+        let mut mtimes = self.mtimes.borrow_mut();
+        if pane_idx < mtimes.len() {
+            mtimes[pane_idx] = mtime;
+        }
+
+        lang
     }
 
     /// Set the output file path for merge operations.
@@ -730,15 +777,29 @@ impl FileDiff {
     }
 
     /// Write the content of a pane's buffer to disk and mark it unmodified.
+    ///
+    /// Preserves the pane's detected encoding (mirrors the original Meld's
+    /// `GtkSource.FileSaver`, which writes back in the buffer's encoding
+    /// rather than always UTF-8).
     fn write_buffer_to_disk(&self, pane_idx: usize, path: &std::path::Path) {
         if pane_idx >= self.num_panes {
             return;
         }
         let buffer = &self.panes[pane_idx].buffer;
         let text = buffer_text_lines(buffer).join("\n");
-        match std::fs::write(path, &text) {
+        let encoding = self.encodings.borrow().get(pane_idx).cloned().flatten();
+        let path_str = path.to_string_lossy().into_owned();
+        match crate::utils::encoding::write_with_encoding(&path_str, &text, encoding.as_deref()) {
             Ok(()) => {
-                buffer.set_modified(false);
+                self.undo_sequence.checkpoint(pane_idx);
+                // Refresh the cached mtime so a subsequent save doesn't warn
+                // about the change we just made ourselves.
+                let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+                let mut mtimes = self.mtimes.borrow_mut();
+                if pane_idx < mtimes.len() {
+                    mtimes[pane_idx] = mtime;
+                }
+                drop(mtimes);
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy())
@@ -753,6 +814,192 @@ impl FileDiff {
                     .show_error(&format!("Save failed: {e}"));
             }
         }
+    }
+
+    /// Show the "Save As" dialog for a specific pane.
+    ///
+    /// `pane_idx` is an explicit index (rather than the focused pane) so
+    /// `action_save_all` can prompt for a filename when a modified pane has
+    /// no file associated with it.
+    fn save_as_pane(&self, pane_idx: usize) {
+        if pane_idx >= self.num_panes {
+            return;
+        }
+        let buffer = self.panes[pane_idx].buffer.clone();
+        let msgarea = Rc::clone(&self.panes[pane_idx].msgarea);
+        let file_paths = Rc::clone(&self.file_paths);
+        let labels = Rc::clone(&self.labels);
+        let encoding = self.encodings.borrow().get(pane_idx).cloned().flatten();
+        let undo = Rc::clone(&self.undo_sequence);
+
+        // Determine a suggested name for the file chooser.
+        let suggested_name = file_paths
+            .borrow()
+            .get(pane_idx)
+            .and_then(|f| f.as_ref())
+            .and_then(|f| f.basename())
+            .map(|b| b.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("pane_{}.txt", pane_idx + 1));
+
+        // Pane-specific title, matching the original Meld.
+        let title = match pane_idx {
+            0 => "Save Left Pane As",
+            1 if self.num_panes == 3 => "Save Middle Pane As",
+            _ => "Save Right Pane As",
+        };
+
+        let dialog = gtk::FileDialog::builder()
+            .title(title)
+            .initial_name(&suggested_name)
+            .accept_label("_Save")
+            .build();
+
+        dialog.save(
+            self.container
+                .root()
+                .and_then(|r| r.downcast::<gtk::Window>().ok())
+                .as_ref(),
+            gio::Cancellable::NONE,
+            move |result| {
+                if let Ok(gfile) = result {
+                    if let Some(path) = gfile.path() {
+                        // Associate this file with the pane so future
+                        // saves go directly to disk.
+                        {
+                            let mut fps = file_paths.borrow_mut();
+                            if pane_idx < fps.len() {
+                                fps[pane_idx] = Some(gfile);
+                            }
+                            let mut lbls = labels.borrow_mut();
+                            if pane_idx < lbls.len() {
+                                if let Some(name) = path.file_name() {
+                                    lbls[pane_idx] = name.to_string_lossy().into_owned();
+                                }
+                            }
+                        }
+                        let text = buffer_text_lines(&buffer).join("\n");
+                        let path_str = path.to_string_lossy().into_owned();
+                        match crate::utils::encoding::write_with_encoding(
+                            &path_str,
+                            &text,
+                            encoding.as_deref(),
+                        ) {
+                            Ok(()) => {
+                                undo.checkpoint(pane_idx);
+                                msgarea.show_info(&format!(
+                                    "Saved {}",
+                                    path.file_name()
+                                        .map(|n| n.to_string_lossy())
+                                        .unwrap_or_else(|| path.to_string_lossy().into())
+                                ));
+                            }
+                            Err(e) => {
+                                msgarea.show_error(&format!("Save failed: {e}"));
+                            }
+                        }
+                    }
+                }
+            },
+        );
+    }
+
+    /// Return `true` if the file at `path` can be written to.
+    ///
+    /// A missing file is considered writable (it can be created), mirroring
+    /// the original Meld's `writable` property.
+    fn is_writable(path: &std::path::Path) -> bool {
+        match std::fs::metadata(path) {
+            Ok(meta) => !meta.permissions().readonly(),
+            Err(_) => true,
+        }
+    }
+
+    /// Return `true` if the file on disk still matches the mtime recorded when
+    /// the pane was loaded or last saved (i.e. it hasn't been modified
+    /// externally since).
+    fn current_on_disk(&self, pane_idx: usize, path: &std::path::Path) -> bool {
+        let stored = self.mtimes.borrow().get(pane_idx).cloned().flatten();
+        match stored {
+            Some(s) => std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .map(|c| c == s)
+                .unwrap_or(true),
+            None => true,
+        }
+    }
+
+    /// Show a blocking confirmation dialog warning that the file changed on
+    /// disk, and return `true` if the user chose "Save Anyway".
+    fn confirm_overwrite(&self, path: &std::path::Path) -> bool {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_else(|| path.to_string_lossy().into());
+        let parent = self
+            .container
+            .root()
+            .and_then(|r| r.downcast::<gtk::Window>().ok());
+
+        let dialog = gtk::MessageDialog::new(
+            parent.as_ref(),
+            gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+            gtk::MessageType::Warning,
+            gtk::ButtonsType::None,
+            &format!("File {name} has changed on disk since it was opened"),
+        );
+        dialog.set_secondary_text(Some("If you save it, any external changes will be lost."));
+        dialog.add_button("_Don't Save", gtk::ResponseType::Cancel);
+        dialog.add_button("Save _Anyway", gtk::ResponseType::Ok);
+
+        let response = Rc::new(Cell::new(gtk::ResponseType::None));
+        let resp_clone = Rc::clone(&response);
+        dialog.connect_response(move |d, resp| {
+            resp_clone.set(resp);
+            d.destroy();
+        });
+        dialog.present();
+
+        let ctx = glib::MainContext::default();
+        while response.get() == gtk::ResponseType::None {
+            ctx.iteration(true);
+        }
+
+        response.get() == gtk::ResponseType::Ok
+    }
+
+    /// Save a pane, falling back to "Save As" when it has no file or the file
+    /// is read-only (mirrors the original Meld's `save_file`).
+    fn save_pane(&self, pane_idx: usize) {
+        if pane_idx >= self.num_panes {
+            return;
+        }
+        let path_opt = self
+            .file_paths
+            .borrow()
+            .get(pane_idx)
+            .and_then(|f| f.as_ref())
+            .and_then(|f| f.path());
+        match path_opt {
+            Some(path) if Self::is_writable(&path) => {
+                self.do_save_file(pane_idx, &path, false);
+            }
+            _ => {
+                // No file or read-only → Save As.
+                self.save_as_pane(pane_idx);
+            }
+        }
+    }
+
+    /// Write a pane to disk, first warning if the file changed externally
+    /// (mirrors the original Meld's `_do_save_file`).
+    fn do_save_file(&self, pane_idx: usize, path: &std::path::Path, force_overwrite: bool) {
+        if !force_overwrite && !self.current_on_disk(pane_idx, path) {
+            if self.confirm_overwrite(path) {
+                self.do_save_file(pane_idx, path, true);
+            }
+            return;
+        }
+        self.write_buffer_to_disk(pane_idx, path);
     }
 
     /// Set file paths and restart monitoring.
@@ -799,7 +1046,13 @@ impl FileDiff {
                     let msgarea_cb = pane_msgarea.clone();
                     let gfile_cb = gfile_reload.clone();
                     msgarea.show_warning_action(&msg, "Reload", move || {
-                        load_file_into_buffer(&buffer_cb, &statusbar_cb, &msgarea_cb, &gfile_cb);
+                        let _ = load_file_into_buffer(
+                            &buffer_cb,
+                            &statusbar_cb,
+                            &msgarea_cb,
+                            &gfile_cb,
+                            None,
+                        );
                     });
                 }
             }
@@ -820,7 +1073,8 @@ fn load_file_into_buffer(
     statusbar: &StatusBar,
     msgarea: &MsgArea,
     gfile: &gio::File,
-) -> Option<gsv::Language> {
+    preferred: Option<&str>,
+) -> (Option<gsv::Language>, String) {
     // Step 1: detect the source language BEFORE loading text so
     // that GtkSourceView can apply syntax highlighting during
     // text insertion (mirrors the original Meld order).
@@ -865,23 +1119,27 @@ fn load_file_into_buffer(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    match std::fs::read_to_string(&path_str) {
-        Ok(content) => {
+    let mut encoding_name = String::from("UTF-8");
+    match crate::utils::encoding::read_text_with_encoding(&path_str, preferred) {
+        Ok((content, encoding)) => {
             buffer.set_text(&content);
             buffer.set_modified(false);
-            statusbar.set_encoding("UTF-8");
+            statusbar.set_encoding(&encoding);
             buffer.place_cursor(&buffer.start_iter());
+            encoding_name = encoding;
         }
         Err(e) => {
             msgarea.show_error(&format!("Error loading file: {e}"));
         }
     }
 
-    if lang_name == "Plain Text" {
+    let lang = if lang_name == "Plain Text" {
         None
     } else {
         detected
-    }
+    };
+
+    (lang, encoding_name)
 }
 
 fn get_system_monospace_font() -> String {
@@ -1631,6 +1889,7 @@ impl FileDiff {
             let buffer = pane.buffer.clone();
             let msgarea = Rc::clone(&pane.msgarea);
             let file_paths = Rc::clone(&self.file_paths);
+            let undo = Rc::clone(&self.undo_sequence);
             pane.save_button.connect_clicked(move |_| {
                 let text = buffer_text_lines(&buffer).join("\n");
                 if let Some(path) = file_paths
@@ -1641,7 +1900,7 @@ impl FileDiff {
                 {
                     match std::fs::write(&path, &text) {
                         Ok(()) => {
-                            buffer.set_modified(false);
+                            undo.checkpoint(i);
                             msgarea.show_info(&format!(
                                 "Saved {}",
                                 path.file_name()
@@ -1664,6 +1923,7 @@ impl FileDiff {
     fn connect_save_shortcut(&self) {
         let focused = Rc::clone(&self.focused_pane);
         let file_paths = Rc::clone(&self.file_paths);
+        let undo = Rc::clone(&self.undo_sequence);
         let panes: Vec<_> = self
             .panes
             .iter()
@@ -1691,7 +1951,7 @@ impl FileDiff {
                 {
                     match std::fs::write(&path, &text) {
                         Ok(()) => {
-                            buffer.set_modified(false);
+                            undo.checkpoint(fp);
                             let name = path
                                 .file_name()
                                 .map(|n| n.to_string_lossy())
@@ -1709,6 +1969,64 @@ impl FileDiff {
         });
 
         self.container.add_controller(key_ctrl);
+    }
+
+    /// Connect per-buffer signals that feed the shared undo sequence.
+    ///
+    /// `insert-text`/`delete-range` record reversible text edits, while
+    /// `begin-user-action`/`end-user-action` group multi-step edits (e.g. the
+    /// delete+insert performed by a chunk merge) into one undo step. Recording
+    /// is suppressed while `suppress_undo` is set (file loading).
+    fn connect_undo_signals(&self) {
+        // Keep each pane's modified flag in sync with its checkpoint.
+        let buffers: Vec<gsv::Buffer> = self.panes.iter().map(|p| p.buffer.clone()).collect();
+        self.undo_sequence
+            .connect_checkpointed(move |key, checkpointed| {
+                if let Some(buffer) = buffers.get(key) {
+                    buffer.set_modified(!checkpointed);
+                }
+            });
+
+        for (i, pane) in self.panes.iter().enumerate() {
+            let buffer = pane.buffer.clone();
+
+            {
+                let undo = Rc::clone(&self.undo_sequence);
+                let suppress = Rc::clone(&self.suppress_undo);
+                buffer.connect_insert_text(move |buf, pos, text| {
+                    if suppress.get() {
+                        return;
+                    }
+                    undo.record_insert(i, buf, pos.offset() as usize, text);
+                });
+            }
+
+            {
+                let undo = Rc::clone(&self.undo_sequence);
+                let suppress = Rc::clone(&self.suppress_undo);
+                buffer.connect_delete_range(move |buf, start, end| {
+                    if suppress.get() {
+                        return;
+                    }
+                    let text = buf.text(start, end, false).to_string();
+                    undo.record_delete(i, buf, start.offset() as usize, &text);
+                });
+            }
+
+            {
+                let undo = Rc::clone(&self.undo_sequence);
+                buffer.connect_begin_user_action(move |_| {
+                    undo.begin_group();
+                });
+            }
+
+            {
+                let undo = Rc::clone(&self.undo_sequence);
+                buffer.connect_end_user_action(move |_| {
+                    undo.end_group();
+                });
+            }
+        }
     }
 
     fn connect_buffer_signals(&self, loading: Rc<Cell<bool>>) {
@@ -2258,7 +2576,7 @@ impl FileDiff {
             key_ctrl.connect_key_pressed(move |_ctrl, keyval, _keycode, state| {
                 let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
                 if ctrl && keyval == key_f {
-                    fb.start_find(view.upcast_ref::<gtk::TextView>());
+                    fb.start_find(&view);
                     return glib::Propagation::Stop;
                 }
                 if keyval == key_escape && fb.is_visible() {
@@ -2374,6 +2692,7 @@ impl MeldPage for FileDiff {
                     // Discard — reload original content from disk
                     // but keep the tab open so the user can verify.
                     self.loading.set(true);
+                    self.undo_sequence.clear();
                     for (i, pane) in &modified {
                         let gfile = self
                             .file_paths
@@ -2381,8 +2700,9 @@ impl MeldPage for FileDiff {
                             .get(*i)
                             .and_then(|f| f.as_ref().cloned());
 
+                        let preferred = self.encodings.borrow().get(*i).and_then(|e| e.clone());
                         if let Some(ref gf) = gfile {
-                            self.load_file_sync(*i, gf);
+                            self.load_file_sync(*i, gf, preferred.as_deref());
                         } else {
                             log::warn!("Discard: no file path for pane {} — ", i + 1);
                         }
@@ -2515,19 +2835,7 @@ impl MeldPage for FileDiff {
         if !self.panes[fp].buffer.is_modified() {
             return;
         }
-        let file_paths = self.file_paths.borrow();
-        let path_opt = file_paths
-            .get(fp)
-            .and_then(|f| f.as_ref())
-            .and_then(|f| f.path());
-        drop(file_paths);
-
-        if let Some(path) = path_opt {
-            self.write_buffer_to_disk(fp, &path);
-        } else {
-            // No file path — delegate to save-as so the user can pick one.
-            self.action_save_as();
-        }
+        self.save_pane(fp);
     }
 
     fn action_save_as(&self) {
@@ -2535,82 +2843,13 @@ impl MeldPage for FileDiff {
             .focused_pane
             .get()
             .min(self.num_panes.saturating_sub(1));
-        let buffer = self.panes[fp].buffer.clone();
-        let msgarea = Rc::clone(&self.panes[fp].msgarea);
-        let file_paths = Rc::clone(&self.file_paths);
-        let labels = Rc::clone(&self.labels);
-
-        // Determine a suggested name for the file chooser.
-        let suggested_name = file_paths
-            .borrow()
-            .get(fp)
-            .and_then(|f| f.as_ref())
-            .and_then(|f| f.basename())
-            .map(|b| b.to_string_lossy().into_owned())
-            .unwrap_or_else(|| format!("pane_{}.txt", fp + 1));
-
-        let dialog = gtk::FileDialog::builder()
-            .title("Save Pane As")
-            .initial_name(&suggested_name)
-            .accept_label("_Save")
-            .build();
-
-        dialog.save(
-            self.container
-                .root()
-                .and_then(|r| r.downcast::<gtk::Window>().ok())
-                .as_ref(),
-            gio::Cancellable::NONE,
-            move |result| {
-                if let Ok(gfile) = result {
-                    if let Some(path) = gfile.path() {
-                        // Associate this file with the pane so future
-                        // saves go directly to disk.
-                        {
-                            let mut fps = file_paths.borrow_mut();
-                            if fp < fps.len() {
-                                fps[fp] = Some(gfile);
-                            }
-                            let mut lbls = labels.borrow_mut();
-                            if fp < lbls.len() {
-                                if let Some(name) = path.file_name() {
-                                    lbls[fp] = name.to_string_lossy().into_owned();
-                                }
-                            }
-                        }
-                        let text = buffer_text_lines(&buffer).join("\n");
-                        match std::fs::write(&path, &text) {
-                            Ok(()) => {
-                                buffer.set_modified(false);
-                                msgarea.show_info(&format!(
-                                    "Saved {}",
-                                    path.file_name()
-                                        .map(|n| n.to_string_lossy())
-                                        .unwrap_or_else(|| path.to_string_lossy().into())
-                                ));
-                            }
-                            Err(e) => {
-                                msgarea.show_error(&format!("Save failed: {e}"));
-                            }
-                        }
-                    }
-                }
-            },
-        );
+        self.save_as_pane(fp);
     }
 
     fn action_save_all(&self) {
         for i in 0..self.num_panes {
             if self.panes[i].buffer.is_modified() {
-                let file_paths = self.file_paths.borrow();
-                let path_opt = file_paths
-                    .get(i)
-                    .and_then(|f| f.as_ref())
-                    .and_then(|f| f.path());
-                drop(file_paths);
-                if let Some(path) = path_opt {
-                    self.write_buffer_to_disk(i, &path);
-                }
+                self.save_pane(i);
             }
         }
     }
@@ -2627,24 +2866,17 @@ impl MeldPage for FileDiff {
             .collect();
 
         if !modified.is_empty() {
-            let file_names: Vec<String> = modified
+            let labels = self.labels.borrow();
+            let file_list: Vec<String> = modified
                 .iter()
                 .map(|i| {
-                    self.file_paths
-                        .borrow()
+                    labels
                         .get(*i)
-                        .and_then(|f| f.as_ref())
-                        .and_then(|f| f.path())
-                        .map(|p| p.to_string_lossy().into_owned())
+                        .cloned()
                         .unwrap_or_else(|| format!("Pane {}", i + 1))
                 })
                 .collect();
-
-            let msg = if modified.len() == 1 {
-                format!("Revert \"{}\" to the last saved version?", file_names[0])
-            } else {
-                format!("Revert {} files to the last saved version?", modified.len())
-            };
+            drop(labels);
 
             let parent = self
                 .container
@@ -2656,11 +2888,27 @@ impl MeldPage for FileDiff {
                 gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
                 gtk::MessageType::Question,
                 gtk::ButtonsType::None,
-                &msg,
+                "Discard unsaved changes to documents?",
             );
-            dialog.set_secondary_text(Some("Unsaved changes will be permanently lost."));
+            dialog.set_secondary_text(Some(
+                "Changes made to the following documents will be permanently lost:",
+            ));
             dialog.add_button("_Cancel", gtk::ResponseType::Cancel);
-            dialog.add_button("_Revert", gtk::ResponseType::Ok);
+            dialog.add_button("_Discard", gtk::ResponseType::Ok);
+
+            // List the unsaved documents with bullet points, matching the
+            // original revert-dialog.ui (a single label with newline-joined items).
+            let file_list_text = file_list
+                .iter()
+                .map(|name| format!("\t• {name}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let label = gtk::Label::new(Some(&file_list_text));
+            label.set_xalign(0.0);
+            label.set_halign(gtk::Align::Start);
+            if let Some(message_area) = dialog.message_area().downcast::<gtk::Box>().ok() {
+                message_area.append(&label);
+            }
 
             let response = Rc::new(Cell::new(gtk::ResponseType::None));
             let resp_clone = Rc::clone(&response);
@@ -2680,16 +2928,18 @@ impl MeldPage for FileDiff {
             }
         }
 
-        // Reload all files from disk.
+        // Reload all files from disk, preserving each pane's encoding.
         self.loading.set(true);
+        self.undo_sequence.clear();
         for i in 0..self.num_panes {
             let gfile = self
                 .file_paths
                 .borrow()
                 .get(i)
                 .and_then(|f| f.as_ref().cloned());
+            let preferred = self.encodings.borrow().get(i).and_then(|e| e.clone());
             if let Some(ref gf) = gfile {
-                self.load_file_sync(i, gf);
+                self.load_file_sync(i, gf, preferred.as_deref());
             }
             self.panes[i].buffer.set_modified(false);
         }
@@ -2734,8 +2984,25 @@ impl MeldPage for FileDiff {
         self.compute_diff();
     }
 
-    fn supports_refresh(&self) -> bool {
-        true
+    fn supported_view_actions(&self) -> &'static [&'static str] {
+        &[
+            "save-as",
+            "save-all",
+            "revert",
+            "open-external",
+            "refresh",
+            "find",
+            "find-replace",
+            "undo",
+            "redo",
+            "show-overview-map",
+            "lock-scrolling",
+            "swap-2-panes",
+            "merge-all-left",
+            "merge-all-right",
+            "merge-all",
+            "format-as-patch",
+        ]
     }
 
     fn action_find(&self) {
@@ -2743,27 +3010,47 @@ impl MeldPage for FileDiff {
             .focused_pane
             .get()
             .min(self.num_panes.saturating_sub(1));
-        self.find_bar
-            .start_find(self.panes[fp].view.upcast_ref::<gtk::TextView>());
+        self.find_bar.start_find(&self.panes[fp].view);
     }
 
     fn action_find_replace(&self) {
-        // FindBar doesn't support replace mode yet; fall back to find.
-        self.action_find();
+        let fp = self
+            .focused_pane
+            .get()
+            .min(self.num_panes.saturating_sub(1));
+        self.find_bar.start_find_replace(&self.panes[fp].view);
     }
 
     fn action_find_next(&self) {
-        // TODO: implement find_next on FindBar when available.
-        log::info!("find_next: not yet supported on FindBar");
+        let fp = self
+            .focused_pane
+            .get()
+            .min(self.num_panes.saturating_sub(1));
+        self.find_bar.start_find_next(&self.panes[fp].view);
     }
 
     fn action_find_previous(&self) {
-        // TODO: implement find_previous on FindBar when available.
-        log::info!("find_previous: not yet supported on FindBar");
+        let fp = self
+            .focused_pane
+            .get()
+            .min(self.num_panes.saturating_sub(1));
+        self.find_bar.start_find_previous(&self.panes[fp].view);
     }
 
     fn action_stop(&self) {
         self.diff_state.borrow_mut().cancel_all();
+    }
+
+    fn action_undo(&self) {
+        if self.undo_sequence.can_undo() {
+            self.undo_sequence.undo().ok();
+        }
+    }
+
+    fn action_redo(&self) {
+        if self.undo_sequence.can_redo() {
+            self.undo_sequence.redo().ok();
+        }
     }
 
     fn action_merge_all_left(&self) {
@@ -2780,13 +3067,21 @@ impl MeldPage for FileDiff {
         if self.num_panes < 3 {
             return;
         }
-        // For 3-way merge: auto-merge non-conflicting changes from both sides.
-        // Pull changes from right into middle, then from left into middle.
-        self.merge_all_non_conflicting(false);
-        // For left→middle we need a different approach since merge_all_non_conflicting
-        // works on pane 0↔1. In a 3-way merge, panes are [local, base, remote].
-        // Merging "all" means resolving non-conflicting changes.
-        log::info!("merge_all: full 3-way auto-merge not yet implemented");
+        // Panes are [local, base, remote]; merge non-conflicting changes from
+        // both sides into the base pane, matching the original `merge_3_files`.
+        let base = buffer_text_lines(&self.panes[1].buffer);
+        let local = buffer_text_lines(&self.panes[0].buffer);
+        let remote = buffer_text_lines(&self.panes[2].buffer);
+
+        let differ = ThreeWayDiffer::new(base, local, remote);
+        let result = differ.merge();
+
+        let dst_buffer = &self.panes[1].buffer;
+        dst_buffer.begin_user_action();
+        dst_buffer.set_text(&result.merged.join("\n"));
+        dst_buffer.end_user_action();
+
+        self.compute_diff();
     }
 
     fn action_format_as_patch(&self) {
@@ -2869,7 +3164,12 @@ impl MeldPage for FileDiff {
 
     fn toggle_overview_map(&self) {
         let visible = self.overview_map_box.is_visible();
-        self.overview_map_box.set_visible(!visible);
+        let new_visible = !visible;
+        self.overview_map_box.set_visible(new_visible);
+        if let Ok(mut settings) = MeldSettings::load() {
+            settings.show_overview_map = new_visible;
+            let _ = settings.save();
+        }
     }
 
     fn toggle_lock_scrolling(&self) {

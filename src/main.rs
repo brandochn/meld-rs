@@ -44,18 +44,36 @@ fn init_data_dir() {
     // 2. MSYS2 MINGW64/share — GTK4 system schemas (FileChooser, etc.)
     //    Detected via MINGW_PREFIX env var (set by scripts/run.ps1 or
     //    the git wrapper).  If the path does not exist on this platform
-    //    (e.g. Unix-style /mingw64 on Windows), fall back to scanning
-    //    PATH for the GTK4 DLL.
+    //    (e.g. Unix-style /mingw64 on Windows), fall back to locating the
+    //    GTK runtime DLL and deriving its `share/` directory.
     let system_share = std::env::var("MINGW_PREFIX")
         .ok()
         .map(|p| PathBuf::from(&p).join("share"))
         .filter(|p| p.exists())
         .or_else(|| {
-            // Fallback: find libgtk-4-1.dll in PATH and use its share/
-            std::env::var("PATH").ok().and_then(|path| {
-                std::env::split_paths(&path)
-                    .find(|d| d.join("libgtk-4-1.dll").exists())
-                    .and_then(|d| d.parent().map(|p| p.join("share")))
+            // Fallback: find the GTK runtime DLL and derive its `share/`.
+            // Handles two layouts:
+            //   1. MSYS2:    <prefix>/bin/libgtk-4-1.dll → <prefix>/share
+            //   2. Bundled:  <exe>/libgtk-4-1.dll        → <exe>/share
+            let dll_dir = std::env::var("PATH")
+                .ok()
+                .and_then(|path| {
+                    std::env::split_paths(&path).find(|d| d.join("libgtk-4-1.dll").exists())
+                })
+                .or_else(|| {
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+                        .filter(|d| d.join("libgtk-4-1.dll").exists())
+                });
+
+            dll_dir.and_then(|d| {
+                let bundled = d.join("share");
+                if bundled.exists() {
+                    Some(bundled)
+                } else {
+                    d.parent().map(|p| p.join("share"))
+                }
             })
         });
     if let Some(share) = system_share {

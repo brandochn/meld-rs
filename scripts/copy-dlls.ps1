@@ -21,4 +21,25 @@ if (-not (Test-Path $target)) {
 
 Write-Host "Copying GTK4 DLLs from $msys2 to $target..."
 Copy-Item "$msys2\*.dll" -Destination $target -Force
+
+# Copy runtime data (icon theme, GSettings schemas, GTK4 data, and
+# GtkSourceView language specs/style schemes) so the release binary is
+# self-contained. GTK resolves standard/symbolic icon names (e.g.
+# "document-save-symbolic") against the icon theme found in
+# $XDG_DATA_DIRS/icons — without this the Adwaita icons are missing when the
+# exe runs outside an MSYS2 environment.
+$msys2Share = Join-Path (Split-Path -Parent $msys2) "share"
+$targetShare = Join-Path $target "share"
+
+if (Test-Path $msys2Share) {
+    Write-Host "Copying runtime data from $msys2Share to $targetShare..."
+    New-Item -ItemType Directory -Force -Path $targetShare | Out-Null
+    foreach ($name in @("icons", "glib-2.0", "gtk-4.0", "gtksourceview-5")) {
+        $src = Join-Path $msys2Share $name
+        if (Test-Path $src) {
+            Copy-Item $src -Destination $targetShare -Recurse -Force
+        }
+    }
+}
+
 Write-Host "Done."

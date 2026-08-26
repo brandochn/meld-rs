@@ -56,6 +56,33 @@ pub fn read_with_encoding(path: &str) -> Result<String, EncodingError> {
     Ok(text.into_owned())
 }
 
+/// Read a file and return the decoded text together with the name of the
+/// encoding that was used.
+///
+/// When `preferred` is `Some`, that encoding is tried first and kept when it
+/// decodes without errors, so callers can preserve the encoding a pane was
+/// originally loaded with (e.g. on revert). Otherwise the encoding is
+/// auto-detected.
+pub fn read_text_with_encoding(
+    path: &str,
+    preferred: Option<&str>,
+) -> Result<(String, String), EncodingError> {
+    let bytes = std::fs::read(path)?;
+
+    if let Some(name) = preferred {
+        if let Some(encoding) = Encoding::for_label(name.as_bytes()) {
+            let (text, _, had_errors) = encoding.decode(&bytes);
+            if !had_errors {
+                return Ok((text.into_owned(), name.to_string()));
+            }
+        }
+    }
+
+    let encoding = detect_encoding(&bytes);
+    let (text, _, _) = encoding.decode(&bytes);
+    Ok((text.into_owned(), encoding.name().to_string()))
+}
+
 /// Write a file using the specified encoding.
 ///
 /// If `encoding_name` is `None`, UTF-8 is used.
@@ -124,5 +151,36 @@ mod tests {
     fn test_convert_encoding() {
         let result = convert_encoding("hello", "UTF-8", "UTF-8").unwrap();
         assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_read_text_with_encoding_utf8() {
+        let tmp = std::env::temp_dir().join("meld_rs_test_enc_utf8.txt");
+        let text = "Hello, world! こんにちは";
+        std::fs::write(&tmp, text.as_bytes()).unwrap();
+
+        let (got, enc) = read_text_with_encoding(tmp.to_str().unwrap(), None).unwrap();
+        assert_eq!(got, text);
+        assert_eq!(enc, "UTF-8");
+
+        // A preferred encoding is preserved verbatim when it decodes cleanly.
+        let (got2, enc2) = read_text_with_encoding(tmp.to_str().unwrap(), Some("UTF-8")).unwrap();
+        assert_eq!(got2, text);
+        assert_eq!(enc2, "UTF-8");
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn test_read_text_with_encoding_latin1() {
+        let tmp = std::env::temp_dir().join("meld_rs_test_enc_latin1.txt");
+        // "café" as Latin-1 (0xE9 is not valid UTF-8, so detection must fall back).
+        std::fs::write(&tmp, b"caf\xe9").unwrap();
+
+        let (text, enc) = read_text_with_encoding(tmp.to_str().unwrap(), None).unwrap();
+        assert_eq!(text, "café");
+        assert_ne!(enc, "UTF-8");
+
+        std::fs::remove_file(&tmp).ok();
     }
 }

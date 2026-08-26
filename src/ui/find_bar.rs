@@ -1,7 +1,9 @@
-//! Find bar — in-file search widget.
+//! Find bar — in-file search and replace widget.
 //!
 //! Provides a bottom bar with a search entry, next/previous navigation,
-//! and match counting for searching within source view panes.
+//! match counting, and (in replace mode) a replace entry with Replace and
+//! Replace All actions. Search is backed by `GtkSource.SearchContext` /
+//! `GtkSource.SearchSettings`, matching the original Meld `FindBar`.
 //!
 //! The bar is shared across all text views in a comparison: when shown
 //! it attaches to the currently focused pane, and highlights are
@@ -10,21 +12,31 @@
 use glib::prelude::*;
 use gtk4 as gtk;
 use gtk4::prelude::*;
-use std::cell::RefCell;
+use sourceview5 as gsv;
+use sourceview5::prelude::*;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-/// A search bar that can be dynamically attached to any `gtk::TextView`.
+/// A search-and-replace bar that can be dynamically attached to any `gsv::View`.
 pub struct FindBar {
     container: gtk::Box,
     entry: gtk::SearchEntry,
+    replace_entry: gtk::Entry,
+    replace_button: gtk::Button,
+    replace_all_button: gtk::Button,
     status_label: gtk::Label,
-    /// The currently associated text view, if any.
-    text_view: Rc<RefCell<Option<gtk::TextView>>>,
+    search_settings: gsv::SearchSettings,
+    /// The currently associated source view, if any.
+    text_view: Rc<RefCell<Option<gsv::View>>>,
+    /// Search context for the currently associated buffer, if any.
+    search_context: Rc<RefCell<Option<gsv::SearchContext>>>,
+    /// Whether replace controls are visible.
+    replace_mode: Rc<Cell<bool>>,
 }
 
 impl FindBar {
-    /// Create a new find bar without a text view. Call [`start_find`]
-    /// to associate it with a text view and show it.
+    /// Create a new find bar without a text view. Call [`start_find`] or
+    /// [`start_find_replace`] to associate it with a view and show it.
     pub fn new() -> Self {
         let container = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         container.add_css_class("toolbar");
@@ -32,8 +44,20 @@ impl FindBar {
 
         let entry = gtk::SearchEntry::new();
         entry.set_placeholder_text(Some("Find..."));
-        entry.set_width_chars(30);
+        entry.set_width_chars(24);
         container.append(&entry);
+
+        let case_sensitive = gtk::CheckButton::with_label("Aa");
+        case_sensitive.set_tooltip_text(Some("Match case"));
+        container.append(&case_sensitive);
+
+        let whole_word = gtk::CheckButton::with_label("W");
+        whole_word.set_tooltip_text(Some("Whole words"));
+        container.append(&whole_word);
+
+        let regex = gtk::CheckButton::with_label(".*");
+        regex.set_tooltip_text(Some("Regular expression"));
+        container.append(&regex);
 
         let prev_btn = gtk::Button::from_icon_name("go-up-symbolic");
         container.append(&prev_btn);
@@ -41,60 +65,115 @@ impl FindBar {
         let next_btn = gtk::Button::from_icon_name("go-down-symbolic");
         container.append(&next_btn);
 
+        let replace_entry = gtk::Entry::new();
+        replace_entry.set_placeholder_text(Some("Replace with..."));
+        replace_entry.set_width_chars(16);
+        replace_entry.set_visible(false);
+        container.append(&replace_entry);
+
+        let replace_button = gtk::Button::with_label("Replace");
+        replace_button.set_visible(false);
+        container.append(&replace_button);
+
+        let replace_all_button = gtk::Button::with_label("Replace All");
+        replace_all_button.set_visible(false);
+        container.append(&replace_all_button);
+
         let status_label = gtk::Label::new(None);
         container.append(&status_label);
 
         let close_btn = gtk::Button::from_icon_name("window-close-symbolic");
         container.append(&close_btn);
 
-        let text_view: Rc<RefCell<Option<gtk::TextView>>> = Rc::new(RefCell::new(None));
+        // GtkSource search settings shared by every context we create.
+        let search_settings = gsv::SearchSettings::new();
+        search_settings.set_wrap_around(true);
 
-        // Next button
+        let text_view: Rc<RefCell<Option<gsv::View>>> = Rc::new(RefCell::new(None));
+        let search_context: Rc<RefCell<Option<gsv::SearchContext>>> = Rc::new(RefCell::new(None));
+        let replace_mode: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+
+        // Bind the option toggles to the search settings.
+        let ss_case = search_settings.clone();
+        case_sensitive.connect_toggled(move |b| ss_case.set_case_sensitive(b.is_active()));
+        let ss_word = search_settings.clone();
+        whole_word.connect_toggled(move |b| ss_word.set_at_word_boundaries(b.is_active()));
+        let ss_regex = search_settings.clone();
+        regex.connect_toggled(move |b| ss_regex.set_regex_enabled(b.is_active()));
+
+        // Search text changed — update settings and re-run the search.
+        let tv_search = Rc::clone(&text_view);
+        let ctx_search = Rc::clone(&search_context);
+        let status_search = status_label.clone();
+        let ss_search = search_settings.clone();
+        entry.connect_search_changed(move |entry| {
+            let text = entry.text().to_string();
+            ss_search.set_search_text(Some(&text));
+            find_text(&tv_search, &ctx_search, &status_search, false, false);
+        });
+
+        // Next button.
         let tv_next = Rc::clone(&text_view);
-        let entry_next = entry.clone();
+        let ctx_next = Rc::clone(&search_context);
         let status_next = status_label.clone();
         next_btn.connect_clicked(move |_| {
-            if let Some(ref tv) = *tv_next.borrow() {
-                find_next(tv, &entry_next, &status_next);
-            }
+            find_text(&tv_next, &ctx_next, &status_next, false, true);
         });
 
-        // Previous button
+        // Previous button.
         let tv_prev = Rc::clone(&text_view);
-        let entry_prev = entry.clone();
+        let ctx_prev = Rc::clone(&search_context);
         let status_prev = status_label.clone();
         prev_btn.connect_clicked(move |_| {
-            if let Some(ref tv) = *tv_prev.borrow() {
-                find_previous(tv, &entry_prev, &status_prev);
-            }
+            find_text(&tv_prev, &ctx_prev, &status_prev, true, false);
         });
 
-        // Search entry changed — highlight all matches
-        let tv_search = Rc::clone(&text_view);
-        let status_search = status_label.clone();
-        entry.connect_search_changed(move |entry| {
-            if let Some(ref tv) = *tv_search.borrow() {
-                highlight_all(tv, entry, &status_search);
-            }
+        // Replace button — replace the current match, then advance.
+        let tv_replace = Rc::clone(&text_view);
+        let ctx_replace = Rc::clone(&search_context);
+        let status_replace = status_label.clone();
+        let entry_replace = replace_entry.clone();
+        replace_button.connect_clicked(move |_| {
+            replace_current(
+                &tv_replace,
+                &ctx_replace,
+                &entry_replace.text(),
+                &status_replace,
+            );
         });
 
-        // Close button — hide the bar and clear highlights
-        let tv_close = Rc::clone(&text_view);
+        // Replace All button.
+        let ctx_replace_all = Rc::clone(&search_context);
+        let status_replace_all = status_label.clone();
+        let entry_replace_all = replace_entry.clone();
+        replace_all_button.connect_clicked(move |_| {
+            let count = replace_all(&ctx_replace_all, &entry_replace_all.text());
+            status_replace_all.set_text(&format!("{} replaced", count));
+        });
+
+        // Close button — hide the bar and clear the search context.
         let container_weak = container.downgrade();
+        let ctx_close = Rc::clone(&search_context);
+        let tv_close = Rc::clone(&text_view);
         close_btn.connect_clicked(move |_| {
             if let Some(c) = container_weak.upgrade() {
                 c.set_visible(false);
             }
-            if let Some(ref tv) = *tv_close.borrow() {
-                remove_search_highlights(tv);
-            }
+            *ctx_close.borrow_mut() = None;
+            *tv_close.borrow_mut() = None;
         });
 
         Self {
             container,
             entry,
+            replace_entry,
+            replace_button,
+            replace_all_button,
             status_label,
+            search_settings,
             text_view,
+            search_context,
+            replace_mode,
         }
     }
 
@@ -103,25 +182,74 @@ impl FindBar {
         self.container.upcast_ref()
     }
 
-    /// Associate this find bar with a text view, clear any previous
-    /// highlights, and show the bar with the search entry focused.
-    pub fn start_find(&self, text_view: &gtk::TextView) {
-        // Clear highlights from the previously attached text view
-        if let Some(ref old_tv) = *self.text_view.borrow() {
-            remove_search_highlights(old_tv);
-        }
-        *self.text_view.borrow_mut() = Some(text_view.clone());
-        self.entry.set_text("");
+    /// Attach to `view`, creating a search context for its buffer.
+    fn set_view(&self, view: &gsv::View) {
+        let buffer = match view.buffer().downcast::<gsv::Buffer>() {
+            Ok(buffer) => buffer,
+            Err(_) => return,
+        };
+        let context = gsv::SearchContext::new(&buffer, Some(&self.search_settings));
+        context.set_highlight(true);
+
+        let status = self.status_label.clone();
+        context.connect_occurrences_count_notify(move |ctx| {
+            let count = ctx.occurrences_count();
+            let text = if count >= 0 {
+                format!("{} matches", count)
+            } else {
+                String::new()
+            };
+            status.set_text(&text);
+        });
+
+        *self.search_context.borrow_mut() = Some(context);
+        *self.text_view.borrow_mut() = Some(view.clone());
+    }
+
+    fn apply_replace_mode(&self) {
+        let mode = self.replace_mode.get();
+        self.replace_entry.set_visible(mode);
+        self.replace_button.set_visible(mode);
+        self.replace_all_button.set_visible(mode);
+    }
+
+    /// Show the find bar for `view` in find-only mode.
+    pub fn start_find(&self, view: &gsv::View) {
+        self.replace_mode.set(false);
+        self.set_view(view);
+        self.apply_replace_mode();
         self.container.set_visible(true);
         self.entry.grab_focus();
     }
 
-    /// Hide the find bar and clear search highlights.
+    /// Show the find bar for `view` in find-and-replace mode.
+    pub fn start_find_replace(&self, view: &gsv::View) {
+        self.replace_mode.set(true);
+        self.set_view(view);
+        self.apply_replace_mode();
+        self.container.set_visible(true);
+        self.entry.grab_focus();
+    }
+
+    /// Jump to the next match in `view` without changing the bar's mode.
+    pub fn start_find_next(&self, view: &gsv::View) {
+        self.set_view(view);
+        let status = self.status_label.clone();
+        find_text(&self.text_view, &self.search_context, &status, false, true);
+    }
+
+    /// Jump to the previous match in `view` without changing the bar's mode.
+    pub fn start_find_previous(&self, view: &gsv::View) {
+        self.set_view(view);
+        let status = self.status_label.clone();
+        find_text(&self.text_view, &self.search_context, &status, true, false);
+    }
+
+    /// Hide the find bar and clear the search context.
     pub fn hide(&self) {
         self.container.set_visible(false);
-        if let Some(ref tv) = *self.text_view.borrow() {
-            remove_search_highlights(tv);
-        }
+        *self.search_context.borrow_mut() = None;
+        *self.text_view.borrow_mut() = None;
     }
 
     /// Whether the find bar is currently visible.
@@ -130,139 +258,107 @@ impl FindBar {
     }
 }
 
-fn find_next(view: &gtk::TextView, entry: &gtk::SearchEntry, status: &gtk::Label) {
-    let query = entry.text().to_string();
-    if query.is_empty() {
-        return;
-    }
-    let query_lower = query.to_ascii_lowercase();
-
-    let buffer = view.buffer();
-    let text = buffer
-        .text(&buffer.start_iter(), &buffer.end_iter(), true)
-        .to_string();
-    // to_ascii_lowercase() preserves byte length (only A-Z → a-z),
-    // so offsets found in text_lower are valid for the original text.
-    let text_lower = text.to_ascii_lowercase();
-
-    let cursor_pos = get_cursor_offset(&buffer);
-
-    // Search from cursor position; wrap around to the beginning
-    // if no match is found past the cursor.
-    let start = cursor_pos.min(text_lower.len());
-    let (found_offset, wrapped) = if let Some(pos) = text_lower[start..].find(&query_lower) {
-        (start + pos, false)
-    } else if let Some(pos) = text_lower[..start].find(&query_lower) {
-        (pos, true)
-    } else {
-        status.set_text("Not found");
+/// Run a search from the cursor and select the result.
+///
+/// `advance` mirrors Meld's `start_offset`: forward searches advance the
+/// cursor by one character first so they don't re-match the current match.
+fn find_text(
+    text_view: &Rc<RefCell<Option<gsv::View>>>,
+    search_context: &Rc<RefCell<Option<gsv::SearchContext>>>,
+    status: &gtk::Label,
+    backwards: bool,
+    advance: bool,
+) {
+    let ctx = search_context.borrow();
+    let Some(ctx) = ctx.as_ref() else {
         return;
     };
-
-    let iter = buffer.iter_at_offset(found_offset as i32);
-    let mut end = iter.clone();
-    end.forward_chars(query.len() as i32);
-    // Put the cursor at the *end* of the match so the next
-    // find-next call advances past this occurrence.
-    buffer.select_range(&end, &iter);
-    let mark = buffer.create_mark(Some("find-start"), &iter, false);
-    view.scroll_to_mark(&mark, 0.0, false, 0.0, 0.0);
-    buffer.delete_mark(&mark);
-    if wrapped {
-        status.set_text("Wrapped to top");
+    let buffer = ctx.buffer();
+    let mut insert = buffer.iter_at_mark(&buffer.get_insert());
+    if !backwards && advance {
+        insert.forward_char();
     }
-}
 
-fn find_previous(view: &gtk::TextView, entry: &gtk::SearchEntry, status: &gtk::Label) {
-    let query = entry.text().to_string();
-    if query.is_empty() {
-        return;
-    }
-    let query_lower = query.to_ascii_lowercase();
-
-    let buffer = view.buffer();
-    let text = buffer
-        .text(&buffer.start_iter(), &buffer.end_iter(), true)
-        .to_string();
-    // to_ascii_lowercase() preserves byte length (only A-Z → a-z),
-    // so offsets found in text_lower are valid for the original text.
-    let text_lower = text.to_ascii_lowercase();
-
-    let cursor_pos = get_cursor_offset(&buffer);
-
-    // Search backwards from the cursor; wrap around to the end
-    // if no match is found before the cursor.
-    let limit = cursor_pos.min(text_lower.len());
-    let (found_offset, wrapped) = if let Some(pos) = text_lower[..limit].rfind(&query_lower) {
-        (pos, false)
-    } else if let Some(pos) = text_lower.rfind(&query_lower) {
-        (pos, true)
+    let result = if backwards {
+        ctx.backward(&insert)
     } else {
-        status.set_text("Not found");
-        return;
+        ctx.forward(&insert)
     };
 
-    let iter = buffer.iter_at_offset(found_offset as i32);
-    let mut end = iter.clone();
-    end.forward_chars(query.len() as i32);
-    // Put the cursor at the *start* of the match so the next
-    // find-previous call looks before this occurrence.
-    buffer.select_range(&iter, &end);
-    let mark = buffer.create_mark(Some("find-start"), &iter, false);
-    view.scroll_to_mark(&mark, 0.0, false, 0.0, 0.0);
-    buffer.delete_mark(&mark);
-    if wrapped {
-        status.set_text("Wrapped to bottom");
+    match result {
+        Some((start, end, wrapped)) => {
+            buffer.select_range(&start, &end);
+            if let Some(view) = text_view.borrow().as_ref() {
+                view.scroll_mark_onscreen(&buffer.get_insert());
+            }
+            status.set_text(if wrapped { "Wrapped" } else { "" });
+        }
+        None => {
+            status.set_text("Not found");
+        }
     }
 }
 
-fn highlight_all(view: &gtk::TextView, entry: &gtk::SearchEntry, status: &gtk::Label) {
-    remove_search_highlights(view);
-
-    let query = entry.text().to_string();
-    if query.is_empty() {
-        status.set_text("");
+/// Replace the currently selected match, if any.
+fn replace_current(
+    text_view: &Rc<RefCell<Option<gsv::View>>>,
+    search_context: &Rc<RefCell<Option<gsv::SearchContext>>>,
+    replacement: &str,
+    status: &gtk::Label,
+) {
+    let ctx = search_context.borrow();
+    let Some(ctx) = ctx.as_ref() else {
         return;
+    };
+    let buffer = ctx.buffer();
+
+    let old_sel = buffer.selection_bounds();
+    find_text(text_view, search_context, status, false, false);
+    let new_sel = buffer.selection_bounds();
+
+    let same_selection = match (&old_sel, &new_sel) {
+        (Some((a0, a1)), Some((b0, b1))) => a0 == b0 && a1 == b1,
+        _ => false,
+    };
+
+    if same_selection {
+        if let Some((start, end)) = new_sel {
+            let mut s = start;
+            let mut e = end;
+            if ctx.replace(&mut s, &mut e, replacement).is_err() {
+                status.set_text("Replace failed");
+                return;
+            }
+        }
+        find_text(text_view, search_context, status, false, false);
     }
-    let query_lower = query.to_ascii_lowercase();
-
-    let buffer = view.buffer();
-    let text = buffer
-        .text(&buffer.start_iter(), &buffer.end_iter(), true)
-        .to_string();
-    // to_ascii_lowercase() preserves byte length (only A-Z → a-z),
-    // so offsets found in text_lower are valid for the original text.
-    let text_lower = text.to_ascii_lowercase();
-
-    let tag_table = buffer.tag_table();
-    let highlight_tag = gtk::TextTag::builder()
-        .name("search-highlight")
-        .background("rgba(255,255,0,0.5)")
-        .build();
-    tag_table.add(&highlight_tag);
-
-    let mut match_count = 0;
-    for (idx, _) in text_lower.match_indices(&query_lower) {
-        match_count += 1;
-        let start = buffer.iter_at_offset(idx as i32);
-        let mut end = buffer.iter_at_offset(idx as i32);
-        end.forward_chars(query.len() as i32);
-        buffer.apply_tag(&highlight_tag, &start, &end);
-    }
-
-    status.set_text(&format!("{} matches", match_count));
 }
 
-fn get_cursor_offset(buffer: &gtk::TextBuffer) -> usize {
-    buffer.cursor_position() as usize
-}
+/// Replace every match and return the number of replacements made.
+fn replace_all(search_context: &Rc<RefCell<Option<gsv::SearchContext>>>, replacement: &str) -> u32 {
+    let ctx = search_context.borrow();
+    let Some(ctx) = ctx.as_ref() else {
+        return 0;
+    };
+    let buffer = ctx.buffer();
+    let mut count = 0u32;
+    let mut search_from = buffer.start_iter();
 
-fn remove_search_highlights(view: &gtk::TextView) {
-    let buffer = view.buffer();
-    let tag_table = buffer.tag_table();
-    if let Some(tag) = tag_table.lookup("search-highlight") {
-        let start = buffer.start_iter();
-        let end = buffer.end_iter();
-        buffer.remove_tag(&tag, &start, &end);
+    loop {
+        let Some((start, end, _)) = ctx.forward(&search_from) else {
+            break;
+        };
+        let mut s = start;
+        let mut e = end;
+        if ctx.replace(&mut s, &mut e, replacement).is_err() {
+            break;
+        }
+        count += 1;
+        search_from = e;
+        if !search_from.forward_char() {
+            break;
+        }
     }
+
+    count
 }
