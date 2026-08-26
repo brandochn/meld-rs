@@ -90,6 +90,8 @@ pub struct FileDiff {
     file_monitors: Rc<RefCell<Vec<Option<gio::FileMonitor>>>>,
     /// Tracked file paths for each pane.
     file_paths: Rc<RefCell<Vec<Option<gio::File>>>>,
+    /// Detected encoding name for each pane ("UTF-8", "ISO-8859-1", …).
+    encodings: Rc<RefCell<Vec<Option<String>>>>,
     /// Lock synchronized scrolling across panes.
     lock_scrolling: Rc<Cell<bool>>,
 }
@@ -376,6 +378,7 @@ impl FileDiff {
         let text_filter_patterns = Rc::new(RefCell::new(Vec::new()));
         let file_monitors = Rc::new(RefCell::new(vec![None, None, None]));
         let file_paths = Rc::new(RefCell::new(vec![None, None, None]));
+        let encodings = Rc::new(RefCell::new(vec![None, None, None]));
 
         let fd = Self {
             container,
@@ -401,6 +404,7 @@ impl FileDiff {
             text_filter_patterns,
             file_monitors,
             file_paths,
+            encodings,
             find_bar,
             lock_scrolling: Rc::new(Cell::new(false)),
         };
@@ -517,7 +521,7 @@ impl FileDiff {
         for (i, gfile) in gfiles.iter().enumerate().take(self.num_panes) {
             if let Some(path) = gfile.path() {
                 let path_str = path.to_string_lossy().into_owned();
-                let lang = self.load_file_sync(i, gfile);
+                let lang = self.load_file_sync(i, gfile, None);
                 detected_langs.push(lang);
                 if let Some(name) = path.file_name() {
                     let name_str = name.to_string_lossy().into_owned();
@@ -562,16 +566,27 @@ impl FileDiff {
     /// Load a file into the given pane and detect its source language.
     ///
     /// Returns the detected language (if any) for unification across panes.
-    fn load_file_sync(&self, pane_idx: usize, gfile: &gio::File) -> Option<gsv::Language> {
+    fn load_file_sync(
+        &self,
+        pane_idx: usize,
+        gfile: &gio::File,
+        preferred: Option<&str>,
+    ) -> Option<gsv::Language> {
         if pane_idx >= self.panes.len() {
             return None;
         }
-        load_file_into_buffer(
+        let (lang, encoding) = load_file_into_buffer(
             &self.panes[pane_idx].buffer,
             &self.panes[pane_idx].statusbar,
             &self.panes[pane_idx].msgarea,
             gfile,
-        )
+            preferred,
+        );
+        let mut encodings = self.encodings.borrow_mut();
+        if pane_idx < encodings.len() {
+            encodings[pane_idx] = Some(encoding);
+        }
+        lang
     }
 
     /// Set the output file path for merge operations.
@@ -799,7 +814,13 @@ impl FileDiff {
                     let msgarea_cb = pane_msgarea.clone();
                     let gfile_cb = gfile_reload.clone();
                     msgarea.show_warning_action(&msg, "Reload", move || {
-                        load_file_into_buffer(&buffer_cb, &statusbar_cb, &msgarea_cb, &gfile_cb);
+                        let _ = load_file_into_buffer(
+                            &buffer_cb,
+                            &statusbar_cb,
+                            &msgarea_cb,
+                            &gfile_cb,
+                            None,
+                        );
                     });
                 }
             }
@@ -820,7 +841,8 @@ fn load_file_into_buffer(
     statusbar: &StatusBar,
     msgarea: &MsgArea,
     gfile: &gio::File,
-) -> Option<gsv::Language> {
+    preferred: Option<&str>,
+) -> (Option<gsv::Language>, String) {
     // Step 1: detect the source language BEFORE loading text so
     // that GtkSourceView can apply syntax highlighting during
     // text insertion (mirrors the original Meld order).
@@ -865,23 +887,27 @@ fn load_file_into_buffer(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    match std::fs::read_to_string(&path_str) {
-        Ok(content) => {
+    let mut encoding_name = String::from("UTF-8");
+    match crate::utils::encoding::read_text_with_encoding(&path_str, preferred) {
+        Ok((content, encoding)) => {
             buffer.set_text(&content);
             buffer.set_modified(false);
-            statusbar.set_encoding("UTF-8");
+            statusbar.set_encoding(&encoding);
             buffer.place_cursor(&buffer.start_iter());
+            encoding_name = encoding;
         }
         Err(e) => {
             msgarea.show_error(&format!("Error loading file: {e}"));
         }
     }
 
-    if lang_name == "Plain Text" {
+    let lang = if lang_name == "Plain Text" {
         None
     } else {
         detected
-    }
+    };
+
+    (lang, encoding_name)
 }
 
 fn get_system_monospace_font() -> String {
@@ -2381,8 +2407,9 @@ impl MeldPage for FileDiff {
                             .get(*i)
                             .and_then(|f| f.as_ref().cloned());
 
+                        let preferred = self.encodings.borrow().get(*i).and_then(|e| e.clone());
                         if let Some(ref gf) = gfile {
-                            self.load_file_sync(*i, gf);
+                            self.load_file_sync(*i, gf, preferred.as_deref());
                         } else {
                             log::warn!("Discard: no file path for pane {} — ", i + 1);
                         }
@@ -2627,24 +2654,17 @@ impl MeldPage for FileDiff {
             .collect();
 
         if !modified.is_empty() {
-            let file_names: Vec<String> = modified
+            let labels = self.labels.borrow();
+            let file_list: Vec<String> = modified
                 .iter()
                 .map(|i| {
-                    self.file_paths
-                        .borrow()
+                    labels
                         .get(*i)
-                        .and_then(|f| f.as_ref())
-                        .and_then(|f| f.path())
-                        .map(|p| p.to_string_lossy().into_owned())
+                        .cloned()
                         .unwrap_or_else(|| format!("Pane {}", i + 1))
                 })
                 .collect();
-
-            let msg = if modified.len() == 1 {
-                format!("Revert \"{}\" to the last saved version?", file_names[0])
-            } else {
-                format!("Revert {} files to the last saved version?", modified.len())
-            };
+            drop(labels);
 
             let parent = self
                 .container
@@ -2656,11 +2676,27 @@ impl MeldPage for FileDiff {
                 gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
                 gtk::MessageType::Question,
                 gtk::ButtonsType::None,
-                &msg,
+                "Discard unsaved changes to documents?",
             );
-            dialog.set_secondary_text(Some("Unsaved changes will be permanently lost."));
+            dialog.set_secondary_text(Some(
+                "Changes made to the following documents will be permanently lost:",
+            ));
             dialog.add_button("_Cancel", gtk::ResponseType::Cancel);
-            dialog.add_button("_Revert", gtk::ResponseType::Ok);
+            dialog.add_button("_Discard", gtk::ResponseType::Ok);
+
+            // List the unsaved documents with bullet points, matching the
+            // original revert-dialog.ui (a single label with newline-joined items).
+            let file_list_text = file_list
+                .iter()
+                .map(|name| format!("\t• {name}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let label = gtk::Label::new(Some(&file_list_text));
+            label.set_xalign(0.0);
+            label.set_halign(gtk::Align::Start);
+            if let Some(message_area) = dialog.message_area().downcast::<gtk::Box>().ok() {
+                message_area.append(&label);
+            }
 
             let response = Rc::new(Cell::new(gtk::ResponseType::None));
             let resp_clone = Rc::clone(&response);
@@ -2680,7 +2716,7 @@ impl MeldPage for FileDiff {
             }
         }
 
-        // Reload all files from disk.
+        // Reload all files from disk, preserving each pane's encoding.
         self.loading.set(true);
         for i in 0..self.num_panes {
             let gfile = self
@@ -2688,8 +2724,9 @@ impl MeldPage for FileDiff {
                 .borrow()
                 .get(i)
                 .and_then(|f| f.as_ref().cloned());
+            let preferred = self.encodings.borrow().get(i).and_then(|e| e.clone());
             if let Some(ref gf) = gfile {
-                self.load_file_sync(i, gf);
+                self.load_file_sync(i, gf, preferred.as_deref());
             }
             self.panes[i].buffer.set_modified(false);
         }
