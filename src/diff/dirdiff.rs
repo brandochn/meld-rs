@@ -16,9 +16,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use crate::config::settings::MeldSettings;
+use crate::diff::engine::DiffOp;
 use crate::diff::file_compare::{
     self, DirDiffCache, FileCompareOptions, FileCompareResult, StatItem,
 };
+use crate::ui::style;
 use crate::window::MeldPage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,6 +64,7 @@ pub struct DirDiff {
     container: gtk::Box,
     tree_views: Vec<gtk::TreeView>,
     tree_stores: Vec<gtk::TreeStore>,
+    overview_map: gtk::DrawingArea,
     folders: Rc<RefCell<Vec<PathBuf>>>,
     entries: Rc<RefCell<Vec<DirDiffEntry>>>,
     state_filter: Rc<RefCell<HashSet<DirDiffState>>>,
@@ -166,6 +170,15 @@ impl DirDiff {
         }));
         let show_identical: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
 
+        // Overview (chunk) map on the right edge.
+        let overview_map = build_dir_overview_map(&entries, &tree_views);
+        overview_map.set_visible(
+            MeldSettings::load()
+                .map(|s| s.show_overview_map)
+                .unwrap_or(true),
+        );
+        panes_hbox.append(&overview_map);
+
         // Button connections using Rc clones
         let tv_expand = Rc::clone(&tree_views);
         expand_btn.connect_clicked(move |_| {
@@ -216,6 +229,7 @@ impl DirDiff {
             container: main_box,
             tree_views: collected_views,
             tree_stores: collected_stores,
+            overview_map,
             folders: Rc::new(RefCell::new(Vec::new())),
             entries,
             state_filter,
@@ -332,8 +346,14 @@ impl MeldPage for DirDiff {
         self.auto_compare();
     }
 
-    fn supports_refresh(&self) -> bool {
-        true
+    fn supported_view_actions(&self) -> &'static [&'static str] {
+        &[
+            "open-external",
+            "refresh",
+            "find",
+            "show-overview-map",
+            "swap-2-panes",
+        ]
     }
 
     fn action_stop(&self) {
@@ -341,22 +361,44 @@ impl MeldPage for DirDiff {
     }
 
     fn action_open_external(&self) {
-        if let Some(path) = self.folders.borrow().first().cloned() {
-            let path_str = path.to_string_lossy().into_owned();
-            let result = if cfg!(target_os = "windows") {
-                std::process::Command::new("explorer")
-                    .arg(&path_str)
-                    .spawn()
-            } else if cfg!(target_os = "macos") {
-                std::process::Command::new("open").arg(&path_str).spawn()
-            } else {
-                std::process::Command::new("xdg-open")
-                    .arg(&path_str)
-                    .spawn()
-            };
-            if let Err(e) = result {
-                log::error!("Failed to open folder '{}': {}", path_str, e);
-            }
+        let pane = self
+            .tree_views
+            .iter()
+            .position(|tv| tv.is_focus())
+            .unwrap_or(0);
+        let Some(root) = self.folders.borrow().get(pane).cloned() else {
+            return;
+        };
+        let Some(rel) = selected_rel_path(&self.tree_views[pane]) else {
+            return;
+        };
+        let full = root.join(rel);
+        let path_str = full.to_string_lossy().into_owned();
+        crate::utils::external::open_files_external(&[path_str]);
+    }
+
+    fn action_swap_panes(&self) {
+        self.folders.borrow_mut().reverse();
+        self.set_locations();
+    }
+
+    fn action_find(&self) {
+        let pane = self
+            .tree_views
+            .iter()
+            .position(|tv| tv.is_focus())
+            .unwrap_or(0);
+        if let Some(tv) = self.tree_views.get(pane) {
+            tv.emit_start_interactive_search();
+        }
+    }
+
+    fn toggle_overview_map(&self) {
+        let visible = !self.overview_map.is_visible();
+        self.overview_map.set_visible(visible);
+        if let Ok(mut settings) = MeldSettings::load() {
+            settings.show_overview_map = visible;
+            let _ = settings.save();
         }
     }
 }
@@ -588,4 +630,162 @@ fn toggle_filter_state(filter: &RefCell<HashSet<DirDiffState>>, state: DirDiffSt
     } else {
         f.remove(&state);
     }
+}
+
+/// Reconstruct the relative path of the selected tree row by walking from the
+/// selected iter up to the root, joining each level's display name.
+fn selected_rel_path(tv: &gtk::TreeView) -> Option<PathBuf> {
+    let sel = tv.selection();
+    let (model, iter) = sel.selected()?;
+    let store = model.downcast::<gtk::TreeStore>().ok()?;
+
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = Some(iter);
+    while let Some(iter) = current {
+        let value = store.get_value(&iter, 0);
+        let name = value.get::<String>().ok()?;
+        let name = name.strip_suffix('/').unwrap_or(&name).to_string();
+        parts.push(name);
+        current = store.iter_parent(&iter);
+    }
+    parts.reverse();
+
+    if parts.is_empty() {
+        return None;
+    }
+    let mut path = PathBuf::new();
+    for part in parts {
+        path.push(part);
+    }
+    Some(path)
+}
+
+/// Build a narrow overview map for the directory comparison, showing one
+/// coloured block per top-level entry and scrolling the left tree view when
+/// clicked. Mirrors the overview map of the original Meld's `DirDiff`.
+fn build_dir_overview_map(
+    entries: &Rc<RefCell<Vec<DirDiffEntry>>>,
+    tree_views: &Rc<RefCell<Vec<gtk::TreeView>>>,
+) -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::new();
+    area.set_width_request(16);
+    area.set_vexpand(true);
+    area.add_css_class("chunkmap");
+
+    let draw_entries = Rc::clone(entries);
+    let scroll_view = tree_views.borrow().first().cloned();
+    let draw_scroll_view = scroll_view.clone();
+
+    area.set_draw_func(move |_, cr, width, height| {
+        let w = width as f64;
+        let h = height as f64;
+        if w < 2.0 || h < 2.0 {
+            return;
+        }
+        let entries = draw_entries.borrow();
+        let total = entries.len().max(1) as f64;
+        let x0 = 2.5;
+        let x1 = (w - 2.0 * x0).max(1.0);
+
+        cr.set_line_width(1.0);
+
+        for (i, entry) in entries.iter().enumerate() {
+            let color = match entry.state {
+                DirDiffState::New => style::fill_color(DiffOp::Insert),
+                DirDiffState::Modified => style::fill_color(DiffOp::Replace),
+                DirDiffState::Missing | DirDiffState::Error => Some(style::conflict_fill()),
+                _ => None,
+            };
+            let Some(color) = color else {
+                continue;
+            };
+
+            let y0 = ((i as f64 / total) * h).round() + 0.5;
+            let y1 = (((i as f64 + 1.0) / total) * h).round() - 0.5;
+            let y1 = y1.max(y0 + 1.0);
+
+            cr.rectangle(x0, y0, x1, y1 - y0);
+            cr.set_source_rgb(color.0, color.1, color.2);
+            cr.fill().ok();
+        }
+
+        if let Some(view) = &draw_scroll_view {
+            if let Some(adj) = view.vadjustment() {
+                let upper = adj.upper();
+                let page = adj.page_size();
+                if upper > 0.0 {
+                    let hy0 = (adj.value() / upper) * h;
+                    let hy1 = ((adj.value() + page) / upper) * h;
+                    let hh = (hy1 - hy0).max(1.0);
+                    cr.rectangle(x0 - 0.5, hy0 + 0.5, x1 + 1.0, hh - 1.0);
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.2);
+                    cr.fill_preserve().ok();
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.4);
+                    cr.stroke().ok();
+                }
+            }
+        }
+    });
+
+    if let Some(view) = &scroll_view {
+        if let Some(adj) = view.vadjustment() {
+            let da = area.clone();
+            adj.connect_value_changed(move |_| da.queue_draw());
+            let da = area.clone();
+            adj.connect_changed(move |_| da.queue_draw());
+        }
+    }
+
+    let pressed = Rc::new(RefCell::new(false));
+
+    let scroll_to = {
+        let scroll_view = scroll_view.clone();
+        move |y: f64, height: f64| {
+            if let Some(view) = &scroll_view {
+                if let Some(adj) = view.vadjustment() {
+                    let upper = adj.upper();
+                    let page = adj.page_size();
+                    if upper <= 0.0 || height <= 0.0 {
+                        return;
+                    }
+                    let frac = (y / height).clamp(0.0, 1.0);
+                    let target = (frac * upper - page / 2.0).clamp(0.0, (upper - page).max(0.0));
+                    adj.set_value(target);
+                }
+            }
+        }
+    };
+
+    let click = gtk::GestureClick::new();
+    {
+        let pressed = Rc::clone(&pressed);
+        let scroll_to = scroll_to.clone();
+        let da = area.clone();
+        click.connect_pressed(move |_, _, _, y| {
+            *pressed.borrow_mut() = true;
+            scroll_to(y, da.height() as f64);
+        });
+    }
+    {
+        let pressed = Rc::clone(&pressed);
+        click.connect_released(move |_, _, _, _| {
+            *pressed.borrow_mut() = false;
+        });
+    }
+    area.add_controller(click);
+
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let pressed = Rc::clone(&pressed);
+        let scroll_to = scroll_to.clone();
+        let da = area.clone();
+        motion.connect_motion(move |_, _, y| {
+            if *pressed.borrow() {
+                scroll_to(y, da.height() as f64);
+            }
+        });
+    }
+    area.add_controller(motion);
+
+    area
 }

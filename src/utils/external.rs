@@ -38,6 +38,33 @@ pub fn open_with_editor(path: &str, line: Option<i32>) {
     }
 }
 
+/// Open each path using the appropriate handler: directories with the system
+/// file manager, regular files with the configured editor or system default.
+/// Mirrors the original Meld `open_files_external`.
+pub fn open_files_external(paths: &[String]) {
+    for path in paths {
+        if std::path::Path::new(path).is_dir() {
+            open_directory(path);
+        } else {
+            open_with_editor(path, None);
+        }
+    }
+}
+
+/// Open a directory in the system file manager.
+pub fn open_directory(path: &str) {
+    let result = if cfg!(target_os = "windows") {
+        std::process::Command::new("explorer").arg(path).spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(path).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(path).spawn()
+    };
+    if let Err(e) = result {
+        log::error!("Failed to open directory '{}': {}", path, e);
+    }
+}
+
 /// Expand `{file}` / `{line}` in the custom editor command and split it
 /// into argv, mirroring Meld's `make_custom_editor_command`.
 fn make_custom_editor_command(command: &str, path: &str, line: i32) -> Vec<String> {

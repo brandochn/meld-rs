@@ -21,6 +21,7 @@ pub struct VcView {
     tree_view: gtk::TreeView,
     tree_store: gtk::TreeStore,
     console_buffer: gtk::TextBuffer,
+    console_vbox: gtk::Box,
     location: Rc<RefCell<Option<String>>>,
     entries: Rc<RefCell<Vec<VcEntry>>>,
     vc_backend: Rc<RefCell<Option<Box<dyn Vc>>>>,
@@ -115,6 +116,11 @@ impl VcView {
         console_vbox.append(&console_scrolled);
         paned.set_end_child(Some(&console_vbox));
 
+        let initial_visible = crate::config::settings::MeldSettings::load()
+            .map(|s| s.vc_console_visible)
+            .unwrap_or(false);
+        console_vbox.set_visible(initial_visible);
+
         main_box.append(&paned);
 
         let entries: Rc<RefCell<Vec<VcEntry>>> = Rc::new(RefCell::new(Vec::new()));
@@ -157,6 +163,7 @@ impl VcView {
             tree_view,
             tree_store,
             console_buffer: console_buffer.clone(),
+            console_vbox: console_vbox.clone(),
             location: location.clone(),
             entries: entries.clone(),
             vc_backend: backend.clone(),
@@ -239,6 +246,11 @@ impl VcView {
         self.file_activated_cb.replace(Some(Box::new(f)));
     }
 
+    /// Show or hide the version control console output panel.
+    pub fn set_vc_console_visible(&self, visible: bool) {
+        self.console_vbox.set_visible(visible);
+    }
+
     /// Return the VC backend, if any.
     pub fn vc_backend(&self) -> Rc<RefCell<Option<Box<dyn Vc>>>> {
         Rc::clone(&self.vc_backend)
@@ -282,30 +294,54 @@ impl MeldPage for VcView {
         }
     }
 
-    fn supports_refresh(&self) -> bool {
-        true
+    fn supported_view_actions(&self) -> &'static [&'static str] {
+        &["open-external", "refresh", "find", "vc-console-visible"]
+    }
+
+    fn action_find(&self) {
+        self.tree_view.emit_start_interactive_search();
     }
 
     fn action_open_external(&self) {
-        if let Some(loc) = self.location.borrow().as_ref() {
-            let result = if cfg!(target_os = "windows") {
-                std::process::Command::new("explorer").arg(loc).spawn()
-            } else if cfg!(target_os = "macos") {
-                std::process::Command::new("open").arg(loc).spawn()
-            } else {
-                std::process::Command::new("xdg-open").arg(loc).spawn()
-            };
-            if let Err(e) = result {
-                log::error!("Failed to open location '{}': {}", loc, e);
-            }
+        let Some(loc) = self.location.borrow().clone() else {
+            return;
+        };
+        let rel_paths = get_selected_paths(&self.tree_view);
+        if rel_paths.is_empty() {
+            return;
         }
+        let full: Vec<String> = rel_paths
+            .iter()
+            .map(|p| Path::new(&loc).join(p).to_string_lossy().into_owned())
+            .collect();
+        crate::utils::external::open_files_external(&full);
+    }
+
+    fn toggle_vc_console(&self) {
+        let visible = !self.console_vbox.is_visible();
+        self.console_vbox.set_visible(visible);
     }
 }
 
-fn get_selected_path(tv: &gtk::TreeView) -> Option<String> {
+/// Return the relative paths (column 0) of every selected row.
+fn get_selected_paths(tv: &gtk::TreeView) -> Vec<String> {
     let sel = tv.selection();
-    let (_model, _iter) = sel.selected()?;
-    None // TreeModel::value requires specific trait bounds in gtk4-rs 0.9
+    let (paths, model) = sel.selected_rows();
+    let mut result = Vec::new();
+    for path in paths {
+        if let Some(iter) = model.iter(&path) {
+            let value = model.get_value(&iter, 0);
+            if let Ok(s) = value.get::<String>() {
+                result.push(s);
+            }
+        }
+    }
+    result
+}
+
+/// Return the first selected row's relative path, if any.
+fn get_selected_path(tv: &gtk::TreeView) -> Option<String> {
+    get_selected_paths(tv).into_iter().next()
 }
 
 fn refresh_vc(

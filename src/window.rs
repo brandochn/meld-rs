@@ -83,12 +83,12 @@ pub trait MeldPage {
     fn action_open_external(&self) {}
     /// Refresh / recompute the comparison from scratch.
     fn action_refresh(&self) {}
-    /// Whether the page has a refreshable comparison (file, folder and
-    /// version-control comparisons do; the new-comparison tab does not).
-    /// Mirrors the original Meld, which only registers `view.refresh` on
-    /// those pages.
-    fn supports_refresh(&self) -> bool {
-        false
+    /// Which `view.*` gear-menu actions this page actually handles.
+    ///
+    /// Actions not listed here are disabled while the page is active,
+    /// mirroring the original Meld's per-document action registration.
+    fn supported_view_actions(&self) -> &'static [&'static str] {
+        &[]
     }
     /// Open the find bar.
     fn action_find(&self) {}
@@ -118,6 +118,8 @@ pub trait MeldPage {
     fn toggle_overview_map(&self) {}
     /// Toggle synchronized scrolling lock.
     fn toggle_lock_scrolling(&self) {}
+    /// Toggle the version control console visibility.
+    fn toggle_vc_console(&self) {}
 }
 
 /// Payload sent from `NewDiffTab` when the user requests a comparison.
@@ -128,6 +130,230 @@ pub struct DiffRequest {
 
 /// Callback invoked when the user clicks Compare or Blank in the NewDiffTab.
 pub type DiffCreatedCallback = Box<dyn Fn(DiffRequest)>;
+
+/// Keyboard accelerators, mirroring `meld/meld/accelerators.py`.
+///
+/// Only actions that meld-rs actually registers are listed here. Accelerator
+/// strings use `<Primary>` (Cmd on macOS, Ctrl elsewhere) and `<Control>`
+/// exactly as the original Meld does.
+const ACCELERATORS: &[(&str, &[&str])] = &[
+    // Application actions
+    ("app.quit", &["<Primary>Q"]),
+    ("app.help", &["F1"]),
+    ("app.preferences", &["<Primary>comma"]),
+    // Window actions
+    ("win.new-tab", &["<Primary>N"]),
+    ("win.close", &["<Primary>W"]),
+    ("win.fullscreen", &["F11"]),
+    ("win.stop", &["Escape"]),
+    // View actions
+    ("view.save-as", &["<Primary><Shift>S"]),
+    ("view.save-all", &["<Primary><Shift>L"]),
+    ("view.open-external", &["<Primary><Shift>O"]),
+    ("view.refresh", &["<Control>R", "F5"]),
+    ("view.find", &["<Primary>F"]),
+    ("view.find-replace", &["<Primary>H"]),
+    ("view.undo", &["<Primary>Z"]),
+    ("view.redo", &["<Primary><Shift>Z"]),
+    ("view.show-overview-map", &["F9"]),
+    ("view.swap-2-panes", &["<Alt>backslash"]),
+];
+
+/// Every `view.*` action registered in [`MeldWindow::setup_view_actions`].
+/// Used to enable/disable the gear-menu entries for the active page.
+const VIEW_ACTIONS: &[&str] = &[
+    "save-as",
+    "save-all",
+    "revert",
+    "open-external",
+    "refresh",
+    "find",
+    "find-replace",
+    "undo",
+    "redo",
+    "show-overview-map",
+    "lock-scrolling",
+    "swap-2-panes",
+    "merge-all-left",
+    "merge-all-right",
+    "merge-all",
+    "format-as-patch",
+    "vc-console-visible",
+];
+
+/// Register all keyboard accelerators once at application startup.
+pub(crate) fn register_accels(app: &gtk::Application) {
+    for (action, accels) in ACCELERATORS {
+        app.set_accels_for_action(action, accels);
+    }
+}
+
+/// A single entry in the shortcuts overlay: either an application action
+/// (whose accelerator is looked up from [`ACCELERATORS`]) or a raw GTK
+/// accelerator string.
+enum ShortcutSource {
+    Action(&'static str),
+    Accel(&'static str),
+}
+
+/// Return the space-joined accelerator string registered for `action`, if any.
+fn accelerator_for(action: &str) -> Option<String> {
+    ACCELERATORS
+        .iter()
+        .find(|(name, _)| *name == action)
+        .map(|(_, accels)| accels.join(" "))
+}
+
+/// Build and present the "Keyboard Shortcuts" overlay, mirroring the original
+/// Meld `help-overlay.ui`.
+fn show_help_overlay(parent: Option<&gtk::Window>) {
+    let overlay = gtk::ShortcutsWindow::builder().build();
+    overlay.set_modal(true);
+    if let Some(win) = parent {
+        overlay.set_transient_for(Some(win));
+    }
+
+    let section = gtk::ShortcutsSection::builder().build();
+    section.set_section_name(Some("main"));
+    section.set_visible(true);
+
+    let groups: &[(&str, &[(ShortcutSource, &str)])] = &[
+        (
+            "Windows and Tabs",
+            &[
+                (ShortcutSource::Action("win.new-tab"), "New comparison"),
+                (ShortcutSource::Action("win.close"), "Close a comparison"),
+                (ShortcutSource::Action("app.quit"), "Quit Meld"),
+            ],
+        ),
+        (
+            "General",
+            &[
+                (ShortcutSource::Action("app.help"), "Show help"),
+                (
+                    ShortcutSource::Action("app.preferences"),
+                    "Show preferences",
+                ),
+                (
+                    ShortcutSource::Accel("<Primary>question"),
+                    "Keyboard shortcuts",
+                ),
+                (ShortcutSource::Action("win.fullscreen"), "Fullscreen"),
+            ],
+        ),
+        (
+            "Common Actions",
+            &[
+                (
+                    ShortcutSource::Action("win.stop"),
+                    "Stop the current action",
+                ),
+                (ShortcutSource::Action("view.refresh"), "Refresh comparison"),
+                (
+                    ShortcutSource::Action("view.open-external"),
+                    "Open externally",
+                ),
+            ],
+        ),
+        (
+            "Panes",
+            &[(
+                ShortcutSource::Action("view.swap-2-panes"),
+                "Swap left and right panes",
+            )],
+        ),
+        (
+            "Changes",
+            &[
+                (ShortcutSource::Accel("<Alt>Up"), "Go to previous change"),
+                (ShortcutSource::Accel("<Alt>Down"), "Go to next change"),
+            ],
+        ),
+        (
+            "Tabs",
+            &[
+                (
+                    ShortcutSource::Accel("<Primary><Alt>Page_Up"),
+                    "Go to previous tab",
+                ),
+                (
+                    ShortcutSource::Accel("<Primary><Alt>Page_Down"),
+                    "Go to next tab",
+                ),
+                (ShortcutSource::Accel("<Alt>0...9"), "Switch to tab"),
+                (
+                    ShortcutSource::Accel("<Shift><Primary><Alt>Page_Up"),
+                    "Move tab left",
+                ),
+                (
+                    ShortcutSource::Accel("<Shift><Primary><Alt>Page_Down"),
+                    "Move tab right",
+                ),
+            ],
+        ),
+        (
+            "Editing",
+            &[
+                (ShortcutSource::Action("view.undo"), "Undo"),
+                (ShortcutSource::Action("view.redo"), "Redo"),
+                (ShortcutSource::Accel("<Primary>X"), "Cut"),
+                (ShortcutSource::Accel("<Primary>C"), "Copy"),
+                (ShortcutSource::Accel("<Primary>V"), "Paste"),
+                (ShortcutSource::Action("view.find"), "Find"),
+                (ShortcutSource::Accel("<Primary>G"), "Find Next"),
+                (ShortcutSource::Accel("<Primary><Shift>G"), "Find Previous"),
+                (ShortcutSource::Action("view.find-replace"), "Replace"),
+            ],
+        ),
+        (
+            "File comparison",
+            &[
+                (
+                    ShortcutSource::Action("view.save-as"),
+                    "Save current file to new path",
+                ),
+                (
+                    ShortcutSource::Action("view.save-all"),
+                    "Save all files in comparison",
+                ),
+                (
+                    ShortcutSource::Action("view.show-overview-map"),
+                    "Show overview map",
+                ),
+            ],
+        ),
+    ];
+
+    for (group_title, shortcuts) in groups {
+        let group = gtk::ShortcutsGroup::builder().build();
+        group.set_title(Some(group_title));
+        group.set_visible(true);
+        for (source, title) in *shortcuts {
+            let shortcut = gtk::ShortcutsShortcut::builder().build();
+            shortcut.set_title(Some(title));
+            // GTK only auto-resolves `action-name` when the shortcuts window
+            // is associated via the private `gtk_shortcuts_window_set_window`,
+            // which gtk-rs does not expose. Set the accelerator explicitly.
+            match source {
+                ShortcutSource::Action(action) => {
+                    shortcut.set_action_name(Some(action));
+                    if let Some(accel) = accelerator_for(action) {
+                        shortcut.set_accelerator(Some(&accel));
+                    }
+                }
+                ShortcutSource::Accel(accel) => {
+                    shortcut.set_accelerator(Some(accel));
+                }
+            }
+            shortcut.set_visible(true);
+            group.add_shortcut(&shortcut);
+        }
+        section.add_group(&group);
+    }
+
+    overlay.add_section(&section);
+    overlay.present();
+}
 
 impl MeldWindow {
     pub fn new(app: &gtk::Application) -> Self {
@@ -501,11 +727,14 @@ impl MeldWindow {
                 pc.set_visible(show_conf);
                 nc.set_visible(show_conf);
                 page.on_container_switch_in();
-                // Refresh Comparison is only available on pages that
-                // hold an actual comparison.
-                if let Some(refresh) = view_group_sw.lookup_action("refresh") {
-                    if let Some(refresh) = refresh.downcast_ref::<gio::SimpleAction>() {
-                        refresh.set_enabled(page.supports_refresh());
+                // Enable only the `view.*` actions the active page handles,
+                // mirroring the original Meld's per-document action groups.
+                let supported = page.supported_view_actions();
+                for name in VIEW_ACTIONS {
+                    if let Some(action) = view_group_sw.lookup_action(name) {
+                        if let Some(action) = action.downcast_ref::<gio::SimpleAction>() {
+                            action.set_enabled(supported.contains(name));
+                        }
                     }
                 }
             }
@@ -653,9 +882,10 @@ impl MeldWindow {
         self.window.add_action(&stop_action);
 
         // Keyboard shortcuts overlay
+        let overlay_parent = self.window.clone();
         let help_overlay_action = gio::SimpleAction::new("show-help-overlay", None);
-        help_overlay_action.connect_activate(|_, _| {
-            log::info!("Keyboard shortcuts help requested");
+        help_overlay_action.connect_activate(move |_, _| {
+            show_help_overlay(Some(overlay_parent.upcast_ref::<gtk::Window>()));
         });
         self.window.add_action(&help_overlay_action);
     }
@@ -736,9 +966,6 @@ impl MeldWindow {
             }
         });
         self.view_group.add_action(&action);
-        if let Some(app) = self.window.application() {
-            app.set_accels_for_action("view.refresh", &["<Control>R", "F5"]);
-        }
 
         let p = pages.clone();
         let n = nb.clone();
@@ -778,9 +1005,6 @@ impl MeldWindow {
             }
         });
         self.view_group.add_action(&action);
-        if let Some(app) = self.window.application() {
-            app.set_accels_for_action("view.undo", &["<Control>Z"]);
-        }
 
         let p = pages.clone();
         let n = nb.clone();
@@ -794,9 +1018,6 @@ impl MeldWindow {
             }
         });
         self.view_group.add_action(&action);
-        if let Some(app) = self.window.application() {
-            app.set_accels_for_action("view.redo", &["<Control><Shift>Z"]);
-        }
 
         let p = pages.clone();
         let n = nb.clone();
@@ -889,12 +1110,19 @@ impl MeldWindow {
         });
         self.view_group.add_action(&action);
 
-        // vc-console-visible: stub for now.
-        let vc_console_action = gio::SimpleAction::new("vc-console-visible", None);
-        vc_console_action.connect_activate(|_, _| {
-            log::info!("view.vc-console-visible triggered (not yet implemented)");
+        // vc-console-visible: dispatch to the current page's VcView.
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("vc-console-visible", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.toggle_vc_console();
+                }
+            }
         });
-        self.view_group.add_action(&vc_console_action);
+        self.view_group.add_action(&action);
     }
 
     /// Set up a popover for the text-filter dropdown button with checkboxes

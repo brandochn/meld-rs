@@ -236,7 +236,6 @@ fn setup_actions(app: &gtk::Application) {
         }
     });
     app.add_action(&quit);
-    app.set_accels_for_action("app.quit", &["<Ctrl>Q"]);
 
     let app_w = app.downgrade();
     let about = gio::SimpleAction::new("about", None);
@@ -280,6 +279,8 @@ fn setup_actions(app: &gtk::Application) {
         }
     });
     app.add_action(&help);
+
+    crate::window::register_accels(app);
 }
 
 /// Run one-time application setup (actions, CSS, style schemes).

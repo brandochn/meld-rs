@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use crate::config::settings::MeldSettings;
 use crate::diff::diff_state::{DiffResult, DiffState};
-use crate::diff::engine::{Chunk, DiffOp, InlineDiffer, LineCache};
+use crate::diff::engine::{Chunk, DiffOp, InlineDiffer, LineCache, ThreeWayDiffer};
 use crate::diff::inline_cache::InlineDiffCache;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
@@ -2576,7 +2576,7 @@ impl FileDiff {
             key_ctrl.connect_key_pressed(move |_ctrl, keyval, _keycode, state| {
                 let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
                 if ctrl && keyval == key_f {
-                    fb.start_find(view.upcast_ref::<gtk::TextView>());
+                    fb.start_find(&view);
                     return glib::Propagation::Stop;
                 }
                 if keyval == key_escape && fb.is_visible() {
@@ -2984,8 +2984,25 @@ impl MeldPage for FileDiff {
         self.compute_diff();
     }
 
-    fn supports_refresh(&self) -> bool {
-        true
+    fn supported_view_actions(&self) -> &'static [&'static str] {
+        &[
+            "save-as",
+            "save-all",
+            "revert",
+            "open-external",
+            "refresh",
+            "find",
+            "find-replace",
+            "undo",
+            "redo",
+            "show-overview-map",
+            "lock-scrolling",
+            "swap-2-panes",
+            "merge-all-left",
+            "merge-all-right",
+            "merge-all",
+            "format-as-patch",
+        ]
     }
 
     fn action_find(&self) {
@@ -2993,23 +3010,31 @@ impl MeldPage for FileDiff {
             .focused_pane
             .get()
             .min(self.num_panes.saturating_sub(1));
-        self.find_bar
-            .start_find(self.panes[fp].view.upcast_ref::<gtk::TextView>());
+        self.find_bar.start_find(&self.panes[fp].view);
     }
 
     fn action_find_replace(&self) {
-        // FindBar doesn't support replace mode yet; fall back to find.
-        self.action_find();
+        let fp = self
+            .focused_pane
+            .get()
+            .min(self.num_panes.saturating_sub(1));
+        self.find_bar.start_find_replace(&self.panes[fp].view);
     }
 
     fn action_find_next(&self) {
-        // TODO: implement find_next on FindBar when available.
-        log::info!("find_next: not yet supported on FindBar");
+        let fp = self
+            .focused_pane
+            .get()
+            .min(self.num_panes.saturating_sub(1));
+        self.find_bar.start_find_next(&self.panes[fp].view);
     }
 
     fn action_find_previous(&self) {
-        // TODO: implement find_previous on FindBar when available.
-        log::info!("find_previous: not yet supported on FindBar");
+        let fp = self
+            .focused_pane
+            .get()
+            .min(self.num_panes.saturating_sub(1));
+        self.find_bar.start_find_previous(&self.panes[fp].view);
     }
 
     fn action_stop(&self) {
@@ -3042,13 +3067,21 @@ impl MeldPage for FileDiff {
         if self.num_panes < 3 {
             return;
         }
-        // For 3-way merge: auto-merge non-conflicting changes from both sides.
-        // Pull changes from right into middle, then from left into middle.
-        self.merge_all_non_conflicting(false);
-        // For left→middle we need a different approach since merge_all_non_conflicting
-        // works on pane 0↔1. In a 3-way merge, panes are [local, base, remote].
-        // Merging "all" means resolving non-conflicting changes.
-        log::info!("merge_all: full 3-way auto-merge not yet implemented");
+        // Panes are [local, base, remote]; merge non-conflicting changes from
+        // both sides into the base pane, matching the original `merge_3_files`.
+        let base = buffer_text_lines(&self.panes[1].buffer);
+        let local = buffer_text_lines(&self.panes[0].buffer);
+        let remote = buffer_text_lines(&self.panes[2].buffer);
+
+        let differ = ThreeWayDiffer::new(base, local, remote);
+        let result = differ.merge();
+
+        let dst_buffer = &self.panes[1].buffer;
+        dst_buffer.begin_user_action();
+        dst_buffer.set_text(&result.merged.join("\n"));
+        dst_buffer.end_user_action();
+
+        self.compute_diff();
     }
 
     fn action_format_as_patch(&self) {
@@ -3131,7 +3164,12 @@ impl MeldPage for FileDiff {
 
     fn toggle_overview_map(&self) {
         let visible = self.overview_map_box.is_visible();
-        self.overview_map_box.set_visible(!visible);
+        let new_visible = !visible;
+        self.overview_map_box.set_visible(new_visible);
+        if let Ok(mut settings) = MeldSettings::load() {
+            settings.show_overview_map = new_visible;
+            let _ = settings.save();
+        }
     }
 
     fn toggle_lock_scrolling(&self) {
