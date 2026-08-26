@@ -100,6 +100,10 @@ pub trait MeldPage {
     fn action_find_previous(&self) {}
     /// Cancel the currently-running background task (diff, scan, etc.).
     fn action_stop(&self) {}
+    /// Undo the most recent edit in the focused pane.
+    fn action_undo(&self) {}
+    /// Redo the most recently undone edit in the focused pane.
+    fn action_redo(&self) {}
     /// Merge all non-conflicting changes from the right pane into the left.
     fn action_merge_all_left(&self) {}
     /// Merge all non-conflicting changes from the left pane into the right.
@@ -761,6 +765,38 @@ impl MeldWindow {
             }
         });
         self.view_group.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("undo", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_undo();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+        if let Some(app) = self.window.application() {
+            app.set_accels_for_action("view.undo", &["<Control>Z"]);
+        }
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("redo", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.action_redo();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+        if let Some(app) = self.window.application() {
+            app.set_accels_for_action("view.redo", &["<Control><Shift>Z"]);
+        }
 
         let p = pages.clone();
         let n = nb.clone();
