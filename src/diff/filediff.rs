@@ -26,7 +26,10 @@ use std::rc::Rc;
 
 use crate::config::settings::MeldSettings;
 use crate::diff::diff_state::{DiffResult, DiffState};
-use crate::diff::engine::{Chunk, DiffOp, InlineDiffer, LineCache, ThreeWayDiffer};
+use crate::diff::engine::{
+    adjacent_change_chunks, locate_change_chunk, Chunk, DiffOp, InlineDiffer, LineCache,
+    ThreeWayDiffer,
+};
 use crate::diff::inline_cache::InlineDiffCache;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
@@ -38,7 +41,7 @@ use crate::ui::pathlabel::PathLabel;
 use crate::ui::statusbar::StatusBar;
 use crate::ui::style;
 use crate::undo::UndoSequence;
-use crate::window::MeldPage;
+use crate::window::{ChangeActionSensitivity, MeldPage};
 
 /// The main file-comparison view supporting 2 or 3 panes.
 pub struct FileDiff {
@@ -102,6 +105,8 @@ pub struct FileDiff {
     undo_sequence: Rc<UndoSequence>,
     /// Suppress undo recording while loading file contents.
     suppress_undo: Rc<Cell<bool>>,
+    /// Callback fired when change-action sensitivity may have changed.
+    change_action_watch: Rc<RefCell<Option<Box<dyn Fn() + 'static>>>>,
 }
 
 /// Per-pane data bundles the widgets that make up one column.
@@ -390,6 +395,7 @@ impl FileDiff {
         let mtimes = Rc::new(RefCell::new(vec![None, None, None]));
         let undo_sequence = Rc::new(UndoSequence::new(&(0..num_panes).collect::<Vec<usize>>()));
         let suppress_undo = Rc::new(Cell::new(false));
+        let change_action_watch = Rc::new(RefCell::new(None::<Box<dyn Fn() + 'static>>));
 
         let fd = Self {
             container,
@@ -421,6 +427,7 @@ impl FileDiff {
             lock_scrolling: Rc::new(Cell::new(false)),
             undo_sequence,
             suppress_undo,
+            change_action_watch,
         };
 
         // Wire up everything
@@ -1280,6 +1287,96 @@ impl FileDiff {
         self.apply_text_dimming();
     }
 
+    /// Return a clone of the currently selected change chunk, if any.
+    fn current_chunk(&self) -> Option<Chunk> {
+        let idx = self.current_chunk_idx.get()?;
+        self.chunks.borrow().get(idx).cloned()
+    }
+
+    /// Orient a 2-pane chunk so `start_a`/`end_a` refer to `src` and
+    /// `start_b`/`end_b` refer to `dst`.
+    fn orient_chunk(chunk: &Chunk, src: usize, dst: usize) -> Chunk {
+        if src < dst {
+            chunk.clone()
+        } else {
+            Chunk {
+                start_a: chunk.start_b,
+                end_a: chunk.end_b,
+                start_b: chunk.start_a,
+                end_b: chunk.end_a,
+                op: chunk.op,
+            }
+        }
+    }
+
+    /// Resolve source/destination panes for a per-change push/copy action.
+    ///
+    /// `self.chunks` is always a 2-pane diff between panes 0 and 1 (see
+    /// `compute_diff`), so per-change actions are only defined in 2-pane mode.
+    fn resolve_action_panes(&self, push_left: bool) -> Option<(usize, usize)> {
+        if self.num_panes != 2 {
+            return None;
+        }
+        Some(if push_left { (1, 0) } else { (0, 1) })
+    }
+
+    /// Invoke the registered change-action watch, if any.
+    fn notify_change_action_watch(&self) {
+        if let Some(cb) = self.change_action_watch.borrow().as_ref() {
+            cb();
+        }
+    }
+
+    /// Compute per-change action sensitivity for the focused pane/chunk.
+    fn compute_change_action_sensitivity(&self) -> ChangeActionSensitivity {
+        let mut states = ChangeActionSensitivity::default();
+        if self.num_panes != 2 {
+            return states;
+        }
+        let Some(chunk) = self.current_chunk() else {
+            return states;
+        };
+        if chunk.op == DiffOp::Equal {
+            return states;
+        }
+
+        let focused = self.focused_pane.get().min(self.num_panes - 1);
+        let left_editable = self.panes[0].view.is_editable();
+        let right_editable = self.panes[1].view.is_editable();
+
+        // Meld 2-pane: push sensitivity is the destination pane's editability.
+        states.push_left = left_editable;
+        states.push_right = right_editable;
+
+        if focused == 0 {
+            states.delete = left_editable && matches!(chunk.op, DiffOp::Delete | DiffOp::Replace);
+            states.copy_left_up = false;
+            states.copy_left_down = false;
+            states.copy_right_up = right_editable && chunk.op == DiffOp::Replace;
+            states.copy_right_down = right_editable && chunk.op == DiffOp::Replace;
+        } else {
+            states.delete = right_editable && matches!(chunk.op, DiffOp::Insert | DiffOp::Replace);
+            states.copy_left_up = left_editable && chunk.op == DiffOp::Replace;
+            states.copy_left_down = left_editable && chunk.op == DiffOp::Replace;
+            states.copy_right_up = false;
+            states.copy_right_down = false;
+        }
+
+        states
+    }
+
+    /// Shared implementation for the four copy-chunk toolbar actions.
+    fn copy_current_change(&self, push_left: bool, copy_up: bool) {
+        let Some((src, dst)) = self.resolve_action_panes(push_left) else {
+            return;
+        };
+        let Some(chunk) = self.current_chunk() else {
+            return;
+        };
+        self.copy_chunk(src, dst, &Self::orient_chunk(&chunk, src, dst), copy_up);
+        self.notify_change_action_watch();
+    }
+
     /// Push the chunk at the given index from source to target pane.
     /// `push_left` determines direction: true = leftward, false = rightward.
     pub fn push_chunk(&self, chunk_idx: usize, push_left: bool) {
@@ -1348,28 +1445,7 @@ impl FileDiff {
         if pane >= self.num_panes {
             return;
         }
-
-        self.loading.set(true);
-        let buffer = &self.panes[pane].buffer;
-
-        buffer.begin_user_action();
-
-        let start_iter = buffer.iter_at_line_offset(chunk.start_a.max(0) as i32, 0);
-        let end_iter = if chunk.end_a > chunk.start_a {
-            buffer.iter_at_line_offset(chunk.end_a as i32, 0)
-        } else {
-            // Zero-width chunk: delete at position
-            buffer.iter_at_line_offset(chunk.start_a as i32, 0)
-        };
-
-        if let (Some(start), Some(end)) = (start_iter, end_iter) {
-            if start.offset() < end.offset() {
-                buffer.delete(&mut start.clone(), &mut end.clone());
-            }
-        }
-
-        buffer.end_user_action();
-        self.loading.set(false);
+        execute_delete(&self.panes[pane].buffer, chunk);
     }
 
     /// Replace the target pane's chunk content with the source pane's content.
@@ -1377,45 +1453,7 @@ impl FileDiff {
         if src >= self.num_panes || dst >= self.num_panes {
             return;
         }
-
-        self.loading.set(true);
-
-        let src_buffer = &self.panes[src].buffer;
-        let dst_buffer = &self.panes[dst].buffer;
-
-        // Get source text
-        let src_start = src_buffer.iter_at_line_offset(chunk.start_a as i32, 0);
-        let src_end = src_buffer.iter_at_line_offset(chunk.end_a as i32, 0);
-
-        let src_text = if let (Some(s), Some(e)) = (src_start, src_end) {
-            if s.offset() < e.offset() {
-                src_buffer.text(&s, &e, true).to_string()
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        // Replace in destination
-        dst_buffer.begin_user_action();
-
-        let dst_start = dst_buffer.iter_at_line_offset(chunk.start_b as i32, 0);
-        let dst_end = dst_buffer.iter_at_line_offset(chunk.end_b as i32, 0);
-
-        if let (Some(ds), Some(de)) = (dst_start, dst_end) {
-            if ds.offset() < de.offset() {
-                dst_buffer.delete(&mut ds.clone(), &mut de.clone());
-            }
-            // Insert at correct position
-            let insert_pos = dst_buffer.iter_at_line_offset(chunk.start_b as i32, 0);
-            if let Some(pos) = insert_pos {
-                dst_buffer.insert(&mut pos.clone(), &src_text);
-            }
-        }
-
-        dst_buffer.end_user_action();
-        self.loading.set(false);
+        execute_replace(&self.panes[src].buffer, &self.panes[dst].buffer, chunk);
     }
 
     /// Copy chunk content from source pane to destination pane.
@@ -1424,49 +1462,12 @@ impl FileDiff {
         if src >= self.num_panes || dst >= self.num_panes {
             return;
         }
-
-        self.loading.set(true);
-
-        let src_buffer = &self.panes[src].buffer;
-        let dst_buffer = &self.panes[dst].buffer;
-
-        // Get source text
-        let src_start = src_buffer.iter_at_line_offset(chunk.start_a as i32, 0);
-        let src_end = src_buffer.iter_at_line_offset(chunk.end_a as i32, 0);
-
-        let mut src_text = if let (Some(s), Some(e)) = (src_start, src_end) {
-            if s.offset() < e.offset() {
-                src_buffer.text(&s, &e, true).to_string()
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        dst_buffer.begin_user_action();
-
-        if copy_up {
-            // Insert before the destination chunk
-            if chunk.end_a >= src_buffer.line_count().max(0) as usize
-                && chunk.start_b < dst_buffer.line_count().max(0) as usize
-            {
-                src_text.push('\n');
-            }
-            let insert_pos = dst_buffer.iter_at_line_offset(chunk.start_b as i32, 0);
-            if let Some(mut pos) = insert_pos {
-                dst_buffer.insert(&mut pos, &src_text);
-            }
-        } else {
-            // Insert after the destination chunk
-            let insert_pos = dst_buffer.iter_at_line_offset(chunk.end_b as i32, 0);
-            if let Some(mut pos) = insert_pos {
-                dst_buffer.insert(&mut pos, &src_text);
-            }
-        }
-
-        dst_buffer.end_user_action();
-        self.loading.set(false);
+        execute_copy(
+            &self.panes[src].buffer,
+            &self.panes[dst].buffer,
+            chunk,
+            copy_up,
+        );
     }
 
     /// Navigate to the next or previous diff chunk (direction: +1 or -1).
@@ -1476,7 +1477,7 @@ impl FileDiff {
             return;
         }
 
-        // Find the current chunk based on cursor position in focused pane
+        // Determine the cursor line in the focused pane.
         let fp = self.focused_pane.get().min(self.num_panes - 1);
         let buffer = &self.panes[fp].buffer;
         let cursor_line = {
@@ -1485,104 +1486,61 @@ impl FileDiff {
             iter.line().max(0) as usize
         };
 
-        // Use O(1) line cache lookup instead of linear scan
-        let line_cache = self.line_cache.borrow();
-        let current_idx = if let Some(ci) = line_cache.locate_chunk(cursor_line) {
-            ci as i32
-        } else {
-            // Fallback: find nearest chunk via linear scan
-            let mut idx = 0i32;
-            for (i, chunk) in chunks.iter().enumerate() {
-                let line = if fp == 0 {
-                    chunk.start_a
-                } else {
-                    chunk.start_b
-                };
-                if (line as i32) <= cursor_line as i32 {
-                    idx = i as i32;
-                } else {
-                    break;
-                }
-            }
-            idx
-        };
-        drop(line_cache);
+        // Resolve the adjacent non-Equal chunks using the focused pane's own
+        // coordinate system. This mirrors Meld's per-pane line cache and avoids
+        // the merged-coordinate ambiguity in `LineCache` that breaks navigation
+        // when the two files have different line counts (inserts/deletes).
+        let (prev, next) = adjacent_change_chunks(&chunks, fp, cursor_line);
+        let target = if direction > 0 { next } else { prev };
 
-        let new_idx = if direction > 0 {
-            // Next non-equal chunk
-            let mut idx = current_idx + 1;
-            while (idx as usize) < chunks.len() {
-                if chunks[idx as usize].op != DiffOp::Equal {
-                    break;
-                }
-                idx += 1;
-            }
-            if (idx as usize) >= chunks.len() {
-                // Wrap around
-                idx = 0;
-                while (idx as usize) < chunks.len() {
-                    if chunks[idx as usize].op != DiffOp::Equal {
-                        break;
-                    }
-                    idx += 1;
-                }
-            }
-            idx.min(chunks.len() as i32 - 1)
-        } else {
-            // Previous non-equal chunk
-            let mut idx = current_idx - 1;
-            while idx >= 0 {
-                if chunks[idx as usize].op != DiffOp::Equal {
-                    break;
-                }
-                idx -= 1;
-            }
-            if idx < 0 {
-                // Wrap around
-                idx = chunks.len() as i32 - 1;
-                while idx >= 0 {
-                    if chunks[idx as usize].op != DiffOp::Equal {
-                        break;
-                    }
-                    idx -= 1;
-                }
-            }
-            idx.max(0)
+        let Some(target) = target else {
+            // No change in this direction; match Meld and stay put instead of
+            // wrapping around.
+            return;
         };
 
-        if (new_idx as usize) < chunks.len() {
-            let chunk = &chunks[new_idx as usize];
-            self.current_chunk_idx.set(Some(new_idx as usize));
+        let chunk = &chunks[target];
+        self.current_chunk_idx.set(Some(target));
 
-            // Propagate current chunk to link maps for visual highlight
-            for lm in &self.link_maps {
-                lm.set_current_chunk(Some(new_idx as usize));
-            }
-
-            // Scroll all panes to the chunk for synchronized context.
-            // Use the focused pane's chunk coordinates as the primary target.
-            let focused_pane = self.focused_pane.get().min(self.num_panes - 1);
-            for pi in 0..self.num_panes {
-                let target_line = if pi == 0 {
-                    chunk.start_a
-                } else {
-                    chunk.start_b
-                };
-                self.scroll_to_line(pi, target_line);
-            }
-
-            // Brief fading highlight for visual orientation (mirrors Meld's go_to_chunk)
-            {
-                let buffer = &self.panes[focused_pane].buffer;
-                let hl_start = iter_at_line_or_end(buffer, chunk.start_a as i32);
-                let hl_end = if chunk.end_a > chunk.start_a {
-                    iter_at_line_or_end(buffer, chunk.end_a as i32)
-                } else {
-                    iter_at_line_or_end(buffer, (chunk.start_a + 1) as i32)
-                };
-                add_fading_highlight(buffer, &hl_start, &hl_end);
-            }
+        // Propagate current chunk to link maps for visual highlight
+        for lm in &self.link_maps {
+            lm.set_current_chunk(Some(target));
         }
+
+        // Scroll all panes to the chunk for synchronized context.
+        let focused_pane = self.focused_pane.get().min(self.num_panes - 1);
+        for pi in 0..self.num_panes {
+            let target_line = if pi == 0 {
+                chunk.start_a
+            } else {
+                chunk.start_b
+            };
+            self.scroll_to_line(pi, target_line);
+        }
+
+        // Brief fading highlight for visual orientation. Use the focused pane's
+        // coordinates so the highlight lands on the correct lines.
+        {
+            let buffer = &self.panes[focused_pane].buffer;
+            let (hl_start_line, hl_end_line) = if focused_pane == 0 {
+                (chunk.start_a, chunk.end_a)
+            } else {
+                (chunk.start_b, chunk.end_b)
+            };
+            let hl_start = iter_at_line_or_end(buffer, hl_start_line as i32);
+            let hl_end = if hl_end_line > hl_start_line {
+                iter_at_line_or_end(buffer, hl_end_line as i32)
+            } else {
+                iter_at_line_or_end(buffer, (hl_start_line + 1) as i32)
+            };
+            add_fading_highlight(buffer, &hl_start, &hl_end);
+        }
+
+        // `current_chunk_idx` changed, so refresh the toolbar action sensitivity
+        // (push/copy/delete). Navigation does not rely on cursor-tracking's
+        // watch, because `current_chunk_idx` was already set above and the
+        // cursor move sees no index change.
+        self.notify_change_action_watch();
     }
 
     /// Navigate to next/previous conflict (for merge views).
@@ -1603,13 +1561,16 @@ impl FileDiff {
             return;
         }
         let buffer = &self.panes[pane].buffer;
-        if let Some(iter) = buffer.iter_at_line_offset(line as i32, 0) {
-            buffer.place_cursor(&iter);
-            let mark = buffer.create_mark(Some("scroll_target"), &iter, true);
-            self.panes[pane]
-                .view
-                .scroll_to_mark(&mark, 0.2, true, 0.0, 0.5);
-        }
+        // Clamp to the end iterator for zero-width changes at EOF (an Insert on
+        // pane 0 or a Delete on pane 1), where the chunk's start equals the
+        // buffer's line count. `iter_at_line_offset` returns `None` there and
+        // would silently leave the cursor (and the next navigation) stuck.
+        let iter = iter_at_line_or_end(buffer, line as i32);
+        buffer.place_cursor(&iter);
+        let mark = buffer.create_mark(Some("scroll_target"), &iter, true);
+        self.panes[pane]
+            .view
+            .scroll_to_mark(&mark, 0.2, true, 0.0, 0.5);
     }
 
     /// Navigate to a specific line number in the focused pane.
@@ -2308,11 +2269,16 @@ impl FileDiff {
     /// Track which pane has focus for action targeting.
     fn connect_focus_tracking(&self) {
         let focused = Rc::clone(&self.focused_pane);
+        let watch = Rc::clone(&self.change_action_watch);
         for (pi, pane) in self.panes.iter().enumerate() {
             let fp = Rc::clone(&focused);
+            let watch = Rc::clone(&watch);
             pane.view.connect_has_focus_notify(move |view| {
                 if view.has_focus() {
                     fp.set(pi);
+                    if let Some(cb) = watch.borrow().as_ref() {
+                        cb();
+                    }
                 }
             });
         }
@@ -2497,17 +2463,17 @@ impl FileDiff {
     /// Update status bar with cursor position and apply current-chunk highlight.
     fn connect_cursor_tracking(&self) {
         let chunks = Rc::clone(&self.chunks);
-        let line_cache = Rc::clone(&self.line_cache);
         let current_chunk_idx = Rc::clone(&self.current_chunk_idx);
         let link_maps = self.link_maps.clone();
+        let watch = Rc::clone(&self.change_action_watch);
 
-        for pane in &self.panes {
+        for (pi, pane) in self.panes.iter().enumerate() {
             let buffer = pane.buffer.clone();
             let statusbar = Rc::clone(&pane.statusbar);
             let chunks = Rc::clone(&chunks);
-            let line_cache = Rc::clone(&line_cache);
             let current_chunk_idx = Rc::clone(&current_chunk_idx);
             let link_maps = link_maps.clone();
+            let watch = Rc::clone(&watch);
             let tag_table = buffer.tag_table();
 
             buffer.connect_cursor_position_notify(move |buf| {
@@ -2518,7 +2484,13 @@ impl FileDiff {
                 statusbar.set_position(line, line_offset);
 
                 let line_usize = (line - 1) as usize;
-                let new_idx = line_cache.borrow().locate_chunk(line_usize);
+                // Resolve the change under the cursor using this pane's own
+                // coordinates; the merged `LineCache` is ambiguous for
+                // inserts/deletes.
+                let new_idx = {
+                    let chunks = chunks.borrow();
+                    locate_change_chunk(&chunks, pi, line_usize)
+                };
 
                 if current_chunk_idx.get() != new_idx {
                     // Ensure highlight tag exists
@@ -2542,10 +2514,10 @@ impl FileDiff {
                     if let Some(idx) = new_idx {
                         let chunks = chunks.borrow();
                         if idx < chunks.len() && chunks[idx].op != DiffOp::Equal {
-                            let (start, end) = if chunks[idx].op == DiffOp::Insert {
-                                (chunks[idx].start_b, chunks[idx].end_b)
-                            } else {
+                            let (start, end) = if pi == 0 {
                                 (chunks[idx].start_a, chunks[idx].end_a)
+                            } else {
+                                (chunks[idx].start_b, chunks[idx].end_b)
                             };
                             let s = iter_at_line_or_end(buf, start as i32);
                             let e = iter_at_line_or_end(buf, end as i32);
@@ -2558,6 +2530,9 @@ impl FileDiff {
                     // Propagate current chunk to link maps for visual highlight
                     for lm in &link_maps {
                         lm.set_current_chunk(new_idx);
+                    }
+                    if let Some(cb) = watch.borrow().as_ref() {
+                        cb();
                     }
                 }
             });
@@ -2754,6 +2729,69 @@ impl MeldPage for FileDiff {
 
     fn go_prev_conflict(&self) {
         self.go_to_conflict(-1);
+    }
+
+    fn supports_change_toolbar(&self) -> bool {
+        true
+    }
+
+    fn push_current_change_left(&self) {
+        let Some((src, dst)) = self.resolve_action_panes(true) else {
+            return;
+        };
+        let Some(chunk) = self.current_chunk() else {
+            return;
+        };
+        self.replace_chunk(src, dst, &Self::orient_chunk(&chunk, src, dst));
+        self.notify_change_action_watch();
+    }
+
+    fn push_current_change_right(&self) {
+        let Some((src, dst)) = self.resolve_action_panes(false) else {
+            return;
+        };
+        let Some(chunk) = self.current_chunk() else {
+            return;
+        };
+        self.replace_chunk(src, dst, &Self::orient_chunk(&chunk, src, dst));
+        self.notify_change_action_watch();
+    }
+
+    fn delete_current_change(&self) {
+        if self.num_panes != 2 {
+            return;
+        }
+        let Some(chunk) = self.current_chunk() else {
+            return;
+        };
+        let src = self.focused_pane.get().min(self.num_panes - 1);
+        let dst = 1usize.saturating_sub(src);
+        self.delete_chunk(src, &Self::orient_chunk(&chunk, src, dst));
+        self.notify_change_action_watch();
+    }
+
+    fn copy_current_change_left_up(&self) {
+        self.copy_current_change(true, true);
+    }
+
+    fn copy_current_change_left_down(&self) {
+        self.copy_current_change(true, false);
+    }
+
+    fn copy_current_change_right_up(&self) {
+        self.copy_current_change(false, true);
+    }
+
+    fn copy_current_change_right_down(&self) {
+        self.copy_current_change(false, false);
+    }
+
+    fn change_action_sensitivity(&self) -> ChangeActionSensitivity {
+        self.compute_change_action_sensitivity()
+    }
+
+    fn set_change_action_watch(&self, cb: Box<dyn Fn() + 'static>) {
+        *self.change_action_watch.borrow_mut() = Some(cb);
     }
 
     fn apply_settings(&self, settings: &MeldSettings) {
