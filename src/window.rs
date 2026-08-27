@@ -12,7 +12,7 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::config::recent::RecentType;
 use crate::config::settings::{MeldSettings, PaneOrder};
@@ -41,6 +41,19 @@ pub struct MeldWindow {
     next_conflict_btn: gtk::Button,
     /// Persisted user settings (includes vc_left_is_local, vc_merge_file_order).
     settings: Rc<MeldSettings>,
+}
+
+/// Sensitivity state for the header-bar change actions, mirroring Meld's
+/// `on_current_diff_changed`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChangeActionSensitivity {
+    pub push_left: bool,
+    pub push_right: bool,
+    pub delete: bool,
+    pub copy_left_up: bool,
+    pub copy_left_down: bool,
+    pub copy_right_up: bool,
+    pub copy_right_down: bool,
 }
 
 /// Common interface for all tab content types.
@@ -120,6 +133,36 @@ pub trait MeldPage {
     fn toggle_lock_scrolling(&self) {}
     /// Toggle the version control console visibility.
     fn toggle_vc_console(&self) {}
+
+    // ── Header-bar change actions ──────────────────────────────────
+
+    /// Whether this page contributes the per-change toolbar buttons
+    /// (push left/right, copy chunks, delete).
+    fn supports_change_toolbar(&self) -> bool {
+        false
+    }
+    /// Push the current change from the focused pane into the left pane.
+    fn push_current_change_left(&self) {}
+    /// Push the current change from the focused pane into the right pane.
+    fn push_current_change_right(&self) {}
+    /// Delete the current change from the focused pane.
+    fn delete_current_change(&self) {}
+    /// Copy the current change above the left destination chunk.
+    fn copy_current_change_left_up(&self) {}
+    /// Copy the current change below the left destination chunk.
+    fn copy_current_change_left_down(&self) {}
+    /// Copy the current change above the right destination chunk.
+    fn copy_current_change_right_up(&self) {}
+    /// Copy the current change below the right destination chunk.
+    fn copy_current_change_right_down(&self) {}
+    /// Report which change actions are currently available for the focused
+    /// pane and chunk.
+    fn change_action_sensitivity(&self) -> ChangeActionSensitivity {
+        ChangeActionSensitivity::default()
+    }
+    /// Install a callback invoked whenever change-action sensitivity may have
+    /// changed (cursor/focus movement, chunk edits).
+    fn set_change_action_watch(&self, _cb: Box<dyn Fn() + 'static>) {}
 }
 
 /// Payload sent from `NewDiffTab` when the user requests a comparison.
@@ -157,6 +200,24 @@ const ACCELERATORS: &[(&str, &[&str])] = &[
     ("view.redo", &["<Primary><Shift>Z"]),
     ("view.show-overview-map", &["F9"]),
     ("view.swap-2-panes", &["<Alt>backslash"]),
+    // Change navigation shortcuts (bound to the -shortcut actions so they stay
+    // active even when the toolbar buttons are insensitive).
+    (
+        "view.previous-change-shortcut",
+        &["<Alt>Up", "<Alt>KP_Up", "<Primary>E"],
+    ),
+    (
+        "view.next-change-shortcut",
+        &["<Alt>Down", "<Alt>KP_Down", "<Primary>D"],
+    ),
+    // File comparison change actions
+    ("view.file-push-left", &["<Alt>Left"]),
+    ("view.file-push-right", &["<Alt>Right"]),
+    ("view.file-copy-left-up", &["<Alt>bracketleft"]),
+    ("view.file-copy-right-up", &["<Alt>bracketright"]),
+    ("view.file-copy-left-down", &["<Alt>semicolon"]),
+    ("view.file-copy-right-down", &["<Alt>quoteright"]),
+    ("view.file-delete", &["<Alt>Delete", "<Alt>KP_Delete"]),
 ];
 
 /// Every `view.*` action registered in [`MeldWindow::setup_view_actions`].
@@ -355,6 +416,41 @@ fn show_help_overlay(parent: Option<&gtk::Window>) {
     overlay.present();
 }
 
+/// Apply per-change action sensitivity from the current page's state.
+fn refresh_change_action_sensitivity(
+    view_group: &gio::SimpleActionGroup,
+    pages: &Weak<RefCell<Vec<Box<dyn MeldPage>>>>,
+    notebook: &gtk::Notebook,
+) {
+    let states = pages
+        .upgrade()
+        .and_then(|pages| {
+            notebook.current_page().and_then(|idx| {
+                pages
+                    .borrow()
+                    .get(idx as usize)
+                    .map(|page| page.change_action_sensitivity())
+            })
+        })
+        .unwrap_or_default();
+
+    for (name, enabled) in [
+        ("file-push-left", states.push_left),
+        ("file-push-right", states.push_right),
+        ("file-delete", states.delete),
+        ("file-copy-left-up", states.copy_left_up),
+        ("file-copy-left-down", states.copy_left_down),
+        ("file-copy-right-up", states.copy_right_up),
+        ("file-copy-right-down", states.copy_right_down),
+    ] {
+        if let Some(action) = view_group.lookup_action(name) {
+            if let Some(action) = action.downcast_ref::<gio::SimpleAction>() {
+                action.set_enabled(enabled);
+            }
+        }
+    }
+}
+
 impl MeldWindow {
     pub fn new(app: &gtk::Application) -> Self {
         let window = gtk::ApplicationWindow::new(app);
@@ -413,6 +509,58 @@ impl MeldWindow {
         header.pack_start(&grp_conflicts);
 
         let view_toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        view_toolbar.set_visible(false);
+
+        let grp_push = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        grp_push.add_css_class("linked");
+        let push_left_btn = gtk::Button::from_icon_name("go-previous-symbolic");
+        push_left_btn.set_tooltip_text(Some("Push current change to the left"));
+        push_left_btn.set_focus_on_click(false);
+        push_left_btn.add_css_class("image-button");
+        push_left_btn.set_action_name(Some("view.file-push-left"));
+        grp_push.append(&push_left_btn);
+        let push_right_btn = gtk::Button::from_icon_name("go-next-symbolic");
+        push_right_btn.set_tooltip_text(Some("Push current change to the right"));
+        push_right_btn.set_focus_on_click(false);
+        push_right_btn.add_css_class("image-button");
+        push_right_btn.set_action_name(Some("view.file-push-right"));
+        grp_push.append(&push_right_btn);
+        view_toolbar.append(&grp_push);
+
+        let copy_btn = gtk::MenuButton::new();
+        copy_btn.set_icon_name("edit-copy-symbolic");
+        copy_btn.set_tooltip_text(Some("Copy chunks"));
+        copy_btn.set_focus_on_click(false);
+        copy_btn.add_css_class("image-button");
+        copy_btn.add_css_class("raised");
+        let copy_menu = gio::Menu::new();
+        copy_menu.append(
+            Some("Copy change above the left chunk"),
+            Some("view.file-copy-left-up"),
+        );
+        copy_menu.append(
+            Some("Copy change below the left chunk"),
+            Some("view.file-copy-left-down"),
+        );
+        copy_menu.append(
+            Some("Copy change above the right chunk"),
+            Some("view.file-copy-right-up"),
+        );
+        copy_menu.append(
+            Some("Copy change below the right chunk"),
+            Some("view.file-copy-right-down"),
+        );
+        copy_btn.set_menu_model(Some(&copy_menu));
+        view_toolbar.append(&copy_btn);
+
+        let delete_btn = gtk::Button::from_icon_name("edit-delete-symbolic");
+        delete_btn.set_tooltip_text(Some("Delete change"));
+        delete_btn.set_focus_on_click(false);
+        delete_btn.add_css_class("image-button");
+        delete_btn.add_css_class("raised");
+        delete_btn.set_action_name(Some("view.file-delete"));
+        view_toolbar.append(&delete_btn);
+
         header.pack_start(&view_toolbar);
 
         let gear_btn = gtk::MenuButton::new();
@@ -712,11 +860,10 @@ impl MeldWindow {
         let view_tb = self.view_toolbar.clone();
         let pages_switch = self.pages.clone();
         let view_group_sw = self.view_group.clone();
+        let nb_switch = self.notebook.clone();
+        let pages_weak = Rc::downgrade(&pages_switch);
 
         self.notebook.connect_switch_page(move |_, _, idx| {
-            while let Some(child) = view_tb.first_child() {
-                view_tb.remove(&child);
-            }
             let pages = pages_switch.borrow();
             if let Some(page) = pages.get(idx as usize) {
                 let (vc, folder, text) = page.show_filters();
@@ -727,6 +874,19 @@ impl MeldWindow {
                 pc.set_visible(show_conf);
                 nc.set_visible(show_conf);
                 page.on_container_switch_in();
+
+                // Show the per-change toolbar only for pages that implement it.
+                view_tb.set_visible(page.supports_change_toolbar());
+
+                // Install a watch so the page can refresh sensitivity when the
+                // cursor/focus moves or a chunk edit completes.
+                let group_w = view_group_sw.clone();
+                let pages_w = pages_weak.clone();
+                let nb_w = nb_switch.clone();
+                page.set_change_action_watch(Box::new(move || {
+                    refresh_change_action_sensitivity(&group_w, &pages_w, &nb_w);
+                }));
+
                 // Enable only the `view.*` actions the active page handles,
                 // mirroring the original Meld's per-document action groups.
                 let supported = page.supported_view_actions();
@@ -737,7 +897,11 @@ impl MeldWindow {
                         }
                     }
                 }
+            } else {
+                view_tb.set_visible(false);
             }
+
+            refresh_change_action_sensitivity(&view_group_sw, &pages_weak, &nb_switch);
         });
     }
 
@@ -1119,6 +1283,138 @@ impl MeldWindow {
             if let Some(idx) = n.current_page() {
                 if let Some(page) = pages.get(idx as usize) {
                     page.toggle_vc_console();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        // Register the navigation shortcut actions. Meld binds these instead of
+        // the sensitivity-managed `next-change`/`previous-change` actions so the
+        // keyboard shortcuts stay active at the first/last change.
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("previous-change-shortcut", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.go_prev_diff();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("next-change-shortcut", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.go_next_diff();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        self.setup_change_actions();
+    }
+
+    /// Register the per-change header-bar actions (`view.file-*`).
+    ///
+    /// These dispatch to the current notebook page's [`MeldPage`] change-action
+    /// methods. Sensitivity is managed dynamically in
+    /// [`MeldWindow::refresh_change_action_sensitivity`].
+    fn setup_change_actions(&self) {
+        let pages = self.pages.clone();
+        let nb = self.notebook.clone();
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("file-push-left", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.push_current_change_left();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("file-push-right", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.push_current_change_right();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("file-delete", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.delete_current_change();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("file-copy-left-up", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.copy_current_change_left_up();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("file-copy-left-down", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.copy_current_change_left_down();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("file-copy-right-up", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.copy_current_change_right_up();
+                }
+            }
+        });
+        self.view_group.add_action(&action);
+
+        let p = pages.clone();
+        let n = nb.clone();
+        let action = gio::SimpleAction::new("file-copy-right-down", None);
+        action.connect_activate(move |_, _| {
+            let pages = p.borrow();
+            if let Some(idx) = n.current_page() {
+                if let Some(page) = pages.get(idx as usize) {
+                    page.copy_current_change_right_down();
                 }
             }
         });

@@ -1834,6 +1834,84 @@ impl LineCache {
     }
 }
 
+/// Return the indices of the non-Equal chunks immediately before and after a
+/// given line on one pane.
+///
+/// `pane` selects the coordinate system: `0` uses `start_a`/`end_a`, any other
+/// value uses `start_b`/`end_b`. Zero-width chunks (an Insert on pane 0 or a
+/// Delete on pane 1) claim the following line, matching Meld's per-pane line
+/// cache so the cursor can resolve to them at the insertion boundary.
+///
+/// Returns `(prev, next)`, either of which may be `None` at the edges.
+pub fn adjacent_change_chunks(
+    chunks: &[Chunk],
+    pane: usize,
+    line: usize,
+) -> (Option<usize>, Option<usize>) {
+    let mut prev: Option<usize> = None;
+    for (i, chunk) in chunks.iter().enumerate() {
+        if chunk.op == DiffOp::Equal {
+            continue;
+        }
+        let (start, end) = if pane == 0 {
+            (chunk.start_a, chunk.end_a)
+        } else {
+            (chunk.start_b, chunk.end_b)
+        };
+        let eff_end = if start == end {
+            end.saturating_add(1)
+        } else {
+            end
+        };
+
+        if line < start {
+            // First change strictly after the cursor.
+            return (prev, Some(i));
+        }
+        if line < eff_end {
+            // Cursor sits on this change; find the first change after it.
+            let next = chunks[i + 1..]
+                .iter()
+                .position(|c| c.op != DiffOp::Equal)
+                .map(|offset| i + 1 + offset);
+            return (prev, next);
+        }
+        prev = Some(i);
+    }
+    (prev, None)
+}
+
+/// Return the index of the non-Equal chunk containing `line` on `pane`, if any.
+///
+/// Uses the same per-pane coordinate semantics as [`adjacent_change_chunks`],
+/// including claiming the following line for zero-width chunks. Returns `None`
+/// when the line sits in an Equal region.
+pub fn locate_change_chunk(chunks: &[Chunk], pane: usize, line: usize) -> Option<usize> {
+    for (i, chunk) in chunks.iter().enumerate() {
+        if chunk.op == DiffOp::Equal {
+            continue;
+        }
+        let (start, end) = if pane == 0 {
+            (chunk.start_a, chunk.end_a)
+        } else {
+            (chunk.start_b, chunk.end_b)
+        };
+        let eff_end = if start == end {
+            end.saturating_add(1)
+        } else {
+            end
+        };
+
+        if line < start {
+            return None;
+        }
+        if line < eff_end {
+            return Some(i);
+        }
+    }
+    None
+}
+
 // --- Diff Preprocessor ---
 
 /// Result of diff preprocessing: strips common prefix/suffix and removes
@@ -2009,6 +2087,157 @@ mod tests {
         let d = Differ::new(vec!["a".into(), "b".into()], vec!["a".into(), "c".into()]);
         let result = d.compare();
         assert!(!result.chunks.is_empty());
+    }
+
+    #[test]
+    fn test_adjacent_change_chunks_previous_reaches_first() {
+        // Two changes separated by an equal region: a Delete followed by a
+        // Replace. From the Replace chunk, `prev` must resolve to the Delete.
+        let chunks = vec![
+            Chunk {
+                start_a: 0,
+                end_a: 1,
+                start_b: 0,
+                end_b: 1,
+                op: DiffOp::Equal,
+            },
+            Chunk {
+                start_a: 1,
+                end_a: 2,
+                start_b: 1,
+                end_b: 1,
+                op: DiffOp::Delete,
+            },
+            Chunk {
+                start_a: 2,
+                end_a: 3,
+                start_b: 1,
+                end_b: 2,
+                op: DiffOp::Equal,
+            },
+            Chunk {
+                start_a: 3,
+                end_a: 4,
+                start_b: 2,
+                end_b: 3,
+                op: DiffOp::Replace,
+            },
+        ];
+
+        // At the Replace chunk (pane 0, line 3): prev is the Delete at index 1.
+        let (prev, next) = adjacent_change_chunks(&chunks, 0, 3);
+        assert_eq!(prev, Some(1));
+        assert_eq!(next, None);
+
+        // At the Delete chunk (pane 0, line 1): prev is None (no earlier change),
+        // next is the Replace at index 3.
+        let (prev, next) = adjacent_change_chunks(&chunks, 0, 1);
+        assert_eq!(prev, None);
+        assert_eq!(next, Some(3));
+    }
+
+    #[test]
+    fn test_adjacent_change_chunks_insert_on_pane_zero() {
+        // A single Insert is invisible on the A side as a zero-width chunk; it
+        // must still resolve as the next change from the line before it.
+        let chunks = vec![
+            Chunk {
+                start_a: 0,
+                end_a: 1,
+                start_b: 0,
+                end_b: 1,
+                op: DiffOp::Equal,
+            },
+            Chunk {
+                start_a: 1,
+                end_a: 1,
+                start_b: 1,
+                end_b: 2,
+                op: DiffOp::Insert,
+            },
+            Chunk {
+                start_a: 1,
+                end_a: 2,
+                start_b: 2,
+                end_b: 3,
+                op: DiffOp::Equal,
+            },
+        ];
+
+        // Cursor at the top (pane 0, line 0): the Insert is the next change.
+        let (prev, next) = adjacent_change_chunks(&chunks, 0, 0);
+        assert_eq!(prev, None);
+        assert_eq!(next, Some(1));
+    }
+
+    #[test]
+    fn test_adjacent_change_chunks_insert_at_eof() {
+        // A line appended at the end of the file: zero-width on pane 0 at the
+        // buffer's line count. Navigation must resolve it from the last line and
+        // treat the EOF position (line == line_count) as "inside" the change.
+        let chunks = vec![
+            Chunk {
+                start_a: 0,
+                end_a: 2,
+                start_b: 0,
+                end_b: 2,
+                op: DiffOp::Equal,
+            },
+            Chunk {
+                start_a: 2,
+                end_a: 2,
+                start_b: 2,
+                end_b: 3,
+                op: DiffOp::Insert,
+            },
+        ];
+
+        // From the last line (1), the EOF Insert is the next change.
+        let (prev, next) = adjacent_change_chunks(&chunks, 0, 1);
+        assert_eq!(prev, None);
+        assert_eq!(next, Some(1));
+
+        // At the EOF position (line == line_count), the Insert is current, so
+        // there is no further change.
+        let (prev, next) = adjacent_change_chunks(&chunks, 0, 2);
+        assert_eq!(prev, None);
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn test_locate_change_chunk_per_pane() {
+        let chunks = vec![
+            Chunk {
+                start_a: 0,
+                end_a: 1,
+                start_b: 0,
+                end_b: 1,
+                op: DiffOp::Equal,
+            },
+            Chunk {
+                start_a: 1,
+                end_a: 2,
+                start_b: 1,
+                end_b: 1,
+                op: DiffOp::Delete,
+            },
+            Chunk {
+                start_a: 2,
+                end_a: 3,
+                start_b: 1,
+                end_b: 2,
+                op: DiffOp::Equal,
+            },
+        ];
+
+        // Pane 0: the Delete occupies line 1.
+        assert_eq!(locate_change_chunk(&chunks, 0, 1), Some(1));
+        // Pane 1: the Delete is zero-width at line 1, claiming the following
+        // line (matching Meld's per-pane line cache).
+        assert_eq!(locate_change_chunk(&chunks, 1, 1), Some(1));
+        // Equal region before the change resolves to None on both panes.
+        assert_eq!(locate_change_chunk(&chunks, 0, 0), None);
+        assert_eq!(locate_change_chunk(&chunks, 1, 0), None);
     }
 
     #[test]
