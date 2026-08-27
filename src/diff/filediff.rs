@@ -1276,7 +1276,7 @@ impl FileDiff {
                 if is_empty {
                     shared_msgarea.show_info("Enter text to compare files");
                 } else if is_identical {
-                    shared_msgarea.show_info("Files are identical");
+                    shared_msgarea.show_info_dismissable("Files are identical");
                 } else {
                     shared_msgarea.hide();
                 }
@@ -2127,7 +2127,7 @@ impl FileDiff {
                         if is_empty {
                             shared_msgarea.show_info("Enter text to compare files");
                         } else if is_identical {
-                            shared_msgarea.show_info("Files are identical");
+                            shared_msgarea.show_info_dismissable("Files are identical");
                         } else {
                             shared_msgarea.hide();
                         }

@@ -21,12 +21,9 @@ popover.menu modelbutton:active {
     min-height: 32px;
 }
 
-/* ── Message area ── */
-.meld-msgarea {
-    background-color: @theme_base_color;
-    border-bottom: 1px solid alpha(@borders, 0.2);
-    min-height: 24px;
-}
+/* ── Message area ──
+   Messages use `AdwBanner`, which provides its own icon, background, and
+   button styling; no custom CSS is required here. */
 
 /* ── Status bar ── */
 .meld-status-bar {

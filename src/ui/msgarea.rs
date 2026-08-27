@@ -1,88 +1,64 @@
 #![cfg(feature = "gui")]
-//! Message area widget using a simple label with CSS styling.
-//! GTK4 `InfoBar` API changed; this provides a simplified version.
+//! Message area widget built on `AdwBanner` (the modern replacement for
+//! `GtkInfoBar`), matching the original Meld's banner: an icon, coloured
+//! background, prominent title, and an optional action/dismiss button.
 
 use gtk4 as gtk;
 use gtk4::prelude::*;
+use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MsgType {
-    Info,
-    Warning,
-    Error,
-}
-
-/// Optional action callback shown as a button next to the message.
+/// Optional action callback shown as the banner's button.
 type ActionCallback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 
 pub struct MsgArea {
-    container: gtk::Box,
-    label: gtk::Label,
-    action_button: gtk::Button,
+    banner: adw::Banner,
     action: ActionCallback,
 }
 
 impl MsgArea {
     pub fn new() -> Self {
-        let container = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        container.set_visible(false);
-        container.set_hexpand(true);
-        container.set_margin_start(6);
-        container.set_margin_end(6);
-        container.set_margin_top(2);
-        container.set_margin_bottom(2);
-        container.set_css_classes(&["toolbar", "meld-msgarea"]);
-
-        let label = gtk::Label::new(None);
-        label.set_wrap(true);
-        label.set_xalign(0.0);
-        label.set_hexpand(true);
-        container.append(&label);
-
-        // Optional action button shown next to the message (mirrors the
-        // original Meld's action messages, e.g. "Reload" on file changes).
-        let action_button = gtk::Button::with_label("");
-        action_button.set_visible(false);
-        action_button.set_focus_on_click(false);
-        container.append(&action_button);
+        let banner = adw::Banner::new("");
+        banner.set_revealed(false);
+        banner.set_hexpand(true);
 
         let action: ActionCallback = Rc::new(RefCell::new(None));
         {
             let action_cb = Rc::clone(&action);
-            let container_cb = container.clone();
-            let button_cb = action_button.clone();
-            action_button.connect_clicked(move |_| {
+            let banner_cb = banner.clone();
+            banner.connect_button_clicked(move |_| {
                 let callback = action_cb.borrow_mut().take();
                 if let Some(callback) = callback {
                     callback();
                 }
-                button_cb.set_visible(false);
-                container_cb.set_visible(false);
+                banner_cb.set_button_label(None);
+                banner_cb.set_revealed(false);
             });
         }
 
-        Self {
-            container,
-            label,
-            action_button,
-            action,
-        }
+        Self { banner, action }
     }
 
     pub fn widget(&self) -> &gtk::Widget {
-        self.container.upcast_ref()
+        self.banner.upcast_ref()
     }
 
     pub fn show_info(&self, msg: &str) {
-        self.show_msg(msg);
+        self.show_msg(msg, None);
     }
     pub fn show_warning(&self, msg: &str) {
-        self.show_msg(msg);
+        self.show_msg(msg, None);
     }
     pub fn show_error(&self, msg: &str) {
-        self.show_msg(msg);
+        self.show_msg(msg, None);
+    }
+
+    /// Show an informational message with a "Hide" button, mirroring Meld's
+    /// dismissable "Files are identical" message.
+    pub fn show_info_dismissable(&self, msg: &str) {
+        *self.action.borrow_mut() = None;
+        self.show_msg(msg, Some("Hide"));
     }
 
     /// Show a message with an action button (e.g. "Reload").  Clicking
@@ -94,22 +70,22 @@ impl MsgArea {
         on_action: impl Fn() + 'static,
     ) {
         *self.action.borrow_mut() = Some(Box::new(on_action));
-        self.action_button.set_label(action_label);
-        self.action_button.set_visible(true);
-        self.show_msg(msg);
+        self.show_msg(msg, Some(action_label));
     }
 
     pub fn hide(&self) {
         *self.action.borrow_mut() = None;
-        self.action_button.set_visible(false);
-        self.container.set_visible(false);
+        self.banner.set_button_label(None);
+        self.banner.set_revealed(false);
     }
 
-    fn show_msg(&self, msg: &str) {
-        self.label.set_text(msg);
-        // Plain messages have no associated action.
-        self.action_button.set_visible(false);
-        self.container.set_visible(true);
+    fn show_msg(&self, msg: &str, action_label: Option<&str>) {
+        self.banner.set_title(msg);
+        match action_label {
+            Some(label) => self.banner.set_button_label(Some(label)),
+            None => self.banner.set_button_label(None),
+        }
+        self.banner.set_revealed(true);
     }
 }
 
