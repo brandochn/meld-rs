@@ -533,24 +533,40 @@ impl MeldWindow {
         copy_btn.set_focus_on_click(false);
         copy_btn.add_css_class("image-button");
         copy_btn.add_css_class("raised");
-        let copy_menu = gio::Menu::new();
-        copy_menu.append(
-            Some("Copy change above the left chunk"),
-            Some("view.file-copy-left-up"),
-        );
-        copy_menu.append(
-            Some("Copy change below the left chunk"),
-            Some("view.file-copy-left-down"),
-        );
-        copy_menu.append(
-            Some("Copy change above the right chunk"),
-            Some("view.file-copy-right-up"),
-        );
-        copy_menu.append(
-            Some("Copy change below the right chunk"),
-            Some("view.file-copy-right-down"),
-        );
-        copy_btn.set_menu_model(Some(&copy_menu));
+
+        // Build the copy-chunks popover with explicit buttons bound to the
+        // `view.file-copy-*` actions via `action-name`. This uses the same
+        // actionable sensitivity binding as the push/delete buttons, which is
+        // more reliable than a `GMenuModel` for menu-item sensitivity.
+        let copy_popover = gtk::Popover::new();
+        let copy_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        for (label, action_name) in [
+            ("Copy change above the left chunk", "view.file-copy-left-up"),
+            (
+                "Copy change below the left chunk",
+                "view.file-copy-left-down",
+            ),
+            (
+                "Copy change above the right chunk",
+                "view.file-copy-right-up",
+            ),
+            (
+                "Copy change below the right chunk",
+                "view.file-copy-right-down",
+            ),
+        ] {
+            let item = gtk::Button::new();
+            let item_label = gtk::Label::new(Some(label));
+            item_label.set_xalign(0.0);
+            item_label.set_hexpand(true);
+            item.set_child(Some(&item_label));
+            item.set_action_name(Some(action_name));
+            item.add_css_class("flat");
+            item.add_css_class("meld-menu-item");
+            copy_box.append(&item);
+        }
+        copy_popover.set_child(Some(&copy_box));
+        copy_btn.set_popover(Some(&copy_popover));
         view_toolbar.append(&copy_btn);
 
         let delete_btn = gtk::Button::from_icon_name("edit-delete-symbolic");
