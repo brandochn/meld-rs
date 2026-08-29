@@ -70,6 +70,13 @@ popover.menu modelbutton:active {
     padding: 2px;
 }
 
+/* ── Menu item (copy-chunks popover) ── */
+.meld-menu-item {
+    padding: 6px 12px;
+    border-radius: 0;
+    min-height: 32px;
+}
+
 /* ── Linked groups ── */
 .linked button {
     border-radius: 0;
