@@ -43,3 +43,12 @@ if (Test-Path $msys2Share) {
 }
 
 Write-Host "Done."
+
+# The application's own translation catalogs are produced by build.rs into
+# $targetShare\locale (e.g. .../share/locale/de/LC_MESSAGES/meld-rs.mo) and are
+# looked up at runtime next to the executable. Warn loudly if they are missing
+# so a distributed build is not silently English-only.
+$meldRsCatalog = Join-Path $targetShare "locale\de\LC_MESSAGES\meld-rs.mo"
+if (-not (Test-Path $meldRsCatalog)) {
+    Write-Warning "Translation catalogs not found at $targetShare\locale. Run 'cargo build --release' (build.rs compiles po/*.po with msgfmt) before distributing a portable build."
+}

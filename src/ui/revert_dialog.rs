@@ -6,6 +6,8 @@
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
+use crate::tr;
+
 /// A confirmation dialog for reverting version-controlled files.
 pub struct RevertDialog {
     dialog: gtk::MessageDialog,
@@ -18,9 +20,9 @@ impl RevertDialog {
     pub fn new(files: &[String]) -> Self {
         let file_list = files.join("\n");
         let message = if files.len() == 1 {
-            format!("Revert the following file?\n\n{file_list}")
+            tr!("Revert the following file?\n\n{files}").replace("{files}", &file_list)
         } else {
-            format!("Revert the following files?\n\n{file_list}")
+            tr!("Revert the following files?\n\n{files}").replace("{files}", &file_list)
         };
 
         let dialog = gtk::MessageDialog::new(
@@ -30,8 +32,8 @@ impl RevertDialog {
             gtk::ButtonsType::OkCancel,
             &message,
         );
-        dialog.set_title(Some("Revert"));
-        dialog.set_secondary_text(Some("This action will discard all local changes."));
+        dialog.set_title(Some(&tr!("Revert")));
+        dialog.set_secondary_text(Some(&tr!("This action will discard all local changes.")));
 
         dialog.connect_response(|d, _| d.close());
 

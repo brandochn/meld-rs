@@ -49,6 +49,7 @@ pub fn log_diag(msg: &str) {
 
 pub mod config;
 pub mod diff;
+pub mod i18n;
 pub mod utils;
 pub mod vc;
 

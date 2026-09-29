@@ -16,6 +16,7 @@ use gtk4::prelude::*;
 use sourceview5 as gsv;
 use sourceview5::prelude::*;
 
+use crate::tr;
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
 
 /// A status bar showing display options, encoding, language and position for
@@ -40,7 +41,7 @@ impl StatusBar {
         container.set_margin_bottom(2);
 
         let display_button = gtk::MenuButton::new();
-        display_button.set_label("Display");
+        display_button.set_label(&tr!("Display"));
         display_button.add_css_class("flat");
         display_button.set_focus_on_click(false);
         display_button.set_popover(Some(&build_display_popover(view, line_gutter)));
@@ -50,9 +51,9 @@ impl StatusBar {
         spacer.set_hexpand(true);
 
         let encoding_label = gtk::Label::new(Some("UTF-8"));
-        let language_label = gtk::Label::new(Some("Plain Text"));
-        let position_label = gtk::Label::new(Some("Ln 1, Col 1"));
-        let overwrite_label = gtk::Label::new(Some("INS"));
+        let language_label = gtk::Label::new(Some(&tr!("Plain Text")));
+        let position_label = gtk::Label::new(Some(position_text(1, 1).as_str()));
+        let overwrite_label = gtk::Label::new(Some(&tr!("INS")));
         overwrite_label.set_width_chars(3);
 
         container.append(&display_button);
@@ -81,8 +82,7 @@ impl StatusBar {
 
     /// Update the cursor position display.
     pub fn set_position(&self, line: u32, column: u32) {
-        self.position_label
-            .set_text(&format!("Ln {}, Col {}", line, column));
+        self.position_label.set_text(&position_text(line, column));
     }
 
     /// Update the encoding display.
@@ -97,9 +97,16 @@ impl StatusBar {
 
     /// Update the overwrite/insert mode indicator.
     pub fn set_overwrite(&self, overwrite: bool) {
-        self.overwrite_label
-            .set_text(if overwrite { "OVR" } else { "INS" });
+        let text = if overwrite { tr!("OVR") } else { tr!("INS") };
+        self.overwrite_label.set_text(&text);
     }
+}
+
+/// Build the localised cursor position text using Meld's `Ln {line}, Col {column}` msgid.
+fn position_text(line: u32, column: u32) -> String {
+    tr!("Ln {line}, Col {column}")
+        .replace("{line}", &line.to_string())
+        .replace("{column}", &column.to_string())
 }
 
 /// A thin vertical separator between status-bar items.
@@ -117,7 +124,7 @@ fn build_display_popover(view: &gsv::View, line_gutter: &ChunkGutterRenderer) ->
     vbox.set_margin_bottom(8);
 
     // Wrap lines
-    let wrap = gtk::CheckButton::with_label("Wrap lines");
+    let wrap = gtk::CheckButton::with_label(&tr!("Text wrapping"));
     wrap.set_active(view.wrap_mode() != gtk::WrapMode::None);
     {
         let view = view.clone();
@@ -132,7 +139,7 @@ fn build_display_popover(view: &gsv::View, line_gutter: &ChunkGutterRenderer) ->
     vbox.append(&wrap);
 
     // Show line numbers (toggles our custom chunk-aware gutter).
-    let line_numbers = gtk::CheckButton::with_label("Show line numbers");
+    let line_numbers = gtk::CheckButton::with_label(&tr!("Show line numbers"));
     line_numbers.set_active(line_gutter.is_visible());
     {
         let gutter = line_gutter.clone();
@@ -141,7 +148,7 @@ fn build_display_popover(view: &gsv::View, line_gutter: &ChunkGutterRenderer) ->
     vbox.append(&line_numbers);
 
     // Highlight current line
-    let highlight = gtk::CheckButton::with_label("Highlight current line");
+    let highlight = gtk::CheckButton::with_label(&tr!("Highlight current line"));
     highlight.set_active(view.is_highlight_current_line());
     {
         let view = view.clone();

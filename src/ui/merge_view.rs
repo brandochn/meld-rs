@@ -8,6 +8,8 @@ use gtk4::prelude::*;
 use sourceview5 as gsv;
 use sourceview5::prelude::*;
 
+use crate::tr;
+
 /// A 4-pane merge view: base, local, remote, and merged result.
 pub struct MergeView {
     container: gtk::Box,
@@ -27,7 +29,7 @@ impl MergeView {
         for (i, label) in labels.iter().enumerate() {
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-            let header_label = gtk::Label::new(Some(label));
+            let header_label = gtk::Label::new(Some(&tr!(*label)));
             header_label.add_css_class("title-4");
             vbox.append(&header_label);
 

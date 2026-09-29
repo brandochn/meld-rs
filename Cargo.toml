@@ -38,6 +38,9 @@ regex = "1"
 encoding_rs = "0.8"
 uuid = { version = "1", features = ["v4"] }
 
+# Process locale initialisation (setlocale) for gettext-based UI translation
+libc = "0.2"
+
 # Diff engine
 similar = "2"
 

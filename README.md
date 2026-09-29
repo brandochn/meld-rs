@@ -20,6 +20,7 @@ comparison, 3-way merge, and version control integration (Git, SVN, Mercurial).
 - In-file search (find bar)
 - Dark mode support
 - Session management with multiple tabs
+- UI available in 50 languages (reuses Meld's gettext catalogs)
 - Command-line integration (`meld-rs <file1> <file2> [file3]`)
 
 ## Screenshots
@@ -122,6 +123,31 @@ To also run GUI-related tests (requires GTK 4 runtime installed):
 ```bash
 cargo test
 ```
+
+## Known issues
+
+### WSLg / Wayland: menus and popovers become unresponsive
+
+On WSL2 with WSLg, GTK 4 popovers (the gear menu, filter menus, dropdowns) can appear
+frozen, or render behind the main window, after the first click. This is an **upstream
+WSLg limitation**, not a Meld-rs bug: the WSLg compositor (Weston-based) does not
+support repositioning Wayland popups, so GDK falls back to remapping them and the
+window stacking order breaks. It affects any GTK 4 application, not just this one.
+
+GDK reports it as:
+
+```
+Gdk-WARNING **: Compositor doesn't support moving popups, relying on remapping
+```
+
+**Workaround:** run under X11/XWayland instead of Wayland:
+
+```bash
+GDK_BACKEND=x11 ./scripts/run.sh file_a.txt file_b.txt
+```
+
+Upstream reports: [microsoft/wslg#1299](https://github.com/microsoft/wslg/issues/1299),
+[microsoft/wslg#1439](https://github.com/microsoft/wslg/issues/1439).
 
 ## License
 

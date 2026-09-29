@@ -698,6 +698,7 @@ dependencies = [
  "glib",
  "gtk4",
  "libadwaita",
+ "libc",
  "log",
  "pango",
  "rand",

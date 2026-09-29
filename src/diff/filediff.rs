@@ -31,6 +31,7 @@ use crate::diff::engine::{
     ThreeWayDiffer,
 };
 use crate::diff::inline_cache::InlineDiffCache;
+use crate::tr;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
 use crate::ui::diff_map::DiffMap;
@@ -180,7 +181,7 @@ impl FileDiff {
 
         for i in 0..num_panes {
             let pane = Self::build_pane_column(i, num_panes);
-            labels.push(format!("File {}", i + 1));
+            labels.push(tr!("File {number}").replace("{number}", &(i + 1).to_string()));
             panes.push(pane);
         }
 
@@ -505,11 +506,13 @@ impl FileDiff {
         let statusbar = Rc::new(StatusBar::new(&view, &line_gutter));
 
         let save_btn = gtk::Button::from_icon_name("document-save-symbolic");
-        save_btn.set_tooltip_text(Some(&format!("Save file in pane {}", index + 1)));
+        save_btn.set_tooltip_text(Some(
+            &tr!("Save file in pane {pane}").replace("{pane}", &(index + 1).to_string()),
+        ));
         save_btn.set_focus_on_click(false);
 
         let file_label = Rc::new(PathLabel::new());
-        file_label.set_path(&format!("File {}", index + 1));
+        file_label.set_path(&tr!("File {number}").replace("{number}", &(index + 1).to_string()));
 
         PaneData {
             scrolled,
@@ -813,12 +816,12 @@ impl FileDiff {
                     .unwrap_or_else(|| path.to_string_lossy().into());
                 self.panes[pane_idx]
                     .msgarea
-                    .show_info(&format!("Saved {name}"));
+                    .show_info(&tr!("Saved {file}").replace("{file}", &name));
             }
             Err(e) => {
                 self.panes[pane_idx]
                     .msgarea
-                    .show_error(&format!("Save failed: {e}"));
+                    .show_error(&tr!("Save failed: {error}").replace("{error}", &e.to_string()));
             }
         }
     }
@@ -850,15 +853,15 @@ impl FileDiff {
 
         // Pane-specific title, matching the original Meld.
         let title = match pane_idx {
-            0 => "Save Left Pane As",
-            1 if self.num_panes == 3 => "Save Middle Pane As",
-            _ => "Save Right Pane As",
+            0 => tr!("Save Left Pane As"),
+            1 if self.num_panes == 3 => tr!("Save Middle Pane As"),
+            _ => tr!("Save Right Pane As"),
         };
 
         let dialog = gtk::FileDialog::builder()
-            .title(title)
+            .title(title.as_ref())
             .initial_name(&suggested_name)
-            .accept_label("_Save")
+            .accept_label(tr!("_Save").as_ref())
             .build();
 
         dialog.save(
@@ -893,15 +896,20 @@ impl FileDiff {
                         ) {
                             Ok(()) => {
                                 undo.checkpoint(pane_idx);
-                                msgarea.show_info(&format!(
-                                    "Saved {}",
-                                    path.file_name()
-                                        .map(|n| n.to_string_lossy())
-                                        .unwrap_or_else(|| path.to_string_lossy().into())
-                                ));
+                                msgarea.show_info(
+                                    &tr!("Saved {file}").replace(
+                                        "{file}",
+                                        &path
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy())
+                                            .unwrap_or_else(|| path.to_string_lossy().into()),
+                                    ),
+                                );
                             }
                             Err(e) => {
-                                msgarea.show_error(&format!("Save failed: {e}"));
+                                msgarea.show_error(
+                                    &tr!("Save failed: {error}").replace("{error}", &e.to_string()),
+                                );
                             }
                         }
                     }
@@ -952,11 +960,13 @@ impl FileDiff {
             gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
             gtk::MessageType::Warning,
             gtk::ButtonsType::None,
-            &format!("File {name} has changed on disk since it was opened"),
+            tr!("File {file} has changed on disk since it was opened").replace("{file}", &name),
         );
-        dialog.set_secondary_text(Some("If you save it, any external changes will be lost."));
-        dialog.add_button("_Don't Save", gtk::ResponseType::Cancel);
-        dialog.add_button("Save _Anyway", gtk::ResponseType::Ok);
+        dialog.set_secondary_text(Some(&tr!(
+            "If you save it, any external changes will be lost."
+        )));
+        dialog.add_button(&tr!("Don’t Save"), gtk::ResponseType::Cancel);
+        dialog.add_button(&tr!("Save Anyway"), gtk::ResponseType::Ok);
 
         let response = Rc::new(Cell::new(gtk::ResponseType::None));
         let resp_clone = Rc::clone(&response);
@@ -1031,7 +1041,7 @@ impl FileDiff {
         let file_name = gfile
             .basename()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Unknown".to_string());
+            .unwrap_or_else(|| tr!("Unknown").into_owned());
 
         self.file_monitors.borrow_mut()[pane] = Some(monitor.clone());
 
@@ -1047,12 +1057,12 @@ impl FileDiff {
         monitor.connect_changed(move |_monitor, _f, _other, event| {
             if let Some(msgarea) = msgarea_weak.upgrade() {
                 if event == gio::FileMonitorEvent::ChangesDoneHint {
-                    let msg = format!("File {} has changed on disk.", file_name);
+                    let msg = tr!("File {file} has changed on disk").replace("{file}", &file_name);
                     let buffer_cb = buffer.clone();
                     let statusbar_cb = statusbar.clone();
                     let msgarea_cb = pane_msgarea.clone();
                     let gfile_cb = gfile_reload.clone();
-                    msgarea.show_warning_action(&msg, "Reload", move || {
+                    msgarea.show_warning_action(&msg, &tr!("Reload"), move || {
                         let _ = load_file_into_buffer(
                             &buffer_cb,
                             &statusbar_cb,
@@ -1107,17 +1117,20 @@ fn load_file_into_buffer(
         None => lang_mgr.guess_language(basename_str, None),
     };
 
-    let lang_name = match &detected {
+    // `lang_name` stays untranslated: it is compared below to detect the
+    // "no language detected" case. The status bar shows the translated form.
+    let (lang_name, display_name) = match &detected {
         Some(lang) => {
             buffer.set_language(Some(lang));
-            lang.name().to_string()
+            let name = lang.name().to_string();
+            (name.clone(), name)
         }
         None => {
             buffer.set_language(None);
-            "Plain Text".to_string()
+            ("Plain Text".to_string(), tr!("Plain Text").into_owned())
         }
     };
-    statusbar.set_language(&lang_name);
+    statusbar.set_language(&display_name);
 
     // Step 2: load file content (language already set, so highlighting
     // is applied during text insertion).
@@ -1136,7 +1149,8 @@ fn load_file_into_buffer(
             encoding_name = encoding;
         }
         Err(e) => {
-            msgarea.show_error(&format!("Error loading file: {e}"));
+            msgarea
+                .show_error(&tr!("Error loading file: {error}").replace("{error}", &e.to_string()));
         }
     }
 
@@ -1274,9 +1288,9 @@ impl FileDiff {
                 }
 
                 if is_empty {
-                    shared_msgarea.show_info("Enter text to compare files");
+                    shared_msgarea.show_info(&tr!("Enter text to compare files"));
                 } else if is_identical {
-                    shared_msgarea.show_info_dismissable("Files are identical");
+                    shared_msgarea.show_info_dismissable(&tr!("Files are identical"));
                 } else {
                     shared_msgarea.hide();
                 }
@@ -1862,19 +1876,24 @@ impl FileDiff {
                     match std::fs::write(&path, &text) {
                         Ok(()) => {
                             undo.checkpoint(i);
-                            msgarea.show_info(&format!(
-                                "Saved {}",
-                                path.file_name()
-                                    .map(|n| n.to_string_lossy())
-                                    .unwrap_or_else(|| path.to_string_lossy().into())
-                            ));
+                            msgarea.show_info(
+                                &tr!("Saved {file}").replace(
+                                    "{file}",
+                                    &path
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy())
+                                        .unwrap_or_else(|| path.to_string_lossy().into()),
+                                ),
+                            );
                         }
                         Err(e) => {
-                            msgarea.show_error(&format!("Save failed: {e}"));
+                            msgarea.show_error(
+                                &tr!("Save failed: {error}").replace("{error}", &e.to_string()),
+                            );
                         }
                     }
                 } else {
-                    msgarea.show_info("No file path to save to.");
+                    msgarea.show_info(&tr!("No file path to save to."));
                 }
             });
         }
@@ -1917,10 +1936,12 @@ impl FileDiff {
                                 .file_name()
                                 .map(|n| n.to_string_lossy())
                                 .unwrap_or_else(|| path.to_string_lossy().into());
-                            msgarea.show_info(&format!("Saved {name}"));
+                            msgarea.show_info(&tr!("Saved {file}").replace("{file}", &name));
                         }
                         Err(e) => {
-                            msgarea.show_error(&format!("Save failed: {e}"));
+                            msgarea.show_error(
+                                &tr!("Save failed: {error}").replace("{error}", &e.to_string()),
+                            );
                         }
                     }
                 }
@@ -2125,9 +2146,9 @@ impl FileDiff {
                         }
 
                         if is_empty {
-                            shared_msgarea.show_info("Enter text to compare files");
+                            shared_msgarea.show_info(&tr!("Enter text to compare files"));
                         } else if is_identical {
-                            shared_msgarea.show_info_dismissable("Files are identical");
+                            shared_msgarea.show_info_dismissable(&tr!("Files are identical"));
                         } else {
                             shared_msgarea.hide();
                         }
@@ -2591,14 +2612,18 @@ impl MeldPage for FileDiff {
                         .and_then(|f| f.as_ref())
                         .and_then(|f| f.path())
                         .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| format!("Pane {}", i + 1))
+                        .unwrap_or_else(|| {
+                            tr!("Pane {number}").replace("{number}", &(i + 1).to_string())
+                        })
                 })
                 .collect();
 
             let msg = if modified.len() == 1 {
-                format!("Save changes to \"{}\" before closing?", file_names[0])
+                tr!("Save changes to \"{document}\" before closing?")
+                    .replace("{document}", &file_names[0])
             } else {
-                format!("Save changes to {} files before closing?", modified.len())
+                tr!("Save changes to {count} files before closing?")
+                    .replace("{count}", &modified.len().to_string())
             };
 
             // Find the toplevel window so the dialog is centered on the app.
@@ -2614,10 +2639,12 @@ impl MeldPage for FileDiff {
                 gtk::ButtonsType::None,
                 &msg,
             );
-            dialog.set_secondary_text(Some("If you don't save, changes will be lost."));
-            dialog.add_button("_Cancel", gtk::ResponseType::Cancel);
-            dialog.add_button("_Discard", gtk::ResponseType::No);
-            dialog.add_button("_Save", gtk::ResponseType::Yes);
+            dialog.set_secondary_text(Some(&tr!(
+                "If you don’t save, changes will be permanently lost."
+            )));
+            dialog.add_button(&tr!("_Cancel"), gtk::ResponseType::Cancel);
+            dialog.add_button(&tr!("_Discard"), gtk::ResponseType::No);
+            dialog.add_button(&tr!("_Save"), gtk::ResponseType::Yes);
 
             // GTK4 removed gtk_dialog_run(); run a nested event loop
             // via MainContext::iteration() to wait for the user response.
@@ -2701,10 +2728,6 @@ impl MeldPage for FileDiff {
             }
             gtk::ResponseType::Ok
         }
-    }
-
-    fn label(&self) -> String {
-        self.labels.borrow().join(" vs ")
     }
 
     fn show_filters(&self) -> (bool, bool, bool) {
@@ -2908,10 +2931,9 @@ impl MeldPage for FileDiff {
             let file_list: Vec<String> = modified
                 .iter()
                 .map(|i| {
-                    labels
-                        .get(*i)
-                        .cloned()
-                        .unwrap_or_else(|| format!("Pane {}", i + 1))
+                    labels.get(*i).cloned().unwrap_or_else(|| {
+                        tr!("Pane {number}").replace("{number}", &(i + 1).to_string())
+                    })
                 })
                 .collect();
             drop(labels);
@@ -2926,13 +2948,13 @@ impl MeldPage for FileDiff {
                 gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
                 gtk::MessageType::Question,
                 gtk::ButtonsType::None,
-                "Discard unsaved changes to documents?",
+                tr!("Discard unsaved changes to documents?").as_ref(),
             );
-            dialog.set_secondary_text(Some(
+            dialog.set_secondary_text(Some(&tr!(
                 "Changes made to the following documents will be permanently lost:",
-            ));
-            dialog.add_button("_Cancel", gtk::ResponseType::Cancel);
-            dialog.add_button("_Discard", gtk::ResponseType::Ok);
+            )));
+            dialog.add_button(&tr!("_Cancel"), gtk::ResponseType::Cancel);
+            dialog.add_button(&tr!("_Discard"), gtk::ResponseType::Ok);
 
             // List the unsaved documents with bullet points, matching the
             // original revert-dialog.ui (a single label with newline-joined items).
@@ -3179,9 +3201,9 @@ impl MeldPage for FileDiff {
         drop(file_paths);
 
         if have_unnamed || have_modified {
-            self.shared_msgarea.show_warning(
-                "Can't swap unsaved files. Save files to disk before swapping panes.",
-            );
+            self.shared_msgarea.show_warning(&tr!(
+                "Can't swap unsaved files. Save files to disk before swapping panes."
+            ));
             return;
         }
 

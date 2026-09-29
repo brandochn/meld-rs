@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use crate::config::settings::MeldSettings;
+use crate::tr;
 use crate::window::MeldWindow;
 
 /// Compiled GResource providing the missing `language2.rng` RelaxNG schema.
@@ -41,6 +42,25 @@ pub enum CliError {
     AutoMergeNoDirectories,
     #[error("{0}")]
     ParseError(String),
+}
+
+impl CliError {
+    /// User-facing, translatable form of this error.
+    ///
+    /// `thiserror`'s `#[error]` attribute is applied at compile time, so the
+    /// display text is produced here instead (mirroring Meld, which formats
+    /// these messages with `_()`).
+    pub fn translated(&self) -> String {
+        match self {
+            CliError::TooManyArgs(count) => tr!("Too many arguments (wanted 0–3, got {count})")
+                .replace("{count}", &count.to_string()),
+            CliError::AutoMergeNeeds3Files => {
+                tr!("Cannot auto-merge fewer than 3 files").into_owned()
+            }
+            CliError::AutoMergeNoDirectories => tr!("Cannot auto-merge directories").into_owned(),
+            CliError::ParseError(message) => message.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -81,7 +101,7 @@ fn parse_args(args: &[String]) -> Result<CliOptions, CliError> {
                 }
                 if diff_args.len() < 1 || diff_args.len() > 3 {
                     return Err(CliError::ParseError(
-                        "wrong number of arguments supplied to --diff".into(),
+                        tr!("wrong number of arguments supplied to --diff").into_owned(),
                     ));
                 }
                 if !diff_args.is_empty() {
@@ -132,20 +152,53 @@ fn print_usage() {
     println!("Meld-rs — visual diff and merge tool (Rust rewrite)");
     println!();
     println!("Usage:");
-    println!("  meld-rs                               Start with an empty window");
-    println!("  meld-rs <file|folder>                 Start a version control comparison");
-    println!("  meld-rs <file> <file> [<file>]        Start a 2- or 3-way file comparison");
-    println!("  meld-rs <folder> <folder> [<folder>]  Start a 2- or 3-way folder comparison");
+    println!(
+        "  meld-rs                               {}",
+        tr!("Start with an empty window")
+    );
+    println!(
+        "  meld-rs <file|folder>                 {}",
+        tr!("Start a version control comparison")
+    );
+    println!(
+        "  meld-rs <file> <file> [<file>]        {}",
+        tr!("Start a 2- or 3-way file comparison")
+    );
+    println!(
+        "  meld-rs <folder> <folder> [<folder>]  {}",
+        tr!("Start a 2- or 3-way folder comparison")
+    );
     println!();
     println!("Options:");
-    println!("  -L, --label <label>    Set label to use instead of file name");
-    println!("  -n, --newtab           Open a new tab in an already running instance");
-    println!("  -a, --auto-compare     Automatically compare all differing files");
-    println!("  -o, --output <file>    Set the target file for saving a merge result");
-    println!("  --auto-merge           Automatically merge files");
-    println!("  --diff <file>...       Create a diff tab for the supplied files or folders");
-    println!("  -h, --help             Show this help message");
-    println!("  -v, --version          Show version information");
+    println!(
+        "  -L, --label <label>    {}",
+        tr!("Set label to use instead of file name")
+    );
+    println!(
+        "  -n, --newtab           {}",
+        tr!("Open a new tab in an already running instance")
+    );
+    println!(
+        "  -a, --auto-compare     {}",
+        tr!("Automatically compare all differing files on startup")
+    );
+    println!(
+        "  -o, --output <file>    {}",
+        tr!("Set the target file for saving a merge result")
+    );
+    println!(
+        "  --auto-merge           {}",
+        tr!("Automatically merge files")
+    );
+    println!(
+        "  --diff <file>...       {}",
+        tr!("Create a diff tab for the supplied files or folders")
+    );
+    println!("  -h, --help             {}", tr!("Show this help message"));
+    println!(
+        "  -v, --version          {}",
+        tr!("Show version information")
+    );
 }
 
 pub struct MeldApp {
@@ -193,8 +246,9 @@ impl MeldApp {
             let opts = match parse_args(&cmd_args) {
                 Ok(o) => o,
                 Err(e) => {
-                    log::error!("CLI parse error: {e}");
-                    crate::log_diag(&format!("Error parsing arguments: {e}"));
+                    let message = e.translated();
+                    log::error!("CLI parse error: {message}");
+                    crate::log_diag(&format!("Error parsing arguments: {message}"));
                     cmd_line.set_exit_status(2);
                     return glib::ExitCode::from(2);
                 }
@@ -530,9 +584,9 @@ fn show_about_dialog(parent: Option<&gtk::Window>) {
     dialog.set_transient_for(parent);
     dialog.set_program_name(Some(APP_NAME));
     dialog.set_version(Some(VERSION));
-    dialog.set_comments(Some(
-        "Visual diff and merge tool — rewritten in Rust with gtk-rs\nby Hildebrando Chávez Núñez",
-    ));
+    dialog.set_comments(Some(&tr!(
+        "Visual diff and merge tool — rewritten in Rust with gtk-rs\nby Hildebrando Chávez Núñez"
+    )));
     dialog.set_license_type(gtk::License::Gpl20);
     dialog.set_website(Some("https://github.com/brandochn/meld-rs"));
     dialog.set_copyright(Some("Copyright © 2002-2009 Stephen Kennedy\nCopyright © 2009-2022 Kai Willadsen\nCopyright © 2024 meld-rs contributors\nCopyright © 2026 Hildebrando Chávez Núñez (Rust rewrite)"));

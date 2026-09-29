@@ -6,6 +6,8 @@
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
+use crate::tr;
+
 /// A tree view widget specialised for displaying directory comparison results.
 pub struct DirView {
     tree_view: gtk::TreeView,
@@ -30,7 +32,7 @@ impl DirView {
         for (i, col_name) in columns.iter().enumerate() {
             let renderer = gtk::CellRendererText::new();
             let column = gtk::TreeViewColumn::new();
-            column.set_title(col_name);
+            column.set_title(&tr!(*col_name));
             column.pack_start(&renderer, true);
             column.add_attribute(&renderer, "text", i as i32);
             tree_view.append_column(&column);

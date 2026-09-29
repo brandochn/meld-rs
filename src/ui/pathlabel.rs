@@ -11,6 +11,8 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
+use crate::tr;
+
 /// A label that displays a file path, shortened intelligently (home-relative)
 /// and ellipsized, with a popover exposing the full path and actions.
 pub struct PathLabel {
@@ -47,7 +49,7 @@ impl PathLabel {
         pbox.set_margin_bottom(6);
 
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        let path_caption = gtk::Label::new(Some("Path"));
+        let path_caption = gtk::Label::new(Some(&tr!("Path")));
         path_caption.add_css_class("dim-label");
         let entry = gtk::Entry::new();
         entry.set_editable(false);
@@ -60,11 +62,11 @@ impl PathLabel {
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         actions.set_halign(gtk::Align::End);
         actions.add_css_class("linked");
-        let copy_btn = gtk::Button::with_label("Copy Path");
-        copy_btn.set_tooltip_text(Some("Copy the full path"));
+        let copy_btn = gtk::Button::with_label(&tr!("Copy Path"));
+        copy_btn.set_tooltip_text(Some(&tr!("Copy the full path")));
         copy_btn.set_focus_on_click(false);
-        let open_btn = gtk::Button::with_label("Open Containing Folder");
-        open_btn.set_tooltip_text(Some("View the folder in the file manager"));
+        let open_btn = gtk::Button::with_label(&tr!("Open Containing Folder"));
+        open_btn.set_tooltip_text(Some(&tr!("View the folder in file manager")));
         open_btn.set_focus_on_click(false);
         actions.append(&copy_btn);
         actions.append(&open_btn);

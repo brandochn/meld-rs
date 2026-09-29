@@ -1,0 +1,3396 @@
+# Serbian translation of meld
+# Courtesy of Prevod.org team (http://prevod.org/) -- 2003–2026.
+# This file is distributed under the same license as the meld package.
+# Translators:
+# Данило Шеган <dsegan@gmx.net>
+# Мирослав Николић <miroslavnikolic@rocketmail.com>, 2011-2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: meld\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/meld/issues\n"
+"POT-Creation-Date: 2026-08-28 08:48+0000\n"
+"PO-Revision-Date: 2026-09-05 17:53+0200\n"
+"Last-Translator: Мирослав Николић <miroslavnikolic@rocketmail.com>\n"
+"Language-Team: Serbian\n"
+"Language: sr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=4; plural=n==1? 3 : n%10==1 && n%100!=11 ? 0 : "
+"n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2;\n"
+"X-Project-Style: gnome\n"
+
+#: bin/meld:273
+#, c-format
+msgid "Meld requires %s."
+msgstr "Мелд захтева %s."
+
+#: data/org.gnome.Meld.desktop.in.in:2
+#: meld/resources/data/org.gnome.Meld.metainfo.xml.in.in:10
+#: meld/resources/ui/appwindow.ui:7
+msgid "Meld"
+msgstr "Мелд"
+
+#: data/org.gnome.Meld.desktop.in.in:3
+msgid "Diff Viewer"
+msgstr "Прегледач разлика"
+
+#: data/org.gnome.Meld.desktop.in.in:4
+#: meld/resources/data/org.gnome.Meld.metainfo.xml.in.in:11
+msgid "Compare and merge your files"
+msgstr "Упоређујте и спајајте ваше датотеке"
+
+#. TRANSLATORS: Search terms to find this application. Do NOT translate or localize the semicolons! The list MUST also end with a semicolon!
+#: data/org.gnome.Meld.desktop.in.in:6
+msgid "diff;merge;"
+msgstr "разлике;стопи;"
+
+#: data/mime/org.gnome.Meld.xml.in:4
+msgid "Meld comparison description"
+msgstr "Опис Мелдовог поређења"
+
+#: data/org.gnome.Meld.gschema.xml:43
+msgid "Default window width"
+msgstr "Основна ширина прозора"
+
+#: data/org.gnome.Meld.gschema.xml:47
+msgid "Default window height"
+msgstr "Основна висина прозора"
+
+#: data/org.gnome.Meld.gschema.xml:51
+msgid "Default window maximized state"
+msgstr "Основно стање увеличаног прозора"
+
+#: data/org.gnome.Meld.gschema.xml:64
+msgid "Style Variant"
+msgstr "Варијанта стила"
+
+#: data/org.gnome.Meld.gschema.xml:65
+msgid ""
+"Whether to force the light or dark variant of the GTK theme. If set to "
+"'default', the application will follow the system default variant."
+msgstr ""
+"Да ли ће да присили светлу или тамну варијанту Гтк теме. Ако је постављено "
+"на „default“, програм ће пратити основну варијанту система."
+
+#: data/org.gnome.Meld.gschema.xml:71
+msgid "Additional automatically detected text encodings"
+msgstr "Додатно самостално откривање кодних распореда"
+
+#: data/org.gnome.Meld.gschema.xml:72
+msgid ""
+"Meld will use these text encodings to try to decode loaded text files before "
+"trying any other encodings. In addition to the encodings in this list, UTF-8 "
+"and the current locale-default encoding will always be used; other encodings "
+"may also be tried, depending on the user’s locale."
+msgstr ""
+"Мелд ће користити ова кодирања текста да покуша да декодира учитане "
+"текстуалне датотеке пре него што покуша неко друго кодирање. Као додатак "
+"кодирањима на овом списку, УТФ-8 и текуће кодирање основног језика биће увек "
+"коришћени; остала кодирања могу такође бити испробана, у зависности од "
+"корисниковог језика."
+
+#: data/org.gnome.Meld.gschema.xml:79
+msgid "Width of an indentation step"
+msgstr "Ширина корака увлачења"
+
+#: data/org.gnome.Meld.gschema.xml:80
+msgid "The number of spaces to use for a single indent step"
+msgstr "Број размака за један корак увлачења"
+
+#: data/org.gnome.Meld.gschema.xml:84
+msgid "Whether to indent using spaces or tabs"
+msgstr "Да ли да увлачи користећи размаке или табулаторе"
+
+#: data/org.gnome.Meld.gschema.xml:85
+msgid "If true, any new indentation will use spaces instead of tabs."
+msgstr ""
+"Ако је изабрано, свако ново увлачење ће користити размаке уместо табулатора."
+
+#: data/org.gnome.Meld.gschema.xml:89 meld/resources/ui/statusbar-menu.ui:5
+msgid "Show line numbers"
+msgstr "Приказује бројеве редова"
+
+#: data/org.gnome.Meld.gschema.xml:90
+msgid "If true, line numbers will be shown in the gutter of file comparisons."
+msgstr ""
+"Ако је изабрано, бројеви редова ће бити приказани у жлебу поређења датотека."
+
+#: data/org.gnome.Meld.gschema.xml:94
+msgid "Highlight syntax"
+msgstr "Истиче појаву"
+
+#: data/org.gnome.Meld.gschema.xml:95
+msgid ""
+"Whether to highlight syntax in comparisons. Because of Meld’s own color "
+"highlighting, this is off by default."
+msgstr ""
+"Да ли да истиче појаву у поређењу. Због самог Мелдовог истицања бојом, ово "
+"је унапред искључено."
+
+#: data/org.gnome.Meld.gschema.xml:99
+msgid "Color scheme to use for syntax highlighting"
+msgstr "Шема боје за истицање синтаксе"
+
+#: data/org.gnome.Meld.gschema.xml:100
+msgid "Used by GtkSourceView to determine colors for syntax highlighting"
+msgstr "Користи је преглед Гтк извора да одреди боје за истицање синтаксе"
+
+#: data/org.gnome.Meld.gschema.xml:104
+msgid "Draw whitespace"
+msgstr "Приказује размаке"
+
+#: data/org.gnome.Meld.gschema.xml:105
+msgid ""
+"If true, whitespace characters will be drawn in comparisons even if they are "
+"not in a changed area."
+msgstr ""
+"Ако је изабрано, знаци празнине биће исцртани у поређењима чак и ако нису у "
+"измењеној области."
+
+#: data/org.gnome.Meld.gschema.xml:114
+msgid "Wrap mode"
+msgstr "Режим преламања"
+
+#: data/org.gnome.Meld.gschema.xml:115
+msgid ""
+"Lines in file comparisons will be wrapped according to this setting, either "
+"not at all ('none'), at any character ('char') or only at the end of words "
+"('word')."
+msgstr ""
+"Редови при поређењу датотека ће бити преломљени у складу са овим "
+"подешавањем, без преламања — „none“, на било ком знаку — „char“, или само на "
+"крају речи — „word“."
+
+#: data/org.gnome.Meld.gschema.xml:122 meld/resources/ui/statusbar-menu.ui:13
+msgid "Highlight current line"
+msgstr "Истиче текући ред"
+
+#: data/org.gnome.Meld.gschema.xml:123
+msgid ""
+"If true, the line containing the cursor will be highlighted in file "
+"comparisons."
+msgstr ""
+"Ако је изабрано, ред који садржи курзор ће бити истакнут при поређењу "
+"датотека."
+
+#: data/org.gnome.Meld.gschema.xml:127
+msgid "Use the system default monospace font"
+msgstr "Користи системски словни лик сталне ширине"
+
+#: data/org.gnome.Meld.gschema.xml:128
+msgid ""
+"If false, custom-font will be used instead of the system monospace font."
+msgstr ""
+"Ако није изабрано, произвољни словни лик ће бити коришћен уместо системског "
+"словног лика сталне ширине."
+
+#: data/org.gnome.Meld.gschema.xml:132
+msgid "Custom font"
+msgstr "Произвољни словни лик"
+
+#: data/org.gnome.Meld.gschema.xml:133
+msgid ""
+"The custom font to use, stored as a string and parsed as a Pango font "
+"description."
+msgstr ""
+"Произвољни словни лик за коришћење, смештен као ниска и обрађен као опис "
+"Панго словног лика."
+
+#: data/org.gnome.Meld.gschema.xml:139
+msgid "Show overview source map"
+msgstr "Прикзује мапу извора прегледа"
+
+#: data/org.gnome.Meld.gschema.xml:140
+msgid ""
+"If true, file comparisons will have paired source maps for compared files."
+msgstr ""
+"Ако је изабрано, поређење датотека ће имати упарене мапе извора за поређене "
+"датотеке."
+
+#: data/org.gnome.Meld.gschema.xml:145
+msgid "Style of overview map"
+msgstr "Стил мапе прегледа"
+
+#: data/org.gnome.Meld.gschema.xml:146
+msgid "Style options for how the overview map is displayed."
+msgstr "Опције стила за начин приказивања мапе прегледа."
+
+#: data/org.gnome.Meld.gschema.xml:152
+msgid "Ignore blank lines when comparing files"
+msgstr "Занемарује празне редове при поређењу датотека"
+
+#: data/org.gnome.Meld.gschema.xml:153
+msgid ""
+"If true, blank lines will be trimmed when highlighting changes between files."
+msgstr ""
+"Ако је изабрано, празни редови ће бити скраћени када се истицање промени "
+"међу датотекама."
+
+#: data/org.gnome.Meld.gschema.xml:160
+msgid "Use the system default editor"
+msgstr "Користи основни уређивач система"
+
+#: data/org.gnome.Meld.gschema.xml:161
+msgid ""
+"If false, custom-editor-command will be used instead of the system editor "
+"when opening files externally."
+msgstr ""
+"Ако није изабрано, произвољни уређивач наредбе ће бити коришћен уместо "
+"системског уређивача приликом отварања датотека споља."
+
+#: data/org.gnome.Meld.gschema.xml:165
+msgid "The custom editor launch command"
+msgstr "Наредба покретања произвољног уређивача"
+
+#: data/org.gnome.Meld.gschema.xml:166
+msgid ""
+"The command used to launch a custom editor. Some limited templating is "
+"supported here; at the moment '{file}' and '{line}' are recognised tokens."
+msgstr ""
+"Наредба за покретање произвољног уређивача. Овде је подржано неко ограничено "
+"шаблонирање; за сада „{file}“ и „{line}“ су препознате опције."
+
+#: data/org.gnome.Meld.gschema.xml:172
+msgid "Columns to display"
+msgstr "Ступци за приказивање"
+
+#: data/org.gnome.Meld.gschema.xml:173
+msgid ""
+"List of column names in folder comparison and whether they should be "
+"displayed."
+msgstr "Списак назива стубаца при поређењу фасцикли и да ли ће бити приказани."
+
+#: data/org.gnome.Meld.gschema.xml:177 meld/resources/ui/preferences.ui:241
+msgid "Ignore symbolic links"
+msgstr "Занемари симболичке везе"
+
+#: data/org.gnome.Meld.gschema.xml:178
+msgid ""
+"If true, folder comparisons do not follow symbolic links when traversing the "
+"folder tree."
+msgstr ""
+"Ако је изабрано, поређења фасцикли не прате симболичке везе приликом "
+"проласка кроз стабло фасцикле."
+
+#: data/org.gnome.Meld.gschema.xml:182
+msgid "Use shallow comparison"
+msgstr "Користи површно поређење"
+
+#: data/org.gnome.Meld.gschema.xml:183
+msgid ""
+"If true, folder comparisons compare files based solely on size and mtime, "
+"considering files to be identical if their size and mtime match, and "
+"different otherwise."
+msgstr ""
+"Ако је изабрано, поређење фасцикли пореди датотеке само на основу величине и "
+"м_времена, сматрајући да су датотеке истоветне ако се њихове величине и "
+"м_време поклапају, а различите у супротном."
+
+#: data/org.gnome.Meld.gschema.xml:187
+msgid "File timestamp resolution"
+msgstr "Резолуција временске ознаке датотеке"
+
+#: data/org.gnome.Meld.gschema.xml:188
+msgid ""
+"When comparing based on mtime, this is the minimum difference in nanoseconds "
+"between two files before they’re considered to have different mtimes. This "
+"is useful when comparing files between filesystems with different timestamp "
+"resolution."
+msgstr ""
+"Приликом поређења на основу м_времена, ово је најмања разлика у "
+"наносекундама између две датотеке пре него што се одлучи да имају различита "
+"м_времена. Ово је корисно приликом поређења датотека између система датотека "
+"са различитом резолцијом временске ознаке."
+
+#: data/org.gnome.Meld.gschema.xml:192 meld/resources/ui/preferences.ui:250
+msgid "Apply text filters during folder comparisons"
+msgstr "Примени издвајаче текста за време поређење фасцикли"
+
+#: data/org.gnome.Meld.gschema.xml:193
+msgid ""
+"If true, folder comparisons that compare file contents also apply active "
+"text filters and the blank line trimming option, and ignore newline "
+"differences."
+msgstr ""
+"Ако је изабрано, поређења фасцикли која пореде садржаје датотека такође "
+"примењују радне издвајаче текста и опције скраћивања празног реда, и "
+"занемарују разлике нових редова."
+
+#: data/org.gnome.Meld.gschema.xml:197
+msgid "File status filters"
+msgstr "Пропусници стања датотека"
+
+#: data/org.gnome.Meld.gschema.xml:198
+msgid "List of statuses used to filter visible files in folder comparison."
+msgstr ""
+"Списак стања коришћених за издвајање видљивих датотека при поређењу фасцикли."
+
+#: data/org.gnome.Meld.gschema.xml:204
+msgid "Show the version control console output"
+msgstr "Приказује излаз конзоле управљања издањем"
+
+#: data/org.gnome.Meld.gschema.xml:205
+msgid ""
+"If true, a console output section will be shown in version control views, "
+"showing the commands run for version control operations."
+msgstr ""
+"Ако је изабрано, одељак излаза конзоле ће бити приказан у прегледима "
+"управљања издањем, приказујући покренуте наредбе за радње управљања издањем."
+
+#: data/org.gnome.Meld.gschema.xml:209
+msgid "Version control pane position"
+msgstr "Положај површи управљања издањима"
+
+#: data/org.gnome.Meld.gschema.xml:210
+msgid ""
+"This is the height of the main version control tree when the console pane is "
+"shown."
+msgstr ""
+"Ово је висина главног стабла управљања издањем када је приказана површ "
+"конзоле."
+
+#: data/org.gnome.Meld.gschema.xml:214
+msgid "Present version comparisons as left-local/right-remote"
+msgstr "Представља поређења издања као месно-лево/удаљено-десно"
+
+#: data/org.gnome.Meld.gschema.xml:215
+msgid ""
+"If true, version control comparisons will use a left-is-local, right-is-"
+"remote scheme to determine what order to present files in panes. Otherwise, "
+"a left-is-theirs, right-is-mine scheme is used."
+msgstr ""
+"Ако је изабрано, поређења управљања издањем ће користити шему „лево-је-"
+"месно, десно-је-удаљено“ да одреде којим редом ће представити датотеке у "
+"окнима. У супротном, користи се шема „лево-је-њихово, десно-је-моје“."
+
+#: data/org.gnome.Meld.gschema.xml:219
+msgid "Order for files in three-way version control merge comparisons"
+msgstr ""
+"Редослед датотека за поређење стапања управљања издањем за три елемента"
+
+#: data/org.gnome.Meld.gschema.xml:220
+msgid ""
+"Choices for file order are remote/merged/local and local/merged/remote. This "
+"preference only affects three-way comparisons launched from the version "
+"control view, so is used solely for merges/conflict resolution within Meld."
+msgstr ""
+"Избори за редослед датотека су удаљена/спојена/месна и месна/спојена/"
+"удаљена. Ова поставка утиче само на поређење три елемента покренуто из "
+"прегледа управљања издањем, стога се користи једино за решавање спајања/"
+"сукоба у Мелду."
+
+#: data/org.gnome.Meld.gschema.xml:224
+msgid "Show margin in commit message editor"
+msgstr "Приказује ивицу у уређивачу поруке предаје"
+
+#: data/org.gnome.Meld.gschema.xml:225
+msgid ""
+"If true, a guide will be displayed to show what column the margin is at in "
+"the version control commit message editor."
+msgstr ""
+"Ако је изабрано, биће приказана вођица да покаже од ког ступца се ивица "
+"налази у уређивачу поруке предаје управљања издањем."
+
+#: data/org.gnome.Meld.gschema.xml:229
+msgid "Margin column in commit message editor"
+msgstr "Стубац ивице у уређивачу поруке предаје"
+
+#: data/org.gnome.Meld.gschema.xml:230
+msgid ""
+"The column at which to show the margin in the version control commit message "
+"editor."
+msgstr ""
+"Стубац на коме приказати ивицу у уређивачу поруке предаје управљања издањем."
+
+#: data/org.gnome.Meld.gschema.xml:234
+msgid "Automatically hard-wrap commit messages"
+msgstr "Самостално силно-прелама поруке предаје"
+
+#: data/org.gnome.Meld.gschema.xml:235
+msgid ""
+"If true, the version control commit message editor will hard-wrap (i.e., "
+"insert line breaks) at the commit margin before commit."
+msgstr ""
+"Ако је изабрано, уређивач поруке предаје управљања издањем ће силно-"
+"преломити (тј. уметнути преломе редова) на ивици предаје пре предаје."
+
+#: data/org.gnome.Meld.gschema.xml:239
+msgid "Version control status filters"
+msgstr "Пропусници стања управљања издањем"
+
+#: data/org.gnome.Meld.gschema.xml:240
+msgid ""
+"List of statuses used to filter visible files in version control comparison."
+msgstr ""
+"Списак стања коришћених за издвајање видљивих датотека при поређењу "
+"управљања издањем."
+
+#.
+#. Translators: A list of default filters, each of which is
+#. composed of a (name, enabled, pattern) in GVariant syntax.
+#. Please only translate the name of each filter.
+#: data/org.gnome.Meld.gschema.xml:250
+msgid ""
+"[\n"
+"              (\"Backups\", true, \"#*# .#* ~* *~ *.{orig,bak,swp}\"),\n"
+"              (\"OS-Specific Metadata\", true, \".DS_Store ._* .Spotlight-"
+"V100 .Trashes Thumbs.db Desktop.ini\"),\n"
+"              (\"Version Control\", true, "
+"\"_MTN .bzr .svn .svn .hg .fslckout _FOSSIL_ .fos CVS "
+"_darcs .git .svn .osc\"),\n"
+"              (\"Binaries\", true, \"*.{pyc,a,obj,o,so,la,lib,dll,exe}\"),\n"
+"              (\"Media\", false, \"*."
+"{jxl,jpg,jpeg,gif,png,avif,webp,heif,heic,bmp,tif,tiff,raw,dng,cr2,wav,wave,mp3,ogg,oga,vorbis,spx,opus,flac,ac3,aac,aif,aiff,aifc,alac,m4a,3gp,wma,aup,aup3,avi,mov,mpg,mpeg,mp4,m4v,webm,ogv,flv,xcf,xpm,ora,kra,psd,psp}"
+"\")\n"
+"            ]"
+msgstr ""
+"[\n"
+"              (\"Backups\", true, \"#*# .#* ~* *~ *.{orig,bak,swp}\"),\n"
+"              (\"OS-Specific Metadata\", true, \".DS_Store ._* .Spotlight-"
+"V100 .Trashes Thumbs.db Desktop.ini\"),\n"
+"              (\"Version Control\", true, "
+"\"_MTN .bzr .svn .svn .hg .fslckout _FOSSIL_ .fos CVS "
+"_darcs .git .svn .osc\"),\n"
+"              (\"Binaries\", true, \"*.{pyc,a,obj,o,so,la,lib,dll,exe}\"),\n"
+"              (\"Media\", false, \"*."
+"{jxl,jpg,jpeg,gif,png,avif,webp,heif,heic,bmp,tif,tiff,raw,dng,cr2,wav,wave,mp3,ogg,oga,vorbis,spx,opus,flac,ac3,aac,aif,aiff,aifc,alac,m4a,3gp,wma,aup,aup3,avi,mov,mpg,mpeg,mp4,m4v,webm,ogv,flv,xcf,xpm,ora,kra,psd,psp}"
+"\")\n"
+"            ]"
+
+#: data/org.gnome.Meld.gschema.xml:259
+msgid "Filename-based filters"
+msgstr "Пропусници засновани на називу датотеке"
+
+#: data/org.gnome.Meld.gschema.xml:260
+msgid ""
+"List of predefined filename-based filters that, if active, will remove "
+"matching files from a folder comparison."
+msgstr ""
+"Списак унапред одређених филтера заснованих на називу датотеке који ће, ако "
+"је радно, уклонити поклопљене датотеке из поређења фасцикли."
+
+#.
+#. Translators: A list of default filters, each of which is
+#. composed of a (name, enabled, pattern) in GVariant syntax.
+#. Please only translate the name of each filter.
+#: data/org.gnome.Meld.gschema.xml:268
+msgid ""
+"[\n"
+"              (\"CVS/SVN Keywords\", false, \"\\\\$\\\\w+(:[^\\\\n$]+)?\\\\$"
+"\"),\n"
+"              (\"C++ Comment\", false, \"//.*\"),\n"
+"              (\"C Comment\", false, \"/\\\\*.*?\\\\*/\"),\n"
+"              (\"All Whitespace\", false, \"[ \\\\t\\\\r\\\\f\\\\v]*\"),\n"
+"              (\"Leading Whitespace\", false, \"^[ \\\\t\\\\r\\\\f\\"
+"\\v]*\"),\n"
+"              (\"Trailing Whitespace\", false, \"[ \\\\t\\\\r\\\\f\\\\v]*$"
+"\"),\n"
+"              (\"Script Comment\", false, \"#.*\")\n"
+"            ]"
+msgstr ""
+"[\n"
+"              (\"CVS/SVN Keywords\", false, \"\\\\$\\\\w+(:[^\\\\n$]+)?\\\\$"
+"\"),\n"
+"              (\"C++ Comment\", false, \"//.*\"),\n"
+"              (\"C Comment\", false, \"/\\\\*.*?\\\\*/\"),\n"
+"              (\"All Whitespace\", false, \"[ \\\\t\\\\r\\\\f\\\\v]*\"),\n"
+"              (\"Leading Whitespace\", false, \"^[ \\\\t\\\\r\\\\f\\"
+"\\v]*\"),\n"
+"              (\"Trailing Whitespace\", false, \"[ \\\\t\\\\r\\\\f\\\\v]*$"
+"\"),\n"
+"              (\"Script Comment\", false, \"#.*\")\n"
+"            ]"
+
+#: data/org.gnome.Meld.gschema.xml:279
+msgid "Text-based filters"
+msgstr "Пропусници засновани на тексту"
+
+#: data/org.gnome.Meld.gschema.xml:280
+msgid ""
+"List of predefined text-based regex filters that, if active, will remove "
+"text from being used in a file comparison. The text will still be displayed, "
+"but won’t contribute to the comparison itself."
+msgstr ""
+"Списак унапред одређених филтера регуларног израза заснованих на тексту који "
+"ће, ако је радно, уклонити текст из употребе при поређењу датотека. Текст ће "
+"још увек бити приказан, али неће допринети поређењу."
+
+#: data/styles/meld-base.style-scheme.xml.in:1
+msgid "Classic (Meld)"
+msgstr "Класична (Мелд)"
+
+#: data/styles/meld-base.style-scheme.xml.in:3
+msgid "Base color scheme for Meld highlighting"
+msgstr "Основна шема боје за Мелдово истицање"
+
+#: data/styles/meld-dark.style-scheme.xml.in:1
+msgid "Meld dark scheme"
+msgstr "Мелдова тамна шема"
+
+#: data/styles/meld-dark.style-scheme.xml.in:3
+msgid "Dark color scheme for Meld highlighting"
+msgstr "Тамна шема боје за Мелдово истицање"
+
+#: meld/resources/data/org.gnome.Meld.metainfo.xml.in.in:13
+msgid ""
+"Meld is a visual diff and merge tool targeted at developers. Meld helps you "
+"compare files, directories, and version controlled projects. It provides "
+"two- and three-way comparison of both files and directories, and supports "
+"many version control systems including Git, Mercurial, Bazaar and Subversion."
+msgstr ""
+"Мелд је графички алат за разлике и стапање намењен програмерима. Помаже вам "
+"да поредите датотеке, директоријуме, и пројекте управљања издањима. "
+"Обезбеђује двоструко и троструко поређење и датотека и директоријума, и "
+"подржава многе системе управљања издањима укључујући Гит, Меркуријал, Базар "
+"и Субверзију."
+
+#: meld/resources/data/org.gnome.Meld.metainfo.xml.in.in:20
+msgid ""
+"Meld helps you review code changes, understand patches, and makes enormous "
+"merge conflicts slightly less painful."
+msgstr ""
+"Мелд вам помаже да прегледате измене у коду, да разумете закрпе, и огромне "
+"сукобе стапања чини мање болним."
+
+#: meld/resources/data/org.gnome.Meld.metainfo.xml.in.in:51
+msgid "Kai Willadsen"
+msgstr "Каи Виладсен"
+
+#: meld/resources/gtk/help-overlay.ui:14
+msgctxt "shortcut window"
+msgid "Windows and Tabs"
+msgstr "Прозори и картице"
+
+#: meld/resources/gtk/help-overlay.ui:19
+msgctxt "shortcut window"
+msgid "New comparison"
+msgstr "Ново поређење"
+
+#: meld/resources/gtk/help-overlay.ui:26
+msgctxt "shortcut window"
+msgid "Close a comparison"
+msgstr "Затвара поређење"
+
+#: meld/resources/gtk/help-overlay.ui:33
+msgctxt "shortcut window"
+msgid "Quit Meld"
+msgstr "Излази из Мелда"
+
+#: meld/resources/gtk/help-overlay.ui:41
+msgctxt "shortcut window"
+msgid "General"
+msgstr "Опште"
+
+#: meld/resources/gtk/help-overlay.ui:46
+msgctxt "shortcut window"
+msgid "Show help"
+msgstr "Приказује помоћ"
+
+#: meld/resources/gtk/help-overlay.ui:53
+msgctxt "shortcut window"
+msgid "Show preferences"
+msgstr "Приказује поставке"
+
+#: meld/resources/gtk/help-overlay.ui:60
+msgctxt "shortcut window"
+msgid "Keyboard shortcuts"
+msgstr "Пречице тастатуре"
+
+#: meld/resources/gtk/help-overlay.ui:68
+msgctxt "shortcut window"
+msgid "Open menu"
+msgstr "Отвара изборник"
+
+#: meld/resources/gtk/help-overlay.ui:75
+msgctxt "shortcut window"
+msgid "Fullscreen"
+msgstr "Преко целог екрана"
+
+#: meld/resources/gtk/help-overlay.ui:84
+msgctxt "shortcut window"
+msgid "Common Actions"
+msgstr "Опште радње"
+
+#: meld/resources/gtk/help-overlay.ui:89
+msgctxt "shortcut window"
+msgid "Stop the current action"
+msgstr "Зауставља тренутну радњу"
+
+#: meld/resources/gtk/help-overlay.ui:96
+msgctxt "shortcut window"
+msgid "Refresh comparison"
+msgstr "Освежава поређење"
+
+#: meld/resources/gtk/help-overlay.ui:103
+msgctxt "shortcut window"
+msgid "Open externally"
+msgstr "Отвара спољним"
+
+#: meld/resources/gtk/help-overlay.ui:111
+msgctxt "shortcut window"
+msgid "Panes"
+msgstr "Окна"
+
+#: meld/resources/gtk/help-overlay.ui:116
+msgctxt "shortcut window"
+msgid "Previous comparison pane"
+msgstr "Претходно окно поређења"
+
+#: meld/resources/gtk/help-overlay.ui:123
+msgctxt "shortcut window"
+msgid "Next comparison pane"
+msgstr "Следеће окно поређења"
+
+#: meld/resources/gtk/help-overlay.ui:130
+msgctxt "shortcut window"
+msgid "Swap left and right panes"
+msgstr "Размењује леву и десну површ"
+
+#: meld/resources/gtk/help-overlay.ui:139
+msgctxt "shortcut window"
+msgid "Changes"
+msgstr "Измене"
+
+#: meld/resources/gtk/help-overlay.ui:144
+msgctxt "shortcut window"
+msgid "Go to previous change"
+msgstr "Иде на претходну измену"
+
+#: meld/resources/gtk/help-overlay.ui:151
+msgctxt "shortcut window"
+msgid "Go to next change"
+msgstr "Иде на следећу измену"
+
+#: meld/resources/gtk/help-overlay.ui:160
+msgctxt "shortcut window"
+msgid "Tabs"
+msgstr "Језичци"
+
+#: meld/resources/gtk/help-overlay.ui:165
+msgctxt "shortcut window"
+msgid "Go to previous tab"
+msgstr "Иде на претходни језичак"
+
+#: meld/resources/gtk/help-overlay.ui:172
+msgctxt "shortcut window"
+msgid "Go to next tab"
+msgstr "Иде на следећи језичак"
+
+#: meld/resources/gtk/help-overlay.ui:179
+msgctxt "shortcut window"
+msgid "Switch to tab"
+msgstr "Пребацује се на језичак"
+
+#: meld/resources/gtk/help-overlay.ui:186
+msgctxt "shortcut window"
+msgid "Move tab left"
+msgstr "Премешта језичак лево"
+
+#: meld/resources/gtk/help-overlay.ui:193
+msgctxt "shortcut window"
+msgid "Move tab right"
+msgstr "Премешта језичак десно"
+
+#: meld/resources/gtk/help-overlay.ui:202
+msgctxt "shortcut window"
+msgid "Editing"
+msgstr "Уређивање"
+
+#: meld/resources/gtk/help-overlay.ui:207
+msgctxt "shortcut window"
+msgid "Undo"
+msgstr "Поништава"
+
+#: meld/resources/gtk/help-overlay.ui:214
+msgctxt "shortcut window"
+msgid "Redo"
+msgstr "Враћа"
+
+#: meld/resources/gtk/help-overlay.ui:221
+msgctxt "shortcut window"
+msgid "Cut"
+msgstr "Исеца"
+
+#: meld/resources/gtk/help-overlay.ui:228
+msgctxt "shortcut window"
+msgid "Copy"
+msgstr "Умножава"
+
+#: meld/resources/gtk/help-overlay.ui:235
+msgctxt "shortcut window"
+msgid "Paste"
+msgstr "Убацује"
+
+#: meld/resources/gtk/help-overlay.ui:242
+msgctxt "shortcut window"
+msgid "Find"
+msgstr "Налази"
+
+#: meld/resources/gtk/help-overlay.ui:249
+msgctxt "shortcut window"
+msgid "Find Next"
+msgstr "Налази следећи"
+
+#: meld/resources/gtk/help-overlay.ui:256
+msgctxt "shortcut window"
+msgid "Find Previous"
+msgstr "Налази претходно"
+
+#: meld/resources/gtk/help-overlay.ui:263
+msgctxt "shortcut window"
+msgid "Replace"
+msgstr "Замењује"
+
+#: meld/resources/gtk/help-overlay.ui:270
+msgctxt "shortcut window"
+msgid "Go to line"
+msgstr "Иде на ред"
+
+#: meld/resources/gtk/help-overlay.ui:279
+msgctxt "shortcut window"
+msgid "File comparison"
+msgstr "Поређење датотека"
+
+#: meld/resources/gtk/help-overlay.ui:284
+msgctxt "shortcut window"
+msgid "Save current file"
+msgstr "Чува тренутну датотеку"
+
+#: meld/resources/gtk/help-overlay.ui:291
+msgctxt "shortcut window"
+msgid "Save current file to new path"
+msgstr "Чува тренутну датотеку на новој путањи"
+
+#: meld/resources/gtk/help-overlay.ui:298
+msgctxt "shortcut window"
+msgid "Save all files in comparison"
+msgstr "Чува све датотеке у поређењу"
+
+#: meld/resources/gtk/help-overlay.ui:305
+msgctxt "shortcut window"
+msgid "Previous conflict"
+msgstr "Претходни сукоб"
+
+#: meld/resources/gtk/help-overlay.ui:312
+msgctxt "shortcut window"
+msgid "Next conflict"
+msgstr "Следећи сукоб"
+
+#: meld/resources/gtk/help-overlay.ui:319
+msgctxt "shortcut window"
+msgid "Push change to left"
+msgstr "Гура измену улево"
+
+#: meld/resources/gtk/help-overlay.ui:326
+msgctxt "shortcut window"
+msgid "Push change to right"
+msgstr "Гура измену удесно"
+
+#: meld/resources/gtk/help-overlay.ui:333
+msgctxt "shortcut window"
+msgid "Pull change from left"
+msgstr "Вуче измену с лева"
+
+#: meld/resources/gtk/help-overlay.ui:340
+msgctxt "shortcut window"
+msgid "Pull change from right"
+msgstr "Вуче измену с десна"
+
+#: meld/resources/gtk/help-overlay.ui:347
+msgctxt "shortcut window"
+msgid "Copy change above left"
+msgstr "Умножава измену изнад леве"
+
+#: meld/resources/gtk/help-overlay.ui:354
+msgctxt "shortcut window"
+msgid "Copy change below left"
+msgstr "Умножава измену испод леве"
+
+#: meld/resources/gtk/help-overlay.ui:361
+msgctxt "shortcut window"
+msgid "Copy change above right"
+msgstr "Умножава измену изнад десне"
+
+#: meld/resources/gtk/help-overlay.ui:368
+msgctxt "shortcut window"
+msgid "Copy change below right"
+msgstr "Умножава измену испод десне"
+
+#: meld/resources/gtk/help-overlay.ui:375
+#: meld/resources/gtk/help-overlay.ui:410
+msgctxt "shortcut window"
+msgid "Delete change"
+msgstr "Брише измену"
+
+#: meld/resources/gtk/help-overlay.ui:382
+msgctxt "shortcut window"
+msgid "Show overview map"
+msgstr "Приказује мапу прегледа"
+
+#: meld/resources/gtk/help-overlay.ui:391
+msgctxt "shortcut window"
+msgid "Folder comparison"
+msgstr "Поређење фасцикли"
+
+#: meld/resources/gtk/help-overlay.ui:396
+msgctxt "shortcut window"
+msgid "Copy to left"
+msgstr "Умножава на лево"
+
+#: meld/resources/gtk/help-overlay.ui:403
+msgctxt "shortcut window"
+msgid "Copy to right"
+msgstr "Умножава на десно"
+
+#: meld/resources/gtk/help-overlay.ui:417
+msgctxt "shortcut window"
+msgid "Expand the current folder"
+msgstr "Шири тренутну фасциклу"
+
+#: meld/resources/gtk/help-overlay.ui:424
+msgctxt "shortcut window"
+msgid "Collapse the current folder"
+msgstr "Скупља тренутну датотеку"
+
+#: meld/resources/gtk/help-overlay.ui:433
+msgctxt "shortcut window"
+msgid "Version control comparison"
+msgstr "Поређење управљања издањем"
+
+#: meld/resources/gtk/help-overlay.ui:438
+msgctxt "shortcut window"
+msgid "Commit to version control"
+msgstr "Уграђује измене у управљање издањем"
+
+#: meld/resources/gtk/help-overlay.ui:445
+msgctxt "shortcut window"
+msgid "Show/hide console output"
+msgstr "Приказује/скрива излаз конзоле"
+
+#: meld/resources/ui/appwindow.ui:29
+msgid "Start a new comparison"
+msgstr "Започните ново поређење"
+
+#: meld/resources/ui/appwindow.ui:36
+msgid "Open a recent comparison"
+msgstr "Отворите скорашње поређење"
+
+#: meld/resources/ui/appwindow.ui:52
+msgid "Go to the previous change"
+msgstr "Идите на претходну измену"
+
+#: meld/resources/ui/appwindow.ui:60
+msgid "Go to the next change"
+msgstr "Идите на следећу измену"
+
+#: meld/resources/ui/appwindow.ui:76
+msgid "Go to the previous conflict"
+msgstr "Идите на претходни сукоб"
+
+#: meld/resources/ui/appwindow.ui:84
+msgid "Go to the next conflict"
+msgstr "Идите на следећи сукоб"
+
+#: meld/resources/ui/appwindow.ui:103
+msgid "Version Filters"
+msgstr "Филтери издања"
+
+#: meld/resources/ui/appwindow.ui:109
+msgid "File Filters"
+msgstr "Пропусници датотека"
+
+#: meld/resources/ui/appwindow.ui:115
+msgid "Text Filters"
+msgstr "Пропусници текста"
+
+#: meld/resources/ui/appwindow.ui:171
+msgid "Save As…"
+msgstr "Сачувај као…"
+
+#: meld/resources/ui/appwindow.ui:175
+msgid "Save A_ll"
+msgstr "Сачувај _све"
+
+#: meld/resources/ui/appwindow.ui:179
+msgid "Revert Files…"
+msgstr "Поврати датотеке…"
+
+#: meld/resources/ui/appwindow.ui:183 meld/resources/ui/dirdiff.ui:431
+msgid "_Open Externally"
+msgstr "_Отвори спољним"
+
+#: meld/resources/ui/appwindow.ui:190
+msgid "Refresh Comparison"
+msgstr "Освежава поређење"
+
+#: meld/resources/ui/appwindow.ui:197
+msgid "_Find…"
+msgstr "_Нађи…"
+
+#: meld/resources/ui/appwindow.ui:201
+msgid "_Replace…"
+msgstr "_Замени…"
+
+#: meld/resources/ui/appwindow.ui:207
+msgid "_View"
+msgstr "_Преглед"
+
+#: meld/resources/ui/appwindow.ui:211
+msgid "Fullscreen"
+msgstr "Преко целог екрана"
+
+#: meld/resources/ui/appwindow.ui:215
+msgid "Overview Map"
+msgstr "Мапа прегледа"
+
+#: meld/resources/ui/appwindow.ui:219
+msgid "Version Control Console"
+msgstr "Конзола управљања издањем"
+
+#: meld/resources/ui/appwindow.ui:223
+msgid "Lock Scrolling"
+msgstr "Закључај клизање"
+
+#: meld/resources/ui/appwindow.ui:230
+msgid "Swap Left and Right Panes"
+msgstr "Размени леву и десну површ"
+
+#: meld/resources/ui/appwindow.ui:236
+msgid "_Comparison"
+msgstr "_Поређење"
+
+#: meld/resources/ui/appwindow.ui:238
+msgid "_Stop"
+msgstr "_Заустави"
+
+#: meld/resources/ui/appwindow.ui:244
+msgid "Merge All from _Left"
+msgstr "Обједини све с _лева"
+
+#: meld/resources/ui/appwindow.ui:248
+msgid "Merge All from _Right"
+msgstr "Обједини све с _десна"
+
+#: meld/resources/ui/appwindow.ui:252
+msgid "Merge _All"
+msgstr "Стопи _све"
+
+#: meld/resources/ui/appwindow.ui:259
+msgid "Format as _Patch…"
+msgstr "Форматирај као _исправку…"
+
+#: meld/resources/ui/appwindow.ui:268
+msgid "_Preferences"
+msgstr "_Поставке"
+
+#: meld/resources/ui/appwindow.ui:272
+msgid "Keyboard Shortcuts"
+msgstr "Пречице тастатуре"
+
+#: meld/resources/ui/appwindow.ui:276
+msgid "_Help"
+msgstr "По_моћ"
+
+#: meld/resources/ui/appwindow.ui:280
+msgid "_About Meld"
+msgstr "_О Мелду"
+
+#: meld/resources/ui/appwindow.ui:293
+msgid "File Status"
+msgstr "Стање датотеке"
+
+#: meld/resources/ui/appwindow.ui:295
+msgid "Same"
+msgstr "Исто"
+
+#: meld/resources/ui/appwindow.ui:299
+msgid "New"
+msgstr "Нови"
+
+#: meld/resources/ui/appwindow.ui:303 meld/resources/ui/appwindow.ui:326
+#: meld/vc/_vc.py:93
+msgid "Modified"
+msgstr "Измењени"
+
+#: meld/resources/ui/appwindow.ui:313
+msgid "Ignore Filename Case"
+msgstr "Занемари величину слова назива датотеке"
+
+#: meld/resources/ui/appwindow.ui:317
+msgid "Normalize Unicode Paths"
+msgstr "Нормализуј Јуникод путање"
+
+#: meld/resources/ui/appwindow.ui:330
+msgid "Normal"
+msgstr "Обично"
+
+#: meld/resources/ui/appwindow.ui:334 meld/vc/_vc.py:87
+msgid "Unversioned"
+msgstr "Необрађено"
+
+#: meld/resources/ui/appwindow.ui:338 meld/vc/_vc.py:86
+msgid "Ignored"
+msgstr "Занемарене"
+
+#: meld/resources/ui/appwindow.ui:345
+msgid "Flatten Folders"
+msgstr "Поравнате фасцикле"
+
+#: meld/resources/ui/column-list.ui:8
+msgid "Move Up"
+msgstr "Премести горе"
+
+#: meld/resources/ui/column-list.ui:12
+msgid "Move Down"
+msgstr "Премести доле"
+
+#: meld/resources/ui/commit-dialog.ui:6
+msgid "Commit Files"
+msgstr "Угради датотеке"
+
+#: meld/resources/ui/commit-dialog.ui:15
+msgid "Changed Files"
+msgstr "Измењене датотеке"
+
+#: meld/resources/ui/commit-dialog.ui:36
+msgid "Log Message"
+msgstr "Порука дневника"
+
+#: meld/resources/ui/commit-dialog.ui:65
+msgid "Previous logs:"
+msgstr "Претходни дневници:"
+
+#: meld/resources/ui/commit-dialog.ui:85 meld/resources/ui/patch-dialog.ui:83
+#: meld/resources/ui/push-dialog.ui:12 meld/resources/ui/revert-dialog.ui:10
+#: meld/resources/ui/save-confirm-dialog.ui:15 meld/dirdiff.py:1304
+#: meld/iohelpers.py:71 meld/vcview.py:807
+msgid "_Cancel"
+msgstr "_Откажи"
+
+#: meld/resources/ui/commit-dialog.ui:86
+msgid "Co_mmit"
+msgstr "У_гради"
+
+#: meld/resources/ui/dirdiff-actions.ui:15
+msgid "Copy to left"
+msgstr "Умножите лево"
+
+#: meld/resources/ui/dirdiff-actions.ui:31
+msgid "Copy to right"
+msgstr "Умножите десно"
+
+#: meld/resources/ui/dirdiff-actions.ui:49
+msgid "Delete selected"
+msgstr "Обриши изабрано"
+
+#: meld/resources/ui/dirdiff.ui:33 meld/resources/ui/dirdiff.ui:66
+#: meld/resources/ui/dirdiff.ui:99 meld/resources/ui/vcview.ui:122
+msgid "Select Folder"
+msgstr "Изаберите фасциклу"
+
+#: meld/resources/ui/dirdiff.ui:34 meld/resources/ui/dirdiff.ui:67
+#: meld/resources/ui/dirdiff.ui:100
+msgid "Select folder to open in this pane"
+msgstr "Изаберите фасциклу за отварање у овом окну"
+
+#: meld/resources/ui/dirdiff.ui:41
+msgid "Folder 1"
+msgstr "Фасцикла 1"
+
+#: meld/resources/ui/dirdiff.ui:74
+msgid "Folder 2"
+msgstr "Фасцикла 2"
+
+#: meld/resources/ui/dirdiff.ui:107
+msgid "Folder 3"
+msgstr "Фасцикла 3"
+
+#: meld/resources/ui/dirdiff.ui:387
+msgid "_Compare Selected Files"
+msgstr "_Упореди изабране датотеке"
+
+#: meld/resources/ui/dirdiff.ui:394
+msgid "_Mark Selected File"
+msgstr "_Означи изабране датотеке"
+
+#: meld/resources/ui/dirdiff.ui:398
+msgid "Compare _with Marked File"
+msgstr "Упореди _са означеном датотеком"
+
+#: meld/resources/ui/dirdiff.ui:405
+msgid "Copy to _Left"
+msgstr "Умножи _лево"
+
+#: meld/resources/ui/dirdiff.ui:409
+msgid "Copy to _Right"
+msgstr "Умножи _десно"
+
+#: meld/resources/ui/dirdiff.ui:413
+msgid "_Delete Selected"
+msgstr "_Обриши изабрано"
+
+#: meld/resources/ui/dirdiff.ui:420
+msgid "Collapse Recursively"
+msgstr "Скупи дубински"
+
+#: meld/resources/ui/dirdiff.ui:424
+msgid "Expand Recursively"
+msgstr "Рашири дубински"
+
+#: meld/resources/ui/dirdiff.ui:435
+msgid "_Copy File Paths"
+msgstr "_Умножи путање датотека"
+
+#: meld/resources/ui/encoding-selector.ui:21
+msgid "Search text encoding…"
+msgstr "Тражи кодирање текста…"
+
+#: meld/resources/ui/filediff-actions.ui:15
+msgid "Push current change to the left"
+msgstr "Гурните текућу измену улево"
+
+#: meld/resources/ui/filediff-actions.ui:31
+msgid "Push current change to the right"
+msgstr "Гурните текућу измену удесно"
+
+#: meld/resources/ui/filediff-actions.ui:49
+msgid "Copy chunks"
+msgstr "Умножите одломке"
+
+#: meld/resources/ui/filediff-actions.ui:64
+msgid "Delete change"
+msgstr "Обришите измену"
+
+#: meld/resources/ui/filediff-menus.ui:8
+msgid "Copy change above the left chunk"
+msgstr "Умножите измену изнад комада улево"
+
+#: meld/resources/ui/filediff-menus.ui:12
+msgid "Copy change below the left chunk"
+msgstr "Умножите измену испод комада улево"
+
+#: meld/resources/ui/filediff-menus.ui:16
+msgid "Copy change above the right chunk"
+msgstr "Умножите измену изнад комада удесно"
+
+#: meld/resources/ui/filediff-menus.ui:20
+msgid "Copy change below the right chunk"
+msgstr "Умножите измену испод комада удесно"
+
+#: meld/resources/ui/filediff-menus.ui:29
+msgid "_Undo"
+msgstr "_Опозови"
+
+#: meld/resources/ui/filediff-menus.ui:33
+msgid "_Redo"
+msgstr "_Понови"
+
+#: meld/resources/ui/filediff-menus.ui:40
+msgid "Cu_t"
+msgstr "_Исеци"
+
+#: meld/resources/ui/filediff-menus.ui:44
+msgid "_Copy"
+msgstr "У_множи"
+
+#: meld/resources/ui/filediff-menus.ui:48
+msgid "_Paste"
+msgstr "У_баци"
+
+#: meld/resources/ui/filediff-menus.ui:55 meld/resources/ui/imagediff.ui:140
+#: meld/resources/ui/path-label.ui:53
+msgid "Open Containing Folder"
+msgstr "Отвори фасциклу садржаја"
+
+#: meld/resources/ui/filediff-menus.ui:59 meld/resources/ui/imagediff.ui:144
+msgid "Copy Full Path"
+msgstr "Умножи пуну путању"
+
+#: meld/resources/ui/filediff-menus.ui:66
+msgid "Add Synchronization Point"
+msgstr "Додај тачку усклађивања"
+
+#: meld/resources/ui/filediff-menus.ui:71
+msgid "Move Synchronization Point"
+msgstr "П тачку усклађивања"
+
+#: meld/resources/ui/filediff-menus.ui:76
+msgid "Match Synchronization Point"
+msgstr "П тачку усклађивања"
+
+#: meld/resources/ui/filediff-menus.ui:81
+msgid "Remove Synchronization Point"
+msgstr "У тачку усклађивања"
+
+#: meld/resources/ui/filediff-menus.ui:86
+msgid "Clear Synchronization Points"
+msgstr "Очисти тачке усклађивања"
+
+#: meld/resources/ui/filediff-menus.ui:94
+msgid "Copy Up"
+msgstr "Умножи горе"
+
+#: meld/resources/ui/filediff-menus.ui:98
+msgid "Copy Down"
+msgstr "Умножи доле"
+
+#: meld/resources/ui/filediff.ui:26 meld/resources/ui/filediff.ui:82
+#: meld/resources/ui/filediff.ui:138
+msgid ""
+"This file can not be written to. You may click here to unlock this file and "
+"make changes anyway, but these changes must be saved to a new file."
+msgstr ""
+"У ову датотеку се не може уписивати. Можете да кликнете овде да откључате "
+"ову датотеку и да ипак начините измене, али те измене морају бити сачуване у "
+"нову датотеку."
+
+#: meld/resources/ui/filediff.ui:38 meld/resources/ui/filediff.ui:94
+#: meld/resources/ui/filediff.ui:150
+msgid "Save file in this pane"
+msgstr "Сачувај датотеку у овом окну"
+
+#: meld/resources/ui/filediff.ui:56 meld/resources/ui/filediff.ui:112
+#: meld/resources/ui/filediff.ui:168
+msgid "Select File"
+msgstr "Изабери датотеку"
+
+#: meld/resources/ui/filediff.ui:57 meld/resources/ui/filediff.ui:113
+#: meld/resources/ui/filediff.ui:169
+msgid "Open file in this pane"
+msgstr "Отвори датотеку у овом окну"
+
+#: meld/resources/ui/filediff.ui:63
+msgid "File 3"
+msgstr "3. датотека"
+
+#: meld/resources/ui/filediff.ui:119
+msgid "File 2"
+msgstr "2. датотека"
+
+#: meld/resources/ui/filediff.ui:175
+msgid "File 1"
+msgstr "1. датотека"
+
+#: meld/resources/ui/filter-list.ui:34
+msgid "Active"
+msgstr "Активан"
+
+#. Create icon and filename CellRenderer
+#: meld/resources/ui/filter-list.ui:48 meld/resources/ui/vcview.ui:182
+#: meld/dirdiff.py:641
+msgid "Name"
+msgstr "Назив"
+
+#: meld/resources/ui/filter-list.ui:62
+msgid "Pattern"
+msgstr "Образац"
+
+#: meld/resources/ui/filter-list.ui:93
+msgid "Add new filter"
+msgstr "Додајте нови филтер"
+
+#: meld/resources/ui/filter-list.ui:94 meld/resources/ui/vcview.ui:285
+msgid "_Add"
+msgstr "_Додај"
+
+#: meld/resources/ui/filter-list.ui:102
+msgid "Remove selected filter"
+msgstr "Уклоните изабрани филтер"
+
+#: meld/resources/ui/filter-list.ui:103 meld/resources/ui/vcview.ui:293
+#: meld/vcview.py:808
+msgid "_Remove"
+msgstr "_Уклони"
+
+#: meld/resources/ui/filter-list.ui:116
+msgid "Move item up"
+msgstr "Преместите ставку на горе"
+
+#: meld/resources/ui/filter-list.ui:117
+msgid "Move _Up"
+msgstr "Премести _горе"
+
+#: meld/resources/ui/filter-list.ui:125
+msgid "Move item down"
+msgstr "Преместите ставку на доле"
+
+#: meld/resources/ui/filter-list.ui:126
+msgid "Move _Down"
+msgstr "Премести _доле"
+
+#: meld/resources/ui/findbar.ui:12
+msgid "Previous Result"
+msgstr "Претходни резултат"
+
+#: meld/resources/ui/findbar.ui:24
+msgid "Next Result"
+msgstr "Следећи резултат"
+
+#: meld/resources/ui/findbar.ui:45
+msgid "Find"
+msgstr "Нађи"
+
+#: meld/resources/ui/findbar.ui:59
+msgid "Replace"
+msgstr "Замени"
+
+#: meld/resources/ui/findbar.ui:77
+msgid "_Match case"
+msgstr "_Упореди величину слова"
+
+#: meld/resources/ui/findbar.ui:84
+msgid "Who_le word"
+msgstr "Це_лу реч"
+
+#: meld/resources/ui/findbar.ui:92
+msgid "Regular e_xpression"
+msgstr "Регуларан _израз"
+
+#: meld/resources/ui/findbar.ui:117
+msgid "Wrapped"
+msgstr "Преломљено"
+
+#: meld/resources/ui/findbar.ui:130
+msgid "Replace _All"
+msgstr "Замени с_ве"
+
+#: meld/resources/ui/findbar.ui:144 meld/dirdiff.py:1306
+msgid "_Replace"
+msgstr "_Замени"
+
+#: meld/resources/ui/findbar.ui:160
+msgid "Switch between Find and Find-and-Replace"
+msgstr "Пребаци између Нађи и Нађи_и_замени"
+
+#: meld/resources/ui/language-selector.ui:21
+msgid "Search highlight mode…"
+msgstr "Režim isticanja pretrage…"
+
+#: meld/resources/ui/new-diff-tab.ui:13 meld/newdifftab.py:49
+msgid "New comparison"
+msgstr "Ново поређење"
+
+#: meld/resources/ui/new-diff-tab.ui:50
+msgid "File"
+msgstr "Датотека"
+
+#: meld/resources/ui/new-diff-tab.ui:81
+msgid "Folder"
+msgstr "Фасцикла"
+
+#: meld/resources/ui/new-diff-tab.ui:110
+msgid "Version control"
+msgstr "Управљање издањем"
+
+#: meld/resources/ui/new-diff-tab.ui:159 meld/resources/ui/new-diff-tab.ui:264
+msgid "_3-way comparison"
+msgstr "Упореди _3-елемента"
+
+#: meld/resources/ui/new-diff-tab.ui:173
+msgid "Select First File"
+msgstr "Изаберите прву датотеку"
+
+#: meld/resources/ui/new-diff-tab.ui:185
+msgid "Select Second File"
+msgstr "Изаберите другу датотеку"
+
+#: meld/resources/ui/new-diff-tab.ui:198
+msgid "Select Third File"
+msgstr "Изаберите трећу датотеку"
+
+#: meld/resources/ui/new-diff-tab.ui:229
+msgid "Select First Folder"
+msgstr "Изаберите прву фасциклу"
+
+#: meld/resources/ui/new-diff-tab.ui:241
+msgid "Select Second Folder"
+msgstr "Изаберите другу фасциклу"
+
+#: meld/resources/ui/new-diff-tab.ui:254
+msgid "Select Third Folder"
+msgstr "Изаберите трећу фасциклу"
+
+#: meld/resources/ui/new-diff-tab.ui:297
+msgid "Select Version-controlled Folder"
+msgstr "Изаберите фасциклу управљања издањем"
+
+#: meld/resources/ui/new-diff-tab.ui:326
+msgid "_Blank comparison"
+msgstr "_Празно поређење"
+
+#: meld/resources/ui/new-diff-tab.ui:336
+msgid "C_ompare"
+msgstr "_Упореди"
+
+#: meld/resources/ui/patch-dialog.ui:5
+msgid "Format as Patch"
+msgstr "Обликуј као исправку"
+
+#: meld/resources/ui/patch-dialog.ui:20
+msgid "Use differences between:"
+msgstr "Користи разлике између:"
+
+#: meld/resources/ui/patch-dialog.ui:30
+msgid "Left and middle panes"
+msgstr "Лева и средња површ"
+
+#: meld/resources/ui/patch-dialog.ui:38
+msgid "Middle and right panes"
+msgstr "Средња и десна површ"
+
+#: meld/resources/ui/patch-dialog.ui:48
+msgid "_Reverse patch direction"
+msgstr "Преокрени смер _исправке"
+
+#: meld/resources/ui/patch-dialog.ui:76
+msgid "Copy to Clipboard"
+msgstr "Умножи у оставу"
+
+#: meld/resources/ui/patch-dialog.ui:92 meld/patchdialog.py:141
+msgid "Save Patch"
+msgstr "Сачувај исправку"
+
+#: meld/resources/ui/path-label.ui:20
+msgid "Path"
+msgstr "Путања"
+
+#: meld/resources/ui/path-label.ui:45
+msgid "Copy Path"
+msgstr "Умножи путању"
+
+#: meld/resources/ui/path-label.ui:47
+msgid "Copy the full path"
+msgstr "Умножи пуну путању"
+
+#: meld/resources/ui/path-label.ui:55
+msgid "View the folder in file manager"
+msgstr "Прегледајте фасциклу у управнику датотека"
+
+#: meld/resources/ui/preferences.ui:10
+msgid "Editor"
+msgstr "Уређивач"
+
+#: meld/resources/ui/preferences.ui:14
+msgid "Appearance"
+msgstr "Изглед"
+
+#: meld/resources/ui/preferences.ui:17
+msgid "Interface Style"
+msgstr "Стил сучеља"
+
+#: meld/resources/ui/preferences.ui:34
+msgid "Use Custom Font"
+msgstr "Произвољни словни лик"
+
+#: meld/resources/ui/preferences.ui:35
+msgid "Choose a font different to the system default monospace font"
+msgstr ""
+"Изаберите словни лик другачији од ситемског основног словног лика сталне "
+"ширине"
+
+#: meld/resources/ui/preferences.ui:43
+msgid "Font"
+msgstr "Словни лик"
+
+#: meld/resources/ui/preferences.ui:44
+msgid "The font used within the editor"
+msgstr "Словни лик коришћен у уређивачу"
+
+#: meld/resources/ui/preferences.ui:59
+msgid "Use Syntax Highlighting"
+msgstr "Користи истицање синтаксе"
+
+#: meld/resources/ui/preferences.ui:67
+msgid "Color Scheme"
+msgstr "Шема боје"
+
+#: meld/resources/ui/preferences.ui:86
+msgid "Wrap Text"
+msgstr "Прелом текста"
+
+#: meld/resources/ui/preferences.ui:87
+msgid "How text should be wrapped when wider than the pane"
+msgstr "Како ће се преламати текст када је шири од окна"
+
+#: meld/resources/ui/preferences.ui:107
+msgid "Highlight Current Line"
+msgstr "Истиче текући ред"
+
+#: meld/resources/ui/preferences.ui:108
+msgid "Make the current line stand out with highlights"
+msgstr "Чини да се текући ред истакне са истицањем"
+
+#: meld/resources/ui/preferences.ui:113
+msgid "Show Line Numbers"
+msgstr "Приказује бројеве редова"
+
+#: meld/resources/ui/preferences.ui:114
+msgid "Display line numbers next to each line of text"
+msgstr "Приказује бројеве редова поред сваког реда текста"
+
+#: meld/resources/ui/preferences.ui:123 meld/resources/ui/statusbar-menu.ui:9
+msgid "Show whitespace"
+msgstr "Прикажите размаке"
+
+#: meld/resources/ui/preferences.ui:130
+msgid "Indentation"
+msgstr "Увлачење"
+
+#: meld/resources/ui/preferences.ui:133
+msgid "Tab character"
+msgstr "Знак табулатора"
+
+#: meld/resources/ui/preferences.ui:134
+msgid "The character to be inserted for Tab"
+msgstr "Знак којиће бити уметнут за Таб"
+
+#: meld/resources/ui/preferences.ui:149
+msgid "_Indentation Size"
+msgstr "Величина _увлачења"
+
+#: meld/resources/ui/preferences.ui:150
+msgid "The number of characters to indent"
+msgstr "Број знакова за увлачење"
+
+#: meld/resources/ui/preferences.ui:167
+msgid "Code Overview"
+msgstr "Преглед кода"
+
+#: meld/resources/ui/preferences.ui:170
+msgid "Show overview map"
+msgstr "Прикажи мапу прегледа"
+
+#: meld/resources/ui/preferences.ui:177
+msgid "External Editor"
+msgstr "Спољни уређивач"
+
+#: meld/resources/ui/preferences.ui:181
+msgid "Use custom text editor"
+msgstr "Користи основни уређивач текста"
+
+#: meld/resources/ui/preferences.ui:182
+msgid "Choose an external text editor different to the system default"
+msgstr "Изаберите спољни уређивач текста другачији од основног системског"
+
+#: meld/resources/ui/preferences.ui:190
+msgid "Custom Editor Command"
+msgstr "Произвољна наредба уређивача"
+
+#: meld/resources/ui/preferences.ui:201
+msgid "Folder Comparison"
+msgstr "Поређење фасцикли"
+
+#: meld/resources/ui/preferences.ui:205
+msgid "Comparison Options"
+msgstr "Опције поређења"
+
+#: meld/resources/ui/preferences.ui:209
+msgid "Compare files based only on size and timestamp"
+msgstr "Упоредите датотеке само на основу величине и временске ознаке"
+
+#: meld/resources/ui/preferences.ui:217
+msgid "Timestamp resolution"
+msgstr "Резолуција временске ознаке"
+
+#: meld/resources/ui/preferences.ui:251
+msgid "Enabling text filters will make comparing large files much slower"
+msgstr ""
+"Укључивање филтера текста ће учинити поређење великих датотека много спорим"
+
+#: meld/resources/ui/preferences.ui:258
+msgid "Visible Columns"
+msgstr "Приказане колоне"
+
+#: meld/resources/ui/preferences.ui:274
+msgid "Version Control"
+msgstr "Управљање издањем"
+
+#: meld/resources/ui/preferences.ui:278
+msgid "Version Comparisons"
+msgstr "Поређење издања"
+
+#: meld/resources/ui/preferences.ui:282
+msgid "Order when Comparing File Revisions"
+msgstr "Редослед при поређењу прегледа датотеке"
+
+#: meld/resources/ui/preferences.ui:297
+msgid "Order when Merging Files"
+msgstr "Редослед при спајању датотека"
+
+#: meld/resources/ui/preferences.ui:314
+msgid "Commit Message"
+msgstr "Порука предаје"
+
+#: meld/resources/ui/preferences.ui:317
+msgid "Show right margin"
+msgstr "Прикажи десну маргину"
+
+#: meld/resources/ui/preferences.ui:322
+msgid "Margin position"
+msgstr "Положај маргине"
+
+#: meld/resources/ui/preferences.ui:336
+msgid "Automatically _break lines at right margin on commit"
+msgstr "Сам _преламај редове на десној маргини при предаји"
+
+#: meld/resources/ui/preferences.ui:346
+msgid "Filters"
+msgstr "Пропусници"
+
+#: meld/resources/ui/preferences.ui:350
+msgid "Filename filters"
+msgstr "Филтери назива датотека"
+
+#. Translators: 'filter out' refers to removing matched files and folders from the display
+#: meld/resources/ui/preferences.ui:351
+msgid ""
+"When performing directory comparisons, you may filter out files and "
+"directories by name. Each pattern is a list of shell style wildcards "
+"separated by spaces."
+msgstr ""
+"Приликом поређења директоријума, можете да издвојите датотеке и фасцикле "
+"према називу. Сваки образац је списак џокера у стилу конзоле раздвојених "
+"размаком."
+
+#: meld/resources/ui/preferences.ui:362
+msgid "Change trimming"
+msgstr "Скраћивање измене"
+
+#: meld/resources/ui/preferences.ui:365
+msgid "Trim blank line differences from the start and end of changes"
+msgstr "Скраћује разлике празних редова од почетка и краја измена"
+
+#: meld/resources/ui/preferences.ui:366
+msgid ""
+"Removing blank lines can simplify comparisons, and can combine with text "
+"filters to fully remove changes."
+msgstr ""
+"Уклањање празних редова може да поједностави поређења, и може да се "
+"комбинује са филтерима текста зарад потпуног уклањања измена."
+
+#: meld/resources/ui/preferences.ui:373
+msgid "Text filters"
+msgstr "Филтери текста"
+
+#: meld/resources/ui/preferences.ui:374
+msgid ""
+"When performing file comparisons, you may ignore certain types of changes. "
+"Each pattern here is a python regular expression which replaces matching "
+"text with the empty string before comparison is performed. If the expression "
+"contains groups, only the groups are replaced. See the user manual for more "
+"details."
+msgstr ""
+"Приликом поређења датотека, можете да занемарите одређене врсте измена. "
+"Сваки образац је регуларан израз питона који замењује подударајући текст "
+"празним нискама пре извршавања поређења. Ако израз садржи групе, само групе "
+"бивају замењене. За више детаља погледајте упутство за кориснике."
+
+#: meld/resources/ui/push-dialog.ui:6
+msgid "Push local commits to remote?"
+msgstr "Да погурам месне предаје у удаљене?"
+
+#: meld/resources/ui/push-dialog.ui:7
+msgid "The commits to be pushed are determined by your version control system."
+msgstr ""
+"Предаје које ће бити погуране се одређују вашим системом управљања издањем."
+
+#: meld/resources/ui/push-dialog.ui:13
+msgid "_Push commits"
+msgstr "_Погурај предаје"
+
+#: meld/resources/ui/recent-selector.ui:29
+msgid "Search recent comparisons…"
+msgstr "Тражи недавна поређења…"
+
+#: meld/resources/ui/recent-selector.ui:56
+msgid "_Open"
+msgstr "_Отвори"
+
+#: meld/resources/ui/revert-dialog.ui:6
+msgid "Discard unsaved changes to documents?"
+msgstr "Да одбацим несачуване измене у документима?"
+
+#: meld/resources/ui/revert-dialog.ui:7
+msgid "Changes made to the following documents will be permanently lost:"
+msgstr "Измене начињене над следећим документима ће бити трајно изгубљене:"
+
+#: meld/resources/ui/revert-dialog.ui:18
+#: meld/resources/ui/save-confirm-dialog.ui:16
+msgid "_Discard"
+msgstr "_Одбаци"
+
+#: meld/resources/ui/save-confirm-dialog.ui:6
+msgid "Save changes to documents before closing?"
+msgstr "Да сачувам измене у документу пре затварања?"
+
+#: meld/resources/ui/save-confirm-dialog.ui:7
+msgid ""
+"Open documents contain unsaved changes. Changes which are not saved will be "
+"permanently lost."
+msgstr ""
+"Отворени документи садрже несачуване измене. Измене које нису сачуване биће "
+"трајно изгубљене."
+
+#: meld/resources/ui/save-confirm-dialog.ui:17
+msgid "_Save"
+msgstr "_Сачувај"
+
+#: meld/resources/ui/statusbar-menu.ui:17
+msgid "Text wrapping"
+msgstr "Преламање текста"
+
+#: meld/resources/ui/vcview.ui:11
+msgid "Commit changes to version control"
+msgstr "Уградите измене у управљање издањем"
+
+#: meld/resources/ui/vcview.ui:14
+msgid "Commit…"
+msgstr "Угради…"
+
+#: meld/resources/ui/vcview.ui:28
+msgid "Pull remote changes to the local repository"
+msgstr "Повуците удаљене измене у локалну ризницу"
+
+#: meld/resources/ui/vcview.ui:39
+msgid "Push local changes to remote"
+msgstr "Погурајте месне измене у удаљене"
+
+#: meld/resources/ui/vcview.ui:58
+msgid "Add to version control"
+msgstr "Додајте у управљање издањем"
+
+#: meld/resources/ui/vcview.ui:69
+msgid "Remove staged changes"
+msgstr "Уклоните старе измене"
+
+#: meld/resources/ui/vcview.ui:80
+msgid "Remove from version control"
+msgstr "Уклоните из управљања издањем"
+
+#: meld/resources/ui/vcview.ui:91
+msgid "Revert working copy to original state"
+msgstr "Вратите радни примерак на првобитно стање"
+
+#: meld/resources/ui/vcview.ui:102
+msgid "Mark as resolved in version control"
+msgstr "Означите као решено у управљању издањем"
+
+#: meld/resources/ui/vcview.ui:123
+msgid "Open version controlled folder in this pane"
+msgstr "Отворите фасциклу управљану издањем у овом окну"
+
+#: meld/resources/ui/vcview.ui:130
+msgid "Unknown folder"
+msgstr "Непозната фасцикла"
+
+#: meld/resources/ui/vcview.ui:194
+msgid "Location"
+msgstr "Путања"
+
+#: meld/resources/ui/vcview.ui:203
+msgid "Status"
+msgstr "Стање"
+
+#: meld/resources/ui/vcview.ui:212
+msgid "Extra"
+msgstr "Посебно"
+
+#: meld/resources/ui/vcview.ui:236
+msgid "Console output"
+msgstr "Излаз конзоле"
+
+#: meld/resources/ui/vcview.ui:265
+msgid "_Clear"
+msgstr "_Очисти"
+
+#: meld/resources/ui/vcview.ui:274
+msgid "_Compare"
+msgstr "_Упореди"
+
+#: meld/resources/ui/vcview.ui:278
+msgid "Co_mmit…"
+msgstr "У_гради…"
+
+#: meld/resources/ui/vcview.ui:289
+msgid "_Unstage"
+msgstr "_Одстажирај"
+
+#: meld/resources/ui/vcview.ui:297
+msgid "Re_vert"
+msgstr "_Поврати"
+
+#: meld/resources/ui/vcview.ui:301
+msgid "Delete"
+msgstr "Обриши"
+
+#: meld/resources/ui/vcview.ui:308
+msgid "Resolve Conflict"
+msgstr "Реши сукоб"
+
+#: meld/const.py:40
+msgid "UNIX (LF)"
+msgstr "ЈУНИКС (LF)"
+
+#: meld/const.py:41
+msgid "DOS/Windows (CR-LF)"
+msgstr "ДОС/Виндоуз (CR-LF)"
+
+#: meld/const.py:42
+msgid "Mac OS (CR)"
+msgstr "Мек ОС (CR)"
+
+#. Create file size CellRenderer
+#: meld/dirdiff.py:664 meld/ui/columnlist.py:43
+msgid "Size"
+msgstr "Величина"
+
+#. Create date-time CellRenderer
+#: meld/dirdiff.py:672 meld/ui/columnlist.py:44
+msgid "Modification time"
+msgstr "Време измене"
+
+#. Create ISO-format date-time CellRenderer
+#: meld/dirdiff.py:680 meld/ui/columnlist.py:45
+msgid "Modification time (ISO)"
+msgstr "Време измене (ISO)"
+
+#. Create permissions CellRenderer
+#: meld/dirdiff.py:688 meld/ui/columnlist.py:46
+msgid "Permissions"
+msgstr "Овлашћења"
+
+#: meld/dirdiff.py:976 meld/dirdiff.py:1006
+#, python-brace-format
+msgid "Scanning {folder}"
+msgstr "Прегледам „{folder}“"
+
+#: meld/dirdiff.py:1145
+msgid "Done"
+msgstr "Готово"
+
+#: meld/dirdiff.py:1157
+msgid "Folder {} is being compared to itself"
+msgstr "Фасцикла „{}“ је упоређена са самом собом"
+
+#: meld/dirdiff.py:1165
+msgid "Folders have no differences"
+msgstr "Фасцикле се не разликују"
+
+#: meld/dirdiff.py:1166
+msgid "Contents of scanned files in folders are identical."
+msgstr "Садржаји прегледаних датотека у фасциклама су исти."
+
+#: meld/dirdiff.py:1168
+msgid ""
+"Scanned files in folders appear identical, but contents have not been "
+"scanned."
+msgstr ""
+"Прегледане датотеке у фасциклама изгледа да су исте, али садржај није "
+"прегледан."
+
+#: meld/dirdiff.py:1172
+msgid "File filters are in use, so not all files have been scanned."
+msgstr "Филтери датотека су у употреби, тако да нису све датотеке прегледане."
+
+#: meld/dirdiff.py:1175
+msgid "Text filters are in use and may be masking content differences."
+msgstr "Филтери текста су у употреби и можда су замаскирали разлике садржаја."
+
+#: meld/dirdiff.py:1191 meld/filediff.py:2165
+msgid "Hide"
+msgstr "Сакриј"
+
+#: meld/dirdiff.py:1193 meld/filediff.py:2167 meld/filediff.py:2197
+#: meld/filediff.py:2199 meld/filediff.py:2223 meld/ui/msgarea.py:140
+#: meld/ui/msgarea.py:152
+msgid "Hi_de"
+msgstr "_Сакриј"
+
+#: meld/dirdiff.py:1204
+msgid "Multiple errors occurred while scanning this folder"
+msgstr "Дошло је до више грешака за време претраживања ове фасцикле"
+
+#: meld/dirdiff.py:1205
+msgid "Files with invalid encodings found"
+msgstr "Пронађене су датотеке са неисправним кодирањем"
+
+#: meld/dirdiff.py:1208
+msgid "Some files were in an incorrect encoding. The names are something like:"
+msgstr "Неке датотеке бејаху у неисправном кодирању. Називи су нешто као:"
+
+#: meld/dirdiff.py:1210
+msgid "Files hidden by case insensitive comparison"
+msgstr "Датотеке скривене поређењем неосетљивим на величину слова"
+
+#: meld/dirdiff.py:1213
+msgid ""
+"You are running a case insensitive comparison on a case sensitive "
+"filesystem. The following files in this folder are hidden:"
+msgstr ""
+"Покренули сте поређење независно од величине слова на систему датотека где "
+"је она битна. Неке датотеке нису видљиве:"
+
+#: meld/dirdiff.py:1217
+msgid "Files had mismatched leading or trailing whitespace"
+msgstr "Датотеке имају неупарену водећу или крајњу празнину"
+
+#: meld/dirdiff.py:1220
+msgid ""
+"This comparison found some files that differed only in leading or trailing "
+"whitespace. Their names appear as:"
+msgstr ""
+"Овим поређењем је утврђено да се неке датотеке разликују само у водећој или "
+"завршној празнини. А оне су:"
+
+#: meld/dirdiff.py:1231
+#, python-brace-format
+msgid "“{first_file}” hidden by “{second_file}”"
+msgstr "„{first_file}“ је скривена од стране „{second_file}“"
+
+#: meld/dirdiff.py:1315
+#, python-format
+msgid "Replace folder “%s”?"
+msgstr "Да заменим фасциклу „%s“?"
+
+#: meld/dirdiff.py:1317
+#, python-format
+msgid ""
+"Another folder with the same name already exists in “%s”.\n"
+"If you replace the existing folder, all files in it will be lost."
+msgstr ""
+"Фасцикла са истим називом већ постоји у „%s“.\n"
+"Ако замените постојећу фасциклу, све датотеке у њој биће изгубљене."
+
+#: meld/dirdiff.py:1332
+msgid "Error copying file"
+msgstr "Грешка умножавања датотеке"
+
+#: meld/dirdiff.py:1333
+#, python-brace-format
+msgid ""
+"Couldn’t copy {source}\n"
+"to {dest}.\n"
+"\n"
+"{error}"
+msgstr ""
+"Не могу да умножим „{source}“\n"
+"у „{dest}“.\n"
+"\n"
+"{error}"
+
+#: meld/dirdiff.py:1950
+msgid "No folder"
+msgstr "Нема фасцикле"
+
+#: meld/dirdiff.py:1963
+msgid "Folder comparison:"
+msgstr "Поређење фасцикли:"
+
+#: meld/externalhelpers.py:130
+msgid "Failed to launch custom editor"
+msgstr "Нисам успео да покренем произвољног уређивача"
+
+#: meld/externalhelpers.py:140
+msgid "Unsupported file type"
+msgstr "Неподржана врста датотеке"
+
+#: meld/filediff.py:1246
+msgid "Comparison results will be inaccurate"
+msgstr "Резултати поређења биће нетачни"
+
+#: meld/filediff.py:1248
+msgid ""
+"A filter changed the number of lines in the file, which is unsupported. The "
+"comparison will not be accurate."
+msgstr ""
+"Филтер је изменио број редова у датотеци, а то није подржано. Поређење неће "
+"бити тачно."
+
+#: meld/filediff.py:1290
+msgid "Mark conflict as resolved?"
+msgstr "Да означим сукоб решеним?"
+
+#: meld/filediff.py:1292
+msgid ""
+"If the conflict was resolved successfully, you may mark it as resolved now."
+msgstr "Ако је сукоб успешно решен, сада га можете означити решеним."
+
+#: meld/filediff.py:1296
+msgid "Cancel"
+msgstr "Откажи"
+
+#: meld/filediff.py:1297
+msgid "Mark _Resolved"
+msgstr "Означи _решеним"
+
+#: meld/filediff.py:1576 meld/imagediff.py:234
+msgid "File comparison:"
+msgstr "Поређење датотека:"
+
+#: meld/filediff.py:1722
+#, python-brace-format
+msgid ""
+"Line {line_number} exceeded maximum line length ({line_length} > "
+"{LINE_LENGTH_LIMIT}).\n"
+"\n"
+"Loading files with very long lines may make Meld slow or unresponsive."
+msgstr ""
+"Ред {line_number}. је премашио највећу дужину реда ({line_length} > "
+"{LINE_LENGTH_LIMIT}).\n"
+"\n"
+"Учитавање датотека са врло дугим редовима може учинити Мелд спорим или "
+"неодазивајућим."
+
+#: meld/filediff.py:1772
+#, python-format
+msgid "There was a problem opening the file “%s”."
+msgstr "Дошло је до проблема отварања датотеке „%s“."
+
+#: meld/filediff.py:1799
+#, python-format
+msgid "File %s appears to be a binary file."
+msgstr "Изгледа да је „%s“ извршна датотека."
+
+#: meld/filediff.py:1800
+msgid "Do you want to open the file using the default application?"
+msgstr "Да ли желите да отворите датотеку користећи основни програм?"
+
+#: meld/filediff.py:1805
+msgid "Open"
+msgstr "Отвори"
+
+#: meld/filediff.py:1910
+#, python-format
+msgid "File %s has changed on disk"
+msgstr "Датотека „%s“ је измењена на диску"
+
+#: meld/filediff.py:1911
+msgid "Do you want to reload the file?"
+msgstr "Да ли желите поново да учитате датотеку?"
+
+#: meld/filediff.py:1916
+msgid "_Reload"
+msgstr "_Учитај поново"
+
+#: meld/filediff.py:2117
+msgid "File {} is being compared to itself"
+msgstr "Датотека „{}“ је упоређена са самом собом"
+
+#: meld/filediff.py:2128
+msgid "Files are identical"
+msgstr "Датотеке су истоветне"
+
+#: meld/filediff.py:2142
+msgid ""
+"Text filters are being used, and may be masking differences between files. "
+"Would you like to compare the unfiltered files?"
+msgstr ""
+"Коришћени су филтери текста, а могу постојати и замаскиране разлике између "
+"датотека. Да ли желите да поредите неиздвојене датотеке?"
+
+#: meld/filediff.py:2148
+msgid "Files differ in line endings only"
+msgstr "Датотеке се разликују само по завршецима редова"
+
+#: meld/filediff.py:2150
+#, python-format
+msgid ""
+"Files are identical except for differing line endings:\n"
+"%s"
+msgstr ""
+"Датотеке су истоветне али се разликују само по завршецима редова:\n"
+"%s"
+
+#: meld/filediff.py:2170
+msgid "Show without filters"
+msgstr "Приказује без филтера"
+
+#: meld/filediff.py:2189
+msgid "Change highlighting incomplete"
+msgstr "Истицање измена није довршено"
+
+#: meld/filediff.py:2191
+msgid ""
+"Some changes were not highlighted because they were too large. You can force "
+"Meld to take longer to highlight larger changes, though this may be slow."
+msgstr ""
+"Неке измене нису истакнуте зато што су превелике. Можете да приморате Мелд "
+"да продужи са истицањем већих измена, иако то може бити споро."
+
+#: meld/filediff.py:2200
+msgid "Keep highlighting"
+msgstr "Задржите истицање"
+
+#: meld/filediff.py:2202
+msgid "_Keep highlighting"
+msgstr "_Задржи истицање"
+
+#: meld/filediff.py:2224
+msgid "_Load anyway"
+msgstr "Ипак _учитај"
+
+#: meld/filediff.py:2235
+msgid "Saving failed"
+msgstr "Чување није успело"
+
+#: meld/filediff.py:2237
+msgid ""
+"Please consider copying any critical changes to another program or file to "
+"avoid data loss."
+msgstr ""
+"Размотрите умножавање свих ризичних измена у други програм или датотеку да "
+"избегнете губитак података."
+
+#: meld/filediff.py:2246
+msgid "Save Left Pane As"
+msgstr "Сачувај леву површ као"
+
+#: meld/filediff.py:2248
+msgid "Save Middle Pane As"
+msgstr "Сачувај средњу површ као"
+
+#: meld/filediff.py:2250
+msgid "Save Right Pane As"
+msgstr "Сачувај десну површ као"
+
+#: meld/filediff.py:2271
+#, python-format
+msgid "File %s has changed on disk since it was opened"
+msgstr "Датотека „%s“ је измењена на диску након отварања"
+
+#: meld/filediff.py:2274
+msgid "If you save it, any external changes will be lost."
+msgstr "Ако је сачувате, све спољне измене ће бити изгубљене."
+
+#: meld/filediff.py:2278
+msgid "Save Anyway"
+msgstr "Ипак сачувај"
+
+#: meld/filediff.py:2279
+msgid "Don’t Save"
+msgstr "Немој чувати"
+
+#: meld/filediff.py:2317
+msgid ""
+"File “{}” contains characters that can’t be encoded using its current "
+"encoding “{}”."
+msgstr ""
+"Датотека „{}“ садржи знакове који се не могу кодирати употребом њеног "
+"тренутног кодирања „{}“."
+
+#: meld/filediff.py:2321 meld/patchdialog.py:127
+#, python-format
+msgid ""
+"Couldn’t save file due to:\n"
+"%s"
+msgstr ""
+"Не могу да сачувам датотеку због следећег:\n"
+"%s"
+
+#: meld/filediff.py:2326 meld/patchdialog.py:126
+#, python-format
+msgid "Could not save file %s."
+msgstr "Не могу да сачувам датотеку „%s“."
+
+#: meld/filediff.py:2744
+msgid "Live comparison updating disabled"
+msgstr "Искључено је живо ажурирање поређења"
+
+#: meld/filediff.py:2746
+msgid ""
+"Live updating of comparisons is disabled when synchronization points are "
+"active. You can still manually refresh the comparison, and live updates will "
+"resume when synchronization points are cleared."
+msgstr ""
+"Живо ажурирање поређења је искључено када су активне тачке усклађивања. Још "
+"увек можете ручно да освежите поређење, а жива ажурирања ће наставити са "
+"радом након чишћења тачака усклађивања."
+
+#: meld/filediff.py:2786
+msgid "Can't swap unsaved files"
+msgstr "Не могу да разменим несачуване датотеке"
+
+#: meld/filediff.py:2787
+msgid "Files must be saved to disk before swapping panes."
+msgstr "Датотеке морају бити сачуване пре размене окана."
+
+#: meld/filediff.py:2793
+msgid "Can't swap version control comparisons"
+msgstr "Не могу да разменим поређења контроле верзије"
+
+#: meld/filediff.py:2794
+msgid "Swapping panes is not supported in version control mode."
+msgstr "Размена површи није подржана у режиму управљања издањем."
+
+#: meld/iohelpers.py:43
+msgid "Deleting remote folders is not supported"
+msgstr "Брисање удаљених фасцикли није подржано"
+
+#: meld/iohelpers.py:45
+msgid "Not a file or directory"
+msgstr "Није датотека или директоријум"
+
+#: meld/iohelpers.py:65
+msgid "Delete Permanently?"
+msgstr "Да обришем трајно?"
+
+#: meld/iohelpers.py:68
+msgid "Do you want to delete it permanently?"
+msgstr "Да ли желите да је трајно обришете?"
+
+#: meld/iohelpers.py:72
+msgid "_Delete Permanently"
+msgstr "_Трајно обриши"
+
+#: meld/meldapp.py:121
+msgid "translator-credits"
+msgstr ""
+"Данило Шеган <dsegan@gmx.net>\n"
+"Мирослав Николић <miroslavnikolic@rocketmail.com>\n"
+"\n"
+"http://prevod.org — превод на српски језик"
+
+#: meld/meldapp.py:173
+msgid "wrong number of arguments supplied to --diff"
+msgstr "погрешан број аргумената придодат уз „--diff“"
+
+#: meld/meldapp.py:179
+msgid "Start with an empty window"
+msgstr "Отвара један празан прозор"
+
+# bug: string composition is bad i18n, and will make l10n hard
+#: meld/meldapp.py:181 meld/meldapp.py:185
+msgid "file"
+msgstr "датотека"
+
+#: meld/meldapp.py:181 meld/meldapp.py:189
+msgid "folder"
+msgstr "фасцикла"
+
+#: meld/meldapp.py:182
+msgid "Start a version control comparison"
+msgstr "Покреће поређење контроле верзије"
+
+#: meld/meldapp.py:186
+msgid "Start a 2- or 3-way file comparison"
+msgstr "Покреће поређење 2 или 3 датотеке"
+
+#: meld/meldapp.py:190
+msgid "Start a 2- or 3-way folder comparison"
+msgstr "Покреће поређење 2 или 3 фасцикле"
+
+#: meld/meldapp.py:197
+msgid ""
+"\n"
+"\n"
+"For file comparisons, the special argument @blank may be used instead of\n"
+"a <file> argument to create a blank pane."
+msgstr ""
+"\n"
+"\n"
+"За поређење датотека, посебан аргумент „@blank“ може се користити уместо\n"
+"аргумента <file> за отварање празног окна."
+
+#: meld/meldapp.py:241
+#, python-format
+msgid "Error: %s\n"
+msgstr "Грешка: %s\n"
+
+#: meld/meldapp.py:248
+msgid "Meld is a file and directory comparison tool."
+msgstr "Мелд је алат за поређење датотека и фасцикли."
+
+#: meld/meldapp.py:256
+msgid "Set label to use instead of file name"
+msgstr "Подешава ознаку за коришћење уместо назива датотеке"
+
+#: meld/meldapp.py:263
+msgid "Open a new tab in an already running instance"
+msgstr "Отвара нови језичак у једном већ отвореном примерку"
+
+#: meld/meldapp.py:270
+msgid "Automatically compare all differing files on startup"
+msgstr "Самостално пореди све разликујуће датотеке приликом покретања"
+
+#: meld/meldapp.py:273
+msgid "Ignored for compatibility"
+msgstr "Занемарено због сагласности"
+
+#: meld/meldapp.py:282
+msgid "Set the target file for saving a merge result"
+msgstr "Подешава циљну датотеку за чување резултата стапања"
+
+#: meld/meldapp.py:289
+msgid "Automatically merge files"
+msgstr "Самостално стапа датотеке"
+
+#: meld/meldapp.py:298
+msgid "Load a saved comparison from a Meld comparison file"
+msgstr "Учитава сачувано поређење из Мелдове датотеке поређења"
+
+#: meld/meldapp.py:307
+msgid "Create a diff tab for the supplied files or folders"
+msgstr "Прави језичак разлика придодате датотеке или фасцикле"
+
+#: meld/meldapp.py:328
+#, python-format
+msgid "too many arguments (wanted 0-3, got %d)"
+msgstr "превише аргумената (тражено је 0-3, добих %d)"
+
+#: meld/meldapp.py:330
+msgid "can’t auto-merge less than 3 files"
+msgstr "не могу самостално да стопим мање од 3 датотеке"
+
+#: meld/meldapp.py:332
+msgid "can’t auto-merge directories"
+msgstr "не могу самостално да стопим директоријуме"
+
+#: meld/meldapp.py:365
+msgid "Error reading saved comparison file"
+msgstr "Грешка читања сачуване датотеке поређења"
+
+#: meld/meldapp.py:396
+#, python-format
+msgid "invalid path or URI “%s”"
+msgstr "неисправна путања или адреса „%s“"
+
+#: meld/meldapp.py:402
+msgid "remote folder “{}” not supported"
+msgstr "удаљена фасцикла „{}“ није подржана"
+
+#. TRANSLATORS: This is the label of a new, currently-unnamed file.
+#: meld/meldbuffer.py:125
+msgid "<unnamed>"
+msgstr "<неименовано>"
+
+#: meld/meldwindow.py:138
+msgid "Filename"
+msgstr "Назив датотеке"
+
+#: meld/meldwindow.py:376
+#, python-format
+msgid "Need three files to auto-merge, got: %r"
+msgstr "Потребне су три датотеке за само-спајање, добих: %r"
+
+#: meld/meldwindow.py:405
+msgid "Cannot compare a mixture of files and directories"
+msgstr "Не могу да поредим мешавину датотека и фасцикли"
+
+#: meld/meldwindow.py:449
+msgid "Failed to mount archive"
+msgstr "Нисам успео да прикачим архиву"
+
+#: meld/meldwindow.py:509
+msgid "Cannot compare a non-existent file"
+msgstr "Не могу да поредим непостојећу датотеку"
+
+#: meld/misc.py:109
+msgid ""
+"{}\n"
+"\n"
+"Meld encountered a critical error while running:\n"
+"<tt>{}</tt>"
+msgstr ""
+"{}\n"
+"\n"
+"Мелд је наишао на критичну грешку приликом покретања:\n"
+"<tt>{}</tt>"
+
+#: meld/misc.py:163
+msgid "[None]"
+msgstr "[ништа]"
+
+#: meld/preferences.py:40
+msgid "label"
+msgstr "натпис"
+
+#: meld/preferences.py:40
+msgid "pattern"
+msgstr "образац"
+
+#: meld/preferences.py:194
+msgid "Never"
+msgstr "Никад"
+
+#: meld/preferences.py:195
+msgid "At Spaces"
+msgstr "На размаку"
+
+#: meld/preferences.py:196
+msgid "Anywhere"
+msgstr "Било где"
+
+#: meld/preferences.py:202
+msgid "Follow System"
+msgstr "Прати систем"
+
+#: meld/preferences.py:203
+msgid "Light"
+msgstr "Светла"
+
+#: meld/preferences.py:204
+msgid "Dark"
+msgstr "Тамна"
+
+#: meld/preferences.py:210
+msgid "Tab"
+msgstr "Језичак"
+
+#: meld/preferences.py:211
+msgid "Spaces"
+msgstr "Размаци"
+
+#: meld/preferences.py:217
+msgid "1ns (ext4)"
+msgstr "1ns (екст4)"
+
+#: meld/preferences.py:218
+msgid "100ns (NTFS)"
+msgstr "100ns (НТФС)"
+
+#: meld/preferences.py:219
+msgid "1s (ext2/ext3)"
+msgstr "1s (екст2/екст3)"
+
+#: meld/preferences.py:220
+msgid "2s (VFAT)"
+msgstr "2s (ВФАТ)"
+
+#: meld/preferences.py:221
+msgid "Ignore timestamp"
+msgstr "Занемари временску ознаку"
+
+#: meld/preferences.py:227
+msgid "Left is remote, right is local"
+msgstr "Лева је удаљена, десна је месна"
+
+#: meld/preferences.py:228
+msgid "Left is local, right is remote"
+msgstr "Лева је месна, десна је удаљена"
+
+#: meld/preferences.py:234
+msgid "Remote, merge, local"
+msgstr "Удаљена, спојена, месна"
+
+#: meld/preferences.py:235
+msgid "Local, merge, remote"
+msgstr "Месна, спојена, удаљена"
+
+#: meld/recent.py:110
+msgid "Version control:"
+msgstr "Управљање издањем:"
+
+#: meld/style.py:132
+msgid "Couldn’t find color scheme details for {}; this is a bad install"
+msgstr ""
+"Не могу да нађем појединости шеме боје за „{}“; јер је лоше инсталирана"
+
+#: meld/ui/bufferselectors.py:112
+#, python-brace-format
+msgid "{name} ({charset})"
+msgstr "{name} ({charset})"
+
+#: meld/ui/bufferselectors.py:144 meld/ui/bufferselectors.py:152
+msgid "Plain Text"
+msgstr "Обичан текст"
+
+#: meld/ui/columnlist.py:115
+msgid "Column options"
+msgstr "Опције ступца"
+
+#: meld/ui/pathlabel.py:36
+msgid "Unnamed file"
+msgstr "Неименована датотека"
+
+#. Abbreviation for line, column so that it will fit in the status bar
+#: meld/ui/statusbar.py:112
+#, python-brace-format
+msgid "Ln {line}, Col {column}"
+msgstr "Ред {line}, кол {column}"
+
+#: meld/ui/statusbar.py:160
+msgid "Line you want to move the cursor to"
+msgstr "Ред на који желите да поставите курсор"
+
+#. TRANSLATORS: This is the status bar label for a group of settings,
+#. such as text wrapping, show line numbers, whitespace, etc.
+#: meld/ui/statusbar.py:272
+msgid "Display"
+msgstr "Приказ"
+
+#: meld/ui/vcdialogs.py:58
+msgid "No files will be committed"
+msgstr "Ниједна датотека неће бити уграђена"
+
+#. Translators: First element is replaced by translated "%d
+#. unpushed commits", second element is replaced by translated
+#. "%d branches"
+#: meld/vc/git.py:93
+#, python-brace-format
+msgid "{unpushed_commits} in {unpushed_branches}"
+msgstr "„{unpushed_commits}“ у „{unpushed_branches}“"
+
+#: meld/vc/git.py:95 meld/vc/git.py:107
+#, python-format
+msgid "%d unpushed commit"
+msgid_plural "%d unpushed commits"
+msgstr[0] "%d непогурана предаја"
+msgstr[1] "%d непогуране предаје"
+msgstr[2] "%d непогураних предаја"
+msgstr[3] "%d непогурана предаја"
+
+#: meld/vc/git.py:99
+#, python-format
+msgid "%d branch"
+msgid_plural "%d branches"
+msgstr[0] "%d грани"
+msgstr[1] "%d гране"
+msgstr[2] "%d грана"
+msgstr[3] "%d грани"
+
+#: meld/vc/git.py:374
+#, python-brace-format
+msgid "Mode changed from {old_mode} to {new_mode}"
+msgstr "Режим је измењен из „{old_mode}“ у „{new_mode}“"
+
+#: meld/vc/git.py:384
+msgid "Partially staged"
+msgstr "Делимично уштекано"
+
+#: meld/vc/git.py:384
+msgid "Staged"
+msgstr "Уштекано"
+
+#. Translators: This is the displayed name of a version control system
+#. when no version control system is actually found.
+#: meld/vc/_null.py:37
+msgid "None"
+msgstr "Ништа"
+
+#: meld/vc/svn.py:204
+#, python-format
+msgid "Rev %s"
+msgstr "Рев %s"
+
+#: meld/vc/_vc.py:72
+msgid "Merged"
+msgstr "Стопљено"
+
+#: meld/vc/_vc.py:72
+msgid "Base"
+msgstr "Основа"
+
+#: meld/vc/_vc.py:72
+msgid "Local"
+msgstr "Месно"
+
+#: meld/vc/_vc.py:72
+msgid "Remote"
+msgstr "Удаљено"
+
+#: meld/vc/_vc.py:90
+msgid "Error"
+msgstr "Грeшкa"
+
+#: meld/vc/_vc.py:92
+msgid "Newly added"
+msgstr "Ново додата"
+
+#: meld/vc/_vc.py:94
+msgid "Renamed"
+msgstr "Преименована"
+
+#: meld/vc/_vc.py:95
+msgid "Conflict"
+msgstr "Сукоб"
+
+#: meld/vc/_vc.py:96
+msgid "Removed"
+msgstr "Уклоњено"
+
+#: meld/vc/_vc.py:97
+msgid "Missing"
+msgstr "Недостаје"
+
+#: meld/vc/_vc.py:98
+msgid "Not present"
+msgstr "Није присутно"
+
+#: meld/vc/_vc.py:99
+msgid "Scanning…"
+msgstr "Прегледам…"
+
+#. Translators: This error message is shown when no
+#. repository of this type is found.
+#: meld/vcview.py:355
+#, python-format
+msgid "%(name)s (not found)"
+msgstr "%(name)s (нисам нашао)"
+
+#. Translators: This error message is shown when a version
+#. control binary isn't installed.
+#: meld/vcview.py:359
+#, python-format
+msgid "%(name)s (%(cmd)s not installed)"
+msgstr "%(name)s („%(cmd)s“ није инсталирана)"
+
+#. Translators: This error message is shown when a version
+#. controlled repository is invalid.
+#: meld/vcview.py:363
+#, python-format
+msgid "%(name)s (invalid repository)"
+msgstr "%(name)s (неисправна ризница)"
+
+#: meld/vcview.py:377
+msgid "No valid version control system found in this folder"
+msgstr "У овој фасцикли није пронађен исправан систем управљања издањем"
+
+#: meld/vcview.py:379
+msgid "Choose which version control system to use"
+msgstr "Изаберите који систем управљања издањем ће бити коришћен"
+
+#. TRANSLATORS: This is the name of the version control
+#. system being used, e.g., "Git" or "Subversion"
+#: meld/vcview.py:440
+#, python-brace-format
+msgid "{vc} comparison:"
+msgstr "„{vc}“ поређење:"
+
+#. Initial yield so when we add this to our tasks, we don't
+#. create iterators that may be invalidated.
+#: meld/vcview.py:456
+msgid "Scanning repository"
+msgstr "Прегледам ризницу"
+
+#: meld/vcview.py:484
+#, python-format
+msgid "Scanning %s"
+msgstr "Прегледам „%s“"
+
+#: meld/vcview.py:523
+msgid "(Empty)"
+msgstr "(Празно)"
+
+#: meld/vcview.py:568
+#, python-format
+msgid "%s — local"
+msgstr "%s — месна"
+
+#: meld/vcview.py:569
+#, python-format
+msgid "%s — remote"
+msgstr "%s — удаљена"
+
+#: meld/vcview.py:580
+#, python-format
+msgid "%s (local, merge, remote)"
+msgstr "%s (месна, спојена, удаљена)"
+
+#: meld/vcview.py:588
+#, python-format
+msgid "%s (remote, merge, local)"
+msgstr "%s (удаљена, спојена, месна)"
+
+#: meld/vcview.py:598
+#, python-format
+msgid "%s — repository"
+msgstr "%s — ризница"
+
+#: meld/vcview.py:604
+#, python-format
+msgid "%s (working, repository)"
+msgstr "%s (радна, ризница)"
+
+#: meld/vcview.py:608
+#, python-format
+msgid "%s (repository, working)"
+msgstr "%s (ризница, радна)"
+
+#: meld/vcview.py:801
+msgid "Remove folder and all its files?"
+msgstr "Да уклоним фасциклу и све њене датотеке?"
+
+#: meld/vcview.py:803
+msgid ""
+"This will remove all selected files and folders, and all files within any "
+"selected folders, from version control."
+msgstr ""
+"Ово ће уклонити све изабране датотеке и фасцикле, и све датотеке унутар свих "
+"изабраних фасцикли, из управљања издањем."
+
+#~ msgid "Prefer application-wide dark theme"
+#~ msgstr "Даје предност тамној теми у читавом програму"
+
+#~ msgid ""
+#~ "If true, the GTK dark theme variant will be used, if available. Note that "
+#~ "this is separate from the syntax highlighting scheme."
+#~ msgstr ""
+#~ "Ако је изабрано, биће коришћена варијанта Гтк тамне теме, ако је "
+#~ "доступна. Знајте да је ово одвојено од шеме истицања синтаксе."
+
+#~ msgid ""
+#~ "Copyright © 2002-2009 Stephen Kennedy\n"
+#~ "Copyright © 2009-2022 Kai Willadsen"
+#~ msgstr ""
+#~ "Ауторска права © 2002-2009 Стефен Кенеди\n"
+#~ "Ауторска права © 2009-2022 Кај Виладсен"
+
+#~ msgid "Column Name"
+#~ msgstr "Назив колоне"
+
+#~ msgid "Commit"
+#~ msgstr "Угради"
+
+#~ msgid "Close Tab"
+#~ msgstr "Затвори језичак"
+
+#~ msgid "Preferences"
+#~ msgstr "Поставке"
+
+#~ msgid "_Use the system fixed width font"
+#~ msgstr "_Користи системски словни лик сталне ширине"
+
+#~ msgid "_Editor font:"
+#~ msgstr "_Словни лик уређивача:"
+
+#~ msgid "_Tab width:"
+#~ msgstr "Ширина _табулатора:"
+
+#~ msgid "_Insert spaces instead of tabs"
+#~ msgstr "_Убаци размаке уместо табулатора"
+
+#~ msgid "Enable text _wrapping"
+#~ msgstr "Укључи _преламање текста"
+
+#~ msgid "Do not _split words over two lines"
+#~ msgstr "Немој _делити речи у два реда"
+
+#~ msgid "Highlight _current line"
+#~ msgstr "Истакни _текући ред"
+
+#~ msgid "Show _line numbers"
+#~ msgstr "Прикажи _бројеве редова"
+
+#~ msgid "Show w_hitespace"
+#~ msgstr "Прикажи _размаке"
+
+#~ msgid "Prefer dark theme"
+#~ msgstr "Предност тамној теми"
+
+#~ msgid "Syntax highlighting color scheme:"
+#~ msgstr "Шема боје истицања синтаксе:"
+
+#~ msgid "Overview map style:"
+#~ msgstr "Стил мапе прегледа:"
+
+#~ msgid "Use _default system editor"
+#~ msgstr "Користи _основни уређивач система"
+
+#~ msgid "Shallow Comparison"
+#~ msgstr "Површно поређење"
+
+#~ msgid "Symbolic Links"
+#~ msgstr "Симболичке везе"
+
+#~ msgid "Simple change map"
+#~ msgstr "Једноставна мапа измене"
+
+#~ msgid "Compact source map"
+#~ msgstr "Сложена мапа извора"
+
+#~ msgid "Full source map"
+#~ msgstr "Пуна мапа извора"
+
+#~ msgid "Close _without Saving"
+#~ msgstr "Затвори _без чувања"
+
+#, python-brace-format
+#~ msgid "[{label}] Done"
+#~ msgstr "[{label}] Готово"
+
+#~ msgid "Error deleting {}"
+#~ msgstr "Грешка брисања {}"
+
+#, python-brace-format
+#~ msgid "External opening of files of type {file_type} is not supported"
+#~ msgstr "Спољно отварање датотека врсте „{file_type}“ није подржано"
+
+#, python-format
+#~ msgid "[%s] Merging files"
+#~ msgstr "Обједињујем датотеке [%s]"
+
+#, python-format
+#~ msgid "[%s] Computing differences"
+#~ msgstr "Срачунавам разлике [%s]"
+
+#~ msgid ""
+#~ "“{}” can’t be put in the trash. Do you want to delete it immediately?"
+#~ msgstr ""
+#~ "Не могу да пребацим „{}“ у смеће. Да ли желите да је одмах обришете?"
+
+#~ msgid "This remote location does not support sending items to the trash."
+#~ msgstr "Ово удаљено место не подржава слање ставки у смеће."
+
+#, python-format
+#~ msgid "Replace file “%s”?"
+#~ msgstr "Да заменим датотеку „%s“?"
+
+#, python-format
+#~ msgid ""
+#~ "A file with this name already exists in “%s”.\n"
+#~ "If you replace the existing file, its contents will be lost."
+#~ msgstr ""
+#~ "Датотека са овим називом већ постоји у „%s“.\n"
+#~ "Ако замените постојећу датотеку, њен садржај биће изгубљен."
+
+#~ msgid "untitled"
+#~ msgstr "безимено"
+
+#, python-brace-format
+#~ msgid "{filename} (scanning…)"
+#~ msgstr "{filename} (скенирам…)"
+
+#~ msgid "The GNOME Project"
+#~ msgstr "Гномов пројекат"
+
+#~ msgid "Default window fullscreen state"
+#~ msgstr "Основно стање прозора преко целог екрана"
+
+#~ msgid "Open Externally"
+#~ msgstr "Отвори спољним"
+
+#~ msgid "Copy to _left"
+#~ msgstr "Умножи _лево"
+
+#~ msgid "Copy to _right"
+#~ msgstr "Умножи _десно"
+
+#~ msgid "Open Folder"
+#~ msgstr "Отвори фасциклу"
+
+#~ msgid "Refresh"
+#~ msgstr "Освежи"
+
+#, python-brace-format
+#~ msgid "Location: {path}"
+#~ msgstr "Путања: {path}"
+
+#~ msgid "_Update"
+#~ msgstr "_Ажурирај"
+
+#~ msgid "Mar_k as Resolved"
+#~ msgstr "Означи _као решено"
+
+#~ msgid "Update"
+#~ msgstr "Освежи"
+
+#~ msgid "Update working copy from version control"
+#~ msgstr "Освежите радни примерак из управљања издањем"
+
+#~ msgid "Push"
+#~ msgstr "Погурај"
+
+#~ msgid "Add"
+#~ msgstr "Додај"
+
+#~ msgid "Remove"
+#~ msgstr "Уклони"
+
+#~ msgid "Mark as Resolved"
+#~ msgstr "Означи као решено"
+
+#~ msgid "Delete from working copy"
+#~ msgstr "Обришите из радног примерка"
+
+#~ msgid "[%s] Scanning %s"
+#~ msgstr "[%s] прегледам „%s“"
+
+#~ msgid "Ln %i, Col %i"
+#~ msgstr "Ред %i, место %i"
+
+#~ msgid "%s in %s"
+#~ msgstr "%s у %s"
+
+#~ msgid "%s: %s"
+#~ msgstr "%s: %s"
+
+#~ msgid "Autodetect Encoding"
+#~ msgstr "Самопрепознат кодни распоред"
+
+#~ msgid "Current Locale ({})"
+#~ msgstr "Текући језик ({})"
+
+#~ msgid "Cannot import: "
+#~ msgstr "Не могу да увезем: "
+
+#~ msgid ""
+#~ "Couldn't load Meld-specific CSS (%s)\n"
+#~ "%s"
+#~ msgstr ""
+#~ "Не могу да учитам Мелдов посебан ЦСС (%s)\n"
+#~ "%s"
+
+#~ msgid "Meld Diff Viewer"
+#~ msgstr "Прегледач разлика Мелд"
+
+#~ msgid "Show toolbar"
+#~ msgstr "Приказује траку алата"
+
+#~ msgid "If true, the window toolbar is visible."
+#~ msgstr "Ако је изабрано, трака алата је видљива."
+
+#~ msgid "Show statusbar"
+#~ msgstr "Приказује траку стања"
+
+#~ msgid "If true, the window statusbar is visible."
+#~ msgstr "Ако је изабрано, трака стања је видљива."
+
+#~ msgid "Displayed whitespace"
+#~ msgstr "Приказане празнине"
+
+#~ msgid ""
+#~ "Selector for individual whitespace character types to be shown. Possible "
+#~ "values are 'space', 'tab', 'newline' and 'nbsp'."
+#~ msgstr ""
+#~ "Бирач за засебне врсте знакова празнина које ће бити приказане. Могуће "
+#~ "вредности су: „space“ (размак), „tab“ (табулатор), „newline“ (нови ред) и "
+#~ "„nbsp“ (нбсп)."
+
+#~ msgid "Meld base scheme"
+#~ msgstr "Мелдова основна шема"
+
+#~ msgid "Website"
+#~ msgstr "Веб страница"
+
+#~ msgid "_About"
+#~ msgstr "_О Мелду"
+
+#~ msgid "_Quit"
+#~ msgstr "_Изађи"
+
+#~ msgid "Hide selected"
+#~ msgstr "Сакријте изабрано"
+
+#~ msgid ""
+#~ "Consider differently-cased filenames that are otherwise-identical to be "
+#~ "the same"
+#~ msgstr ""
+#~ "Сматраће истим различите величине слова у називима датотека које су "
+#~ "међусобно истоветне"
+
+#~ msgid "Show identical"
+#~ msgstr "Прикажи истоветне"
+
+#~ msgid "Show modified"
+#~ msgstr "Прикажи измењене"
+
+#~ msgid "Set active filters"
+#~ msgstr "Подесите активне филтере"
+
+#~ msgid "Editable List"
+#~ msgstr "Списак за уређивање"
+
+#~ msgid "Format as Patch..."
+#~ msgstr "Обликуј као исправку..."
+
+#~ msgid "Create a patch using differences between files"
+#~ msgstr "Направите исправку користећи разлике између датотека"
+
+#~ msgid "Save all files in the current comparison"
+#~ msgstr "Сачувајте све датотеке у текућем поређењу"
+
+#~ msgid "Revert files to their saved versions"
+#~ msgstr "Повратите датотеке на њихова сачувана издања"
+
+#~ msgid "Add a synchronization point for changes between files"
+#~ msgstr "Додајте тачку усклађивања за измене између датотека"
+
+#~ msgid "Clear sychronization points for changes between files"
+#~ msgstr "Очистите тачке усклађивања за измене између датотека"
+
+#~ msgid "Previous Conflict"
+#~ msgstr "Претходни сукоб"
+
+#~ msgid "Push to Left"
+#~ msgstr "Гурни улево"
+
+#~ msgid "Push to Right"
+#~ msgstr "Гурни удесно"
+
+#~ msgid "Pull from Left"
+#~ msgstr "Убаци с лева"
+
+#~ msgid "Pull change from the left"
+#~ msgstr "Убаците измену с лева"
+
+#~ msgid "Pull from Right"
+#~ msgstr "Убаци с десна"
+
+#~ msgid "Pull change from the right"
+#~ msgstr "Убаците измену с десна"
+
+#~ msgid "Copy Above Left"
+#~ msgstr "Умножи изнад улево"
+
+#~ msgid "Copy Below Left"
+#~ msgstr "Умножи испод улево"
+
+#~ msgid "Copy Above Right"
+#~ msgstr "Умножи изнад удесно"
+
+#~ msgid "Copy Below Right"
+#~ msgstr "Умножи испод удесно"
+
+#~ msgid "Merge all non-conflicting changes from the left"
+#~ msgstr "Обједините све несукобљавајуће измене с лева"
+
+#~ msgid "Merge all non-conflicting changes from the right"
+#~ msgstr "Обједините све несукобљавајуће измене с десна"
+
+#~ msgid "Merge all non-conflicting changes from left and right panes"
+#~ msgstr "Обједините све несукобљавајуће измене с леве и десне површи"
+
+#~ msgid "Move keyboard focus to the previous document in this comparison"
+#~ msgstr "Преместите фокус тастатуре на претходни документ у овом поређењу"
+
+#~ msgid "Move keyboard focus to the next document in this comparison"
+#~ msgstr "Преместите фокус тастатуре на следећи документ у овом поређењу"
+
+#~ msgid "Lock scrolling of all panes"
+#~ msgstr "Закључајте клизање свих површи"
+
+#~ msgid "_Previous"
+#~ msgstr "_Претходно"
+
+#~ msgid "_Next"
+#~ msgstr "_Следеће"
+
+#~ msgid "Find:"
+#~ msgstr "Нађи:"
+
+#~ msgid "Replace _with:"
+#~ msgstr "Замени с_а:"
+
+#~ msgid "Meld Preferences"
+#~ msgstr "Поставке Мелда"
+
+#~ msgid "Directory comparison"
+#~ msgstr "Поређење фасцикли"
+
+#~ msgid "Version control view"
+#~ msgstr "Преглед управљања издањима"
+
+#~ msgid "Co_mmit..."
+#~ msgstr "У_гради..."
+
+#~ msgid "Console"
+#~ msgstr "Конзола"
+
+#~ msgid "Show or hide the version control console output pane"
+#~ msgstr "Приказује или скрива излазну површ конзоле управљања издањем"
+
+#~ msgid "_Flatten"
+#~ msgstr "_Изравнај"
+
+#~ msgid "_Modified"
+#~ msgstr "Из_мењен"
+
+#~ msgid "Show modified files"
+#~ msgstr "Прикажите измењене датотеке"
+
+#~ msgid "Show normal files"
+#~ msgstr "Прикажите уобичајене датотеке"
+
+#~ msgid "Un_versioned"
+#~ msgstr "_Необрађено"
+
+#~ msgid "Show unversioned files"
+#~ msgstr "Прикажите необрађене датотеке"
+
+#~ msgid "Show ignored files"
+#~ msgstr "Прикажите занемарене датотеке"
+
+#~ msgid "Hide %s"
+#~ msgstr "Сакриј „%s“"
+
+#~ msgid "INS"
+#~ msgstr "УМЕТ"
+
+#~ msgid "OVR"
+#~ msgstr "ПРЕП"
+
+#~ msgid "_Save as UTF-8"
+#~ msgstr "_Сачувај као УТФ-8"
+
+#~ msgid "Couldn't encode text as “%s”"
+#~ msgstr "Не могу да кодирам текст као „%s“"
+
+#~ msgid "_New Comparison..."
+#~ msgstr "_Ново поређење..."
+
+#~ msgid "Save the current file with a different name"
+#~ msgstr "Сачувајте текућу датотеку под другим називом"
+
+#~ msgid "_Edit"
+#~ msgstr "_Уређивање"
+
+#~ msgid "Undo the last action"
+#~ msgstr "Опозовите последњу радњу"
+
+#~ msgid "Redo the last undone action"
+#~ msgstr "Поновите последњу опозвану радњу"
+
+#~ msgid "Cut the selection"
+#~ msgstr "Исеците избор"
+
+#~ msgid "Copy the selection"
+#~ msgstr "Умножите избор"
+
+#~ msgid "Paste the clipboard"
+#~ msgstr "Убаците оставу"
+
+#~ msgid "Find..."
+#~ msgstr "Пронађи..."
+
+#~ msgid "Search for text"
+#~ msgstr "Тражите текст"
+
+#~ msgid "Find Ne_xt"
+#~ msgstr "Нађи с_ледеће"
+
+#~ msgid "Search forwards for the same text"
+#~ msgstr "Тражите унапред исти текст"
+
+#~ msgid "Find _Previous"
+#~ msgstr "Нађи пре_тходно"
+
+#~ msgid "Search backwards for the same text"
+#~ msgstr "Тражите уназад исти текст"
+
+#~ msgid "_Replace..."
+#~ msgstr "_Замени..."
+
+#~ msgid "Find and replace text"
+#~ msgstr "Пронађите и замените текст"
+
+#~ msgid "_Changes"
+#~ msgstr "_Измене"
+
+#~ msgid "Next Change"
+#~ msgstr "Следећа измена"
+
+#~ msgid "Previous Change"
+#~ msgstr "Претходна измена"
+
+#~ msgid "Open selected file or directory in the default external application"
+#~ msgstr "Отворите изабрану датотеку или фасциклу у основном спољном програму"
+
+#~ msgid "Stop the current action"
+#~ msgstr "Зауставите тренутну радњу"
+
+#~ msgid "View the comparison in fullscreen"
+#~ msgstr "Прегледајте поређење преко целог екрана"
+
+#~ msgid "_Toolbar"
+#~ msgstr "_Трака алата"
+
+#~ msgid "Show or hide the toolbar"
+#~ msgstr "Прикажите или сакријте траку алата"
+
+#~ msgid "_Meld"
+#~ msgstr "_Мелд"
+
+#~ msgid "Quit the program"
+#~ msgstr "Затворите програм"
+
+#~ msgid "Prefere_nces"
+#~ msgstr "_Поставке"
+
+#~ msgid "Configure the application"
+#~ msgstr "Подесите програм"
+
+#~ msgid "_Contents"
+#~ msgstr "_Садржај"
+
+#~ msgid "Open the Meld manual"
+#~ msgstr "Отворите упутство Мелда"
+
+#~ msgid "About this application"
+#~ msgstr "О овом програму"
+
+#~ msgid "Error removing %s"
+#~ msgstr "Грешка при уклањању „%s“"
+
+#~ msgid "Meld does not support Python 3."
+#~ msgstr "Мелд не подржава Питона 3."
+
+#~ msgid "_Tabs"
+#~ msgstr "_Језичци"
+
+#~ msgid "_Previous Tab"
+#~ msgstr "Пре_тходни језичак"
+
+#~ msgid "Activate previous tab"
+#~ msgstr "Идите на претходни језичак"
+
+#~ msgid "_Next Tab"
+#~ msgstr "Сле_дећи језичак"
+
+#~ msgid "Activate next tab"
+#~ msgstr "Идите на наредни језичак"
+
+#~ msgid "Move Tab _Left"
+#~ msgstr "Премести језичак _лево"
+
+#~ msgid "Move current tab to left"
+#~ msgstr "Преместите тренутни језичак на лево"
+
+#~ msgid "Move Tab _Right"
+#~ msgstr "Премести језичак _десно"
+
+#~ msgid "Move current tab to right"
+#~ msgstr "Преместите тренутни језичак на десно"
+
+#~ msgid "Switch to this tab"
+#~ msgstr "Пребаците се на овај језичак"
+
+#~ msgid ""
+#~ "These text encodings will be automatically used (in order) to try to "
+#~ "decode loaded text files."
+#~ msgstr ""
+#~ "Ова кодирања текста ће бити самостално коришћења (по реду) при покушају "
+#~ "декодирања учитаних текстуалних датотека."
+
+#~ msgid "Clear manual change sychronization points"
+#~ msgstr "Очистите тачке усклађивања измена"
+
+#~ msgid ""
+#~ "'%s' exists.\n"
+#~ "Overwrite?"
+#~ msgstr ""
+#~ "„%s“ постоји.\n"
+#~ "Да преснимим?"
+
+#~ msgid "[%s] Set num panes"
+#~ msgstr "Постављам број површи [%s]"
+
+#~ msgid "[%s] Opening files"
+#~ msgstr "Отварам датотеке [%s]"
+
+#~ msgid "[%s] Reading files"
+#~ msgstr "Читам датотеке [%s]"
+
+#~ msgid "%s is not in encodings: %s"
+#~ msgstr "„%s“ није у кодирањима: „%s“"
+
+#~ msgid ""
+#~ "\"%s\" exists!\n"
+#~ "Overwrite?"
+#~ msgstr ""
+#~ "„%s“ постоји!\n"
+#~ "Да преснимим?"
+
+#~ msgid ""
+#~ "Error writing to %s\n"
+#~ "\n"
+#~ "%s."
+#~ msgstr ""
+#~ "Грешка писања у „%s“\n"
+#~ "\n"
+#~ "%s."
+
+#~ msgid ""
+#~ "This file '%s' contains a mixture of line endings.\n"
+#~ "\n"
+#~ "Which format would you like to use?"
+#~ msgstr ""
+#~ "Датотека „%s“ садржи мешавину завршетака реда.\n"
+#~ "\n"
+#~ "Који облик желите да користите?"
+
+#~ msgid "Revision"
+#~ msgstr "Преглед"
+
+#~ msgid "Options"
+#~ msgstr "Опције"
+
+#~ msgid "%s (%s)"
+#~ msgstr "%s (%s)"
+
+#~ msgid "Cycle Through Documents"
+#~ msgstr "Кружи кроз документе"
+
+#~ msgid "Copy _Left"
+#~ msgstr "Умножи _лево"
+
+#~ msgid "Copy _Right"
+#~ msgstr "Умножи _десно"
+
+#~ msgid "Ignore changes which insert or delete blank lines"
+#~ msgstr "Занемари измене које убацују или бришу празне редове"
+
+#~ msgid "Regular expression error"
+#~ msgstr "Грешка регуларног израза"
+
+#~ msgid "%i second"
+#~ msgid_plural "%i seconds"
+#~ msgstr[0] "%i секунда"
+#~ msgstr[1] "%i секунде"
+#~ msgstr[2] "%i секунди"
+#~ msgstr[3] "%i секунда"
+
+#~ msgid "%i minute"
+#~ msgid_plural "%i minutes"
+#~ msgstr[0] "%i минут"
+#~ msgstr[1] "%i минута"
+#~ msgstr[2] "%i минута"
+#~ msgstr[3] "%i минут"
+
+#~ msgid "%i hour"
+#~ msgid_plural "%i hours"
+#~ msgstr[0] "%i сат"
+#~ msgstr[1] "%i сата"
+#~ msgstr[2] "%i сати"
+#~ msgstr[3] "%i сат"
+
+#~ msgid "%i day"
+#~ msgid_plural "%i days"
+#~ msgstr[0] "%i дан"
+#~ msgstr[1] "%i дана"
+#~ msgstr[2] "%i дана"
+#~ msgstr[3] "%i дан"
+
+#~ msgid "%i week"
+#~ msgid_plural "%i weeks"
+#~ msgstr[0] "%i недеља"
+#~ msgstr[1] "%i недеље"
+#~ msgstr[2] "%i недеља"
+#~ msgstr[3] "%i недеља"
+
+#~ msgid "%i month"
+#~ msgid_plural "%i months"
+#~ msgstr[0] "%i месец"
+#~ msgstr[1] "%i месеца"
+#~ msgstr[2] "%i месеци"
+#~ msgstr[3] "%i месец"
+
+#~ msgid "%i year"
+#~ msgid_plural "%i years"
+#~ msgstr[0] "%i година"
+#~ msgstr[1] "%i године"
+#~ msgstr[2] "%i година"
+#~ msgstr[3] "%i година"
+
+#~ msgid "dir"
+#~ msgstr "дир"
+
+#~ msgid "Start a 2- or 3-way directory comparison"
+#~ msgstr "Покреће поређење 2 или 3 елемента фасцикли"
+
+#~ msgid "_Statusbar"
+#~ msgstr "Трака _стања"
+
+#~ msgid "Show or hide the statusbar"
+#~ msgstr "Прикажите или сакријте траку стања"

@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::config::settings::MeldSettings;
+use crate::tr;
 
 /// Callback invoked every time a setting is modified in the dialog.
 /// The dialog saves to disk before calling this, so `apply_settings`
@@ -56,7 +57,7 @@ impl PreferencesDialog {
         });
 
         let dialog = adw::PreferencesDialog::new();
-        dialog.set_title("Preferences");
+        dialog.set_title(&tr!("Preferences"));
         dialog.set_search_enabled(true);
         dialog.set_width_request(800);
 
@@ -142,9 +143,9 @@ fn switch_row(
     on_toggle: impl Fn(bool) + 'static,
 ) -> adw::SwitchRow {
     let row = adw::SwitchRow::new();
-    row.set_title(title);
+    row.set_title(&tr!(title));
     if let Some(subtitle) = subtitle {
-        row.set_subtitle(subtitle);
+        row.set_subtitle(&tr!(subtitle));
     }
     row.set_active(active);
     row.connect_active_notify(move |row| on_toggle(row.is_active()));
@@ -163,12 +164,16 @@ fn combo_row(
     on_select: impl Fn(&str) + 'static,
 ) -> adw::ComboRow {
     let row = adw::ComboRow::new();
-    row.set_title(title);
+    row.set_title(&tr!(title));
     if let Some(subtitle) = subtitle {
-        row.set_subtitle(subtitle);
+        row.set_subtitle(&tr!(subtitle));
     }
-    let labels: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
-    let model = gtk::StringList::new(&labels);
+    let labels: Vec<String> = options
+        .iter()
+        .map(|(_, label)| tr!(*label).into_owned())
+        .collect();
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let model = gtk::StringList::new(&label_refs);
     row.set_model(Some(&model));
     let ids: Vec<&'static str> = options.iter().map(|(id, _)| *id).collect();
     let selected = options
@@ -196,9 +201,9 @@ fn expander_row(
 ) -> adw::ExpanderRow {
     let row = adw::ExpanderRow::new();
     row.set_show_enable_switch(true);
-    row.set_title(title);
+    row.set_title(&tr!(title));
     if let Some(subtitle) = subtitle {
-        row.set_subtitle(subtitle);
+        row.set_subtitle(&tr!(subtitle));
     }
     row.set_enable_expansion(enabled);
     row.set_expanded(enabled);
@@ -221,12 +226,12 @@ fn expander_row(
 #[allow(deprecated)]
 fn build_editor_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-    page.set_title("Editor");
+    page.set_title(&tr!("Editor"));
     page.set_icon_name(Some("text-editor-symbolic"));
 
     // ── Appearance ──
     let appearance = adw::PreferencesGroup::new();
-    appearance.set_title("Appearance");
+    appearance.set_title(&tr!("Appearance"));
 
     let style_variant = ctx.settings.borrow().style_variant.clone();
     let c = Rc::clone(ctx);
@@ -258,8 +263,8 @@ fn build_editor_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
         move |enabled| c.update(|s| s.use_system_font = !enabled),
     );
     let font_row = adw::ActionRow::new();
-    font_row.set_title("Font");
-    font_row.set_subtitle("The font used within the editor");
+    font_row.set_title(&tr!("Font"));
+    font_row.set_subtitle(&tr!("The font used within the editor"));
     let font_button = gtk::FontButton::new();
     font_button.set_use_font(true);
     font_button.set_font(&custom_font);
@@ -284,7 +289,7 @@ fn build_editor_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
         move |enabled| c.update(|s| s.highlight_syntax = enabled),
     );
     let scheme_row = adw::ActionRow::new();
-    scheme_row.set_title("Color Scheme");
+    scheme_row.set_title(&tr!("Color Scheme"));
     let chooser = gsv::StyleSchemeChooserButton::new();
     chooser.set_valign(gtk::Align::Center);
     chooser.add_css_class("flat");
@@ -353,7 +358,7 @@ fn build_editor_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
 
     // ── Indentation ──
     let indentation = adw::PreferencesGroup::new();
-    indentation.set_title("Indentation");
+    indentation.set_title(&tr!("Indentation"));
     let spaces = ctx.settings.borrow().insert_spaces_instead_of_tabs;
     let tab_id = if spaces { "spaces" } else { "tab" };
     let c = Rc::clone(ctx);
@@ -367,8 +372,8 @@ fn build_editor_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
     let indent_width = ctx.settings.borrow().indent_width;
     let c = Rc::clone(ctx);
     let indent_spin = adw::SpinRow::with_range(1.0, 8.0, 1.0);
-    indent_spin.set_title("Indentation Size");
-    indent_spin.set_subtitle("The number of characters to indent");
+    indent_spin.set_title(&tr!("Indentation Size"));
+    indent_spin.set_subtitle(&tr!("The number of characters to indent"));
     indent_spin.set_value(indent_width as f64);
     indent_spin.connect_value_notify(move |spin| {
         c.update(|s| s.indent_width = spin.value() as i32);
@@ -378,7 +383,7 @@ fn build_editor_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
 
     // ── Code Overview ──
     let overview = adw::PreferencesGroup::new();
-    overview.set_title("Code Overview");
+    overview.set_title(&tr!("Code Overview"));
     let show_overview_map = ctx.settings.borrow().show_overview_map;
     let c = Rc::clone(ctx);
     overview.add(&switch_row(
@@ -391,7 +396,7 @@ fn build_editor_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
 
     // ── External Editor ──
     let external = adw::PreferencesGroup::new();
-    external.set_title("External Editor");
+    external.set_title(&tr!("External Editor"));
     let use_system_editor = ctx.settings.borrow().use_system_editor;
     let editor_command = ctx.settings.borrow().custom_editor_command.clone();
     let c = Rc::clone(ctx);
@@ -402,7 +407,7 @@ fn build_editor_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
         move |enabled| c.update(|s| s.use_system_editor = !enabled),
     );
     let command_row = adw::EntryRow::new();
-    command_row.set_title("Custom Editor Command");
+    command_row.set_title(&tr!("Custom Editor Command"));
     command_row.set_text(&editor_command);
     editor_expander.add_row(&command_row);
     let c = Rc::clone(ctx);
@@ -420,12 +425,12 @@ fn build_folder_page(
     keep_alive: &Rc<RefCell<Vec<Box<dyn std::any::Any>>>>,
 ) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-    page.set_title("Folder Comparison");
+    page.set_title(&tr!("Folder Comparison"));
     page.set_icon_name(Some("folder-symbolic"));
 
     // ── Comparison Options ──
     let options = adw::PreferencesGroup::new();
-    options.set_title("Comparison Options");
+    options.set_title(&tr!("Comparison Options"));
     let shallow = ctx.settings.borrow().folder_shallow_comparison;
     let c = Rc::clone(ctx);
     let shallow_expander = expander_row(
@@ -507,7 +512,7 @@ fn build_folder_page(
 
     // ── Visible Columns ──
     let columns_group = adw::PreferencesGroup::new();
-    columns_group.set_title("Visible Columns");
+    columns_group.set_title(&tr!("Visible Columns"));
     let columns = ctx.settings.borrow().folder_columns.clone();
     let c = Rc::clone(ctx);
     let column_list = column_list::ColumnList::new(&columns, move |columns| {
@@ -524,12 +529,12 @@ fn build_folder_page(
 
 fn build_vc_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-    page.set_title("Version Control");
+    page.set_title(&tr!("Version Control"));
     page.set_icon_name(Some("git-symbolic"));
 
     // ── Version Comparisons ──
     let comparisons = adw::PreferencesGroup::new();
-    comparisons.set_title("Version Comparisons");
+    comparisons.set_title(&tr!("Version Comparisons"));
     let left_is_local = ctx.settings.borrow().vc_left_is_local;
     let order_id = if left_is_local { "llrr" } else { "lrrl" };
     let c = Rc::clone(ctx);
@@ -559,7 +564,7 @@ fn build_vc_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
 
     // ── Commit Message ──
     let commit = adw::PreferencesGroup::new();
-    commit.set_title("Commit Message");
+    commit.set_title(&tr!("Commit Message"));
     let show_margin = ctx.settings.borrow().vc_show_commit_margin;
     let c = Rc::clone(ctx);
     let margin_switch = switch_row("Show right margin", None, show_margin, move |on| {
@@ -568,7 +573,7 @@ fn build_vc_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
     let commit_margin = ctx.settings.borrow().vc_commit_margin;
     let c = Rc::clone(ctx);
     let margin_spin = adw::SpinRow::with_range(70.0, 120.0, 1.0);
-    margin_spin.set_title("Margin position");
+    margin_spin.set_title(&tr!("Margin position"));
     margin_spin.set_value(commit_margin as f64);
     margin_spin.set_sensitive(show_margin);
     margin_spin.connect_value_notify(move |spin| {
@@ -606,17 +611,17 @@ fn build_vc_page(ctx: &Rc<SettingsCtx>) -> adw::PreferencesPage {
 
 fn build_filters_page(ctx: &Rc<SettingsCtx>, flushes: &FlushSink) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-    page.set_title("Filters");
+    page.set_title(&tr!("Filters"));
     page.set_icon_name(Some("view-list-symbolic"));
 
     // ── Filename filters ──
     let file_group = adw::PreferencesGroup::new();
-    file_group.set_title("Filename filters");
-    file_group.set_description(Some(
+    file_group.set_title(&tr!("Filename filters"));
+    file_group.set_description(Some(&tr!(
         "When performing directory comparisons, you may filter out files and \
          directories by name. Each pattern is a list of shell style wildcards \
-         separated by spaces.",
-    ));
+         separated by spaces."
+    )));
     let filename_filters = ctx.settings.borrow().filename_filters.clone();
     let c = Rc::clone(ctx);
     let file_filters = filter_list::FilterList::new(
@@ -633,7 +638,7 @@ fn build_filters_page(ctx: &Rc<SettingsCtx>, flushes: &FlushSink) -> adw::Prefer
 
     // ── Change trimming ──
     let trimming = adw::PreferencesGroup::new();
-    trimming.set_title("Change trimming");
+    trimming.set_title(&tr!("Change trimming"));
     let ignore_blank_lines = ctx.settings.borrow().ignore_blank_lines;
     let c = Rc::clone(ctx);
     trimming.add(&switch_row(
@@ -649,14 +654,14 @@ fn build_filters_page(ctx: &Rc<SettingsCtx>, flushes: &FlushSink) -> adw::Prefer
 
     // ── Text filters ──
     let text_group = adw::PreferencesGroup::new();
-    text_group.set_title("Text filters");
-    text_group.set_description(Some(
+    text_group.set_title(&tr!("Text filters"));
+    text_group.set_description(Some(&tr!(
         "When performing file comparisons, you may ignore certain types of \
          changes. Each pattern here is a regular expression which replaces \
          matching text with the empty string before comparison is performed. \
          If the expression contains groups, only the groups are replaced. \
-         See the user manual for more details.",
-    ));
+         See the user manual for more details."
+    )));
     let text_filters = ctx.settings.borrow().text_filters.clone();
     let c = Rc::clone(ctx);
     let text_filters_widget = filter_list::FilterList::new(

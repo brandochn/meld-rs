@@ -7,6 +7,8 @@ use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::path::Path;
 
+use crate::tr;
+
 /// A confirmation dialog shown when overwriting an existing file.
 pub struct SaveConfirmDialog {
     dialog: gtk::MessageDialog,
@@ -27,10 +29,10 @@ impl SaveConfirmDialog {
             gtk::DialogFlags::MODAL,
             gtk::MessageType::Question,
             gtk::ButtonsType::YesNo,
-            &format!("A file named \"{filename}\" already exists."),
+            tr!("A file named \"{filename}\" already exists.").replace("{filename}", &filename),
         );
-        dialog.set_title(Some("Confirm Save"));
-        dialog.set_secondary_text(Some("Do you want to replace it?"));
+        dialog.set_title(Some(&tr!("Confirm Save")));
+        dialog.set_secondary_text(Some(&tr!("Do you want to replace it?")));
 
         dialog.connect_response(|d, _| d.close());
 

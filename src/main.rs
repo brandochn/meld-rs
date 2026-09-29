@@ -138,6 +138,22 @@ fn main() -> ExitCode {
 
         init_data_dir();
 
+        // Initialise localization before GTK so that both our own strings and
+        // GTK's built-in translations / RTL layout follow the process locale
+        // (mirrors Meld's `locale.setlocale(LC_ALL, "")` + gettext setup).
+        //
+        // SAFETY: called during single-threaded startup, before any other
+        // thread runs; the empty C string asks setlocale to use the locale
+        // selected from the environment.
+        unsafe {
+            libc::setlocale(libc::LC_ALL, c"".as_ptr());
+        }
+        meld_rs::i18n::init();
+        log::info!(
+            "localization: {}",
+            meld_rs::i18n::current_language().unwrap_or_else(|| "C (English)".to_string())
+        );
+
         if let Err(e) = gtk4::init() {
             let msg = format!(
                 "Failed to initialize GTK4: {e}\n\
@@ -167,6 +183,7 @@ fn main() -> ExitCode {
 
     #[cfg(not(feature = "gui"))]
     {
+        meld_rs::i18n::init();
         eprintln!("Error: This binary requires the 'gui' feature to be enabled.");
         eprintln!("Build with: cargo build --features gui");
         ExitCode::from(1)
