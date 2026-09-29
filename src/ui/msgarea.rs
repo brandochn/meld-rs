@@ -9,6 +9,8 @@ use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::tr;
+
 /// Optional action callback shown as the banner's button.
 type ActionCallback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 
@@ -58,7 +60,7 @@ impl MsgArea {
     /// dismissable "Files are identical" message.
     pub fn show_info_dismissable(&self, msg: &str) {
         *self.action.borrow_mut() = None;
-        self.show_msg(msg, Some("Hide"));
+        self.show_msg(msg, Some(&tr!("Hide")));
     }
 
     /// Show a message with an action button (e.g. "Reload").  Clicking
@@ -79,6 +81,9 @@ impl MsgArea {
         self.banner.set_revealed(false);
     }
 
+    /// `msg` and `action_label` must already be translated: callers own the text
+    /// and pass `tr!`-wrapped literals or formatted templates. Translating here
+    /// as well would perform a second lookup on the already-translated string.
     fn show_msg(&self, msg: &str, action_label: Option<&str>) {
         self.banner.set_title(msg);
         match action_label {

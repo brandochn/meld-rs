@@ -6,6 +6,8 @@ use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::cell::Cell;
 
+use crate::tr;
+
 pub struct MeldFileButton {
     button: gtk::Button,
     pane: Cell<usize>,
@@ -21,11 +23,12 @@ impl MeldFileButton {
         } else {
             "document-open-symbolic"
         };
-        button.set_tooltip_text(Some(if select_folder {
-            "Select folder"
+        let tooltip = if select_folder {
+            tr!("Select folder to open in this pane")
         } else {
-            "Open file"
-        }));
+            tr!("Open file in this pane")
+        };
+        button.set_tooltip_text(Some(&tooltip));
         button.set_has_frame(false);
         let icon = gtk::Image::from_icon_name(icon_name);
         button.set_child(Some(&icon));
@@ -51,8 +54,8 @@ impl MeldFileButton {
                 Some(&t),
                 parent.as_ref(),
                 action,
-                Some("_Select"),
-                Some("_Cancel"),
+                Some(&tr!("_Select")),
+                Some(&tr!("_Cancel")),
             );
             dialog.set_select_multiple(false);
             dialog.connect_response(|d, _| {

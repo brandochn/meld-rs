@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::config::settings::FilterEntry;
+use crate::tr;
 
 /// The toolbar buttons whose sensitivity depends on the selection.
 struct ToolbarButtons {
@@ -81,23 +82,23 @@ impl FilterList {
         toolbar.set_valign(gtk::Align::Center);
         toolbar.set_margin_top(6);
 
-        let add = gtk::Button::with_label("_Add");
+        let add = gtk::Button::with_label(&tr!("_Add"));
         add.set_use_underline(true);
         add.set_icon_name("list-add-symbolic");
-        add.set_tooltip_text(Some("Add new filter"));
-        let remove = gtk::Button::with_label("_Remove");
+        add.set_tooltip_text(Some(&tr!("Add new filter")));
+        let remove = gtk::Button::with_label(&tr!("_Remove"));
         remove.set_use_underline(true);
         remove.set_icon_name("list-remove-symbolic");
-        remove.set_tooltip_text(Some("Remove selected filter"));
+        remove.set_tooltip_text(Some(&tr!("Remove selected filter")));
         let separator = gtk::Separator::new(gtk::Orientation::Vertical);
-        let move_up = gtk::Button::with_label("Move _Up");
+        let move_up = gtk::Button::with_label(&tr!("Move _Up"));
         move_up.set_use_underline(true);
         move_up.set_icon_name("go-up-symbolic");
-        move_up.set_tooltip_text(Some("Move item up"));
-        let move_down = gtk::Button::with_label("Move _Down");
+        move_up.set_tooltip_text(Some(&tr!("Move item up")));
+        let move_down = gtk::Button::with_label(&tr!("Move _Down"));
         move_down.set_use_underline(true);
         move_down.set_icon_name("go-down-symbolic");
-        move_down.set_tooltip_text(Some("Move item down"));
+        move_down.set_tooltip_text(Some(&tr!("Move item down")));
         toolbar.append(&add);
         toolbar.append(&remove);
         toolbar.append(&separator);
@@ -235,13 +236,13 @@ impl FilterList {
         header.set_margin_end(4);
         header.set_margin_top(2);
         header.set_margin_bottom(2);
-        let active_label = gtk::Label::new(Some("Active"));
+        let active_label = gtk::Label::new(Some(&tr!("Active")));
         active_label.set_xalign(0.0);
         active_label.set_width_request(48);
-        let name_label = gtk::Label::new(Some("Name"));
+        let name_label = gtk::Label::new(Some(&tr!("Name")));
         name_label.set_xalign(0.0);
         name_label.set_hexpand(true);
-        let pattern_label = gtk::Label::new(Some("Pattern"));
+        let pattern_label = gtk::Label::new(Some(&tr!("Pattern")));
         pattern_label.set_xalign(0.0);
         pattern_label.set_hexpand(true);
         header.append(&active_label);
@@ -306,7 +307,7 @@ fn build_row(
 
     let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
     icon.set_visible(!valid);
-    icon.set_tooltip_text(Some("Invalid filter pattern"));
+    icon.set_tooltip_text(Some(&tr!("Invalid filter pattern")));
     widget.append(&icon);
 
     let pattern = gtk::Entry::new();

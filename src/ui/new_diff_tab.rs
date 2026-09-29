@@ -13,6 +13,7 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::tr;
 use crate::window::{DiffRequest, MeldPage};
 
 /// Type of comparison selected by the user.
@@ -65,7 +66,7 @@ impl NewDiffTab {
         root_box.set_margin_bottom(12);
         root_box.set_width_request(620);
 
-        let title_label = gtk::Label::new(Some("New comparison"));
+        let title_label = gtk::Label::new(Some(&tr!("New comparison")));
         title_label.set_xalign(0.0);
         title_label.add_css_class("new-diff-title");
         root_box.append(&title_label);
@@ -75,9 +76,9 @@ impl NewDiffTab {
 
         let button_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         button_row.set_homogeneous(true);
-        let button_file = build_type_toggle("document-new-symbolic", "File");
-        let button_dir = build_type_toggle("folder-new-symbolic", "Folder");
-        let button_vc = build_type_toggle("appointment-new-symbolic", "Version control");
+        let button_file = build_type_toggle("document-new-symbolic", &tr!("File"));
+        let button_dir = build_type_toggle("folder-new-symbolic", &tr!("Folder"));
+        let button_vc = build_type_toggle("appointment-new-symbolic", &tr!("Version control"));
         button_row.append(&button_file);
         button_row.append(&button_dir);
         button_row.append(&button_vc);
@@ -97,25 +98,25 @@ impl NewDiffTab {
 
         // Page 1: File entries (3 rows)
         let (file_grid, file_entries) = build_entry_grid(
-            "Select First File",
-            "Select Second File",
-            "Select Third File",
+            &tr!("Select First File"),
+            &tr!("Select Second File"),
+            &tr!("Select Third File"),
             false,
         );
         choosers_notebook.append_page(&file_grid, Some(&gtk::Label::new(None)));
 
         // Page 2: Folder entries (3 rows)
         let (dir_grid, dir_entries) = build_entry_grid(
-            "Select First Folder",
-            "Select Second Folder",
-            "Select Third Folder",
+            &tr!("Select First Folder"),
+            &tr!("Select Second Folder"),
+            &tr!("Select Third Folder"),
             true,
         );
         choosers_notebook.append_page(&dir_grid, Some(&gtk::Label::new(None)));
 
         // Page 3: VC entry (1 row)
         let vc_entry = gtk::Entry::new();
-        vc_entry.set_placeholder_text(Some("Select a Version-Controlled Folder"));
+        vc_entry.set_placeholder_text(Some(&tr!("Select A Version-Controlled Folder")));
         vc_entry.set_hexpand(true);
         let vc_row = build_chooser_row_from_entry(&vc_entry, true);
         let vc_grid = gtk::Grid::new();
@@ -131,11 +132,11 @@ impl NewDiffTab {
         let button_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         button_box.set_halign(gtk::Align::End);
         button_box.set_margin_top(6);
-        let button_blank = gtk::Button::with_label("_Blank comparison");
+        let button_blank = gtk::Button::with_label(&tr!("_Blank comparison"));
         button_blank.set_use_underline(true);
         button_blank.set_sensitive(false);
         button_box.append(&button_blank);
-        let button_compare = gtk::Button::with_label("C_ompare");
+        let button_compare = gtk::Button::with_label(&tr!("C_ompare"));
         button_compare.set_use_underline(true);
         button_compare.add_css_class("suggested-action");
         button_compare.set_sensitive(false);
@@ -291,8 +292,8 @@ impl MeldPage for NewDiffTab {
     fn close(&self) -> gtk::ResponseType {
         gtk::ResponseType::Ok
     }
-    fn label(&self) -> String {
-        "New comparison".into()
+    fn is_new_comparison_placeholder(&self) -> bool {
+        true
     }
 
     fn set_diff_created_callback(&self, cb: crate::window::DiffCreatedCallback) {
@@ -374,18 +375,24 @@ fn build_chooser_row_from_entry(entry: &gtk::Entry, select_folder: bool) -> gtk:
     row.append(entry);
 
     let browse_btn = gtk::Button::from_icon_name("folder-open-symbolic");
-    browse_btn.set_tooltip_text(Some(if select_folder {
-        "Select folder"
+    let browse_tooltip = if select_folder {
+        tr!("Select folder")
     } else {
-        "Select file"
-    }));
+        tr!("Select file")
+    };
+    browse_btn.set_tooltip_text(Some(&browse_tooltip));
 
     let entry_weak = entry.downgrade();
     let sf = select_folder;
 
     browse_btn.connect_clicked(move |btn| {
         let dialog = gtk::FileDialog::builder().modal(true).build();
-        dialog.set_title(if sf { "Select Folder" } else { "Select File" });
+        let dialog_title = if sf {
+            tr!("Select Folder")
+        } else {
+            tr!("Select File")
+        };
+        dialog.set_title(&dialog_title);
 
         let entry_w = entry_weak.clone();
         let window = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok());

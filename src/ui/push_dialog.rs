@@ -6,6 +6,8 @@
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
+use crate::tr;
+
 /// A simple confirmation dialog for pushing version control changes.
 pub struct PushDialog {
     dialog: gtk::MessageDialog,
@@ -21,9 +23,9 @@ impl PushDialog {
             gtk::DialogFlags::MODAL,
             gtk::MessageType::Question,
             gtk::ButtonsType::OkCancel,
-            &format!("Push changes to {remote}?"),
+            tr!("Push changes to {remote}?").replace("{remote}", remote),
         );
-        dialog.set_title(Some("Push"));
+        dialog.set_title(Some(&tr!("Push")));
 
         dialog.connect_response(|d, _| d.close());
 

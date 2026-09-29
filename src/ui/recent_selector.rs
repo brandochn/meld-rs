@@ -9,6 +9,8 @@ use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::tr;
+
 pub struct RecentSelector {
     container: gtk::Grid,
     list_box: gtk::ListBox,
@@ -28,7 +30,7 @@ impl RecentSelector {
         grid.set_height_request(400);
 
         let search_entry = gtk::SearchEntry::new();
-        search_entry.set_placeholder_text(Some("Search recent comparisons…"));
+        search_entry.set_placeholder_text(Some(&tr!("Search recent comparisons…")));
         search_entry.grab_focus();
         grid.attach(&search_entry, 0, 0, 1, 1);
 
@@ -41,7 +43,7 @@ impl RecentSelector {
         scrolled.set_child(Some(&list_box));
         grid.attach(&scrolled, 0, 1, 1, 1);
 
-        let open_button = gtk::Button::with_label("_Open");
+        let open_button = gtk::Button::with_label(&tr!("_Open"));
         open_button.set_use_underline(true);
         open_button.set_receives_default(true);
         grid.attach(&open_button, 0, 2, 1, 1);

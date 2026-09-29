@@ -7,6 +7,8 @@ use gtk4::prelude::*;
 use sourceview5 as gsv;
 use sourceview5::prelude::ViewExt;
 
+use crate::tr;
+
 pub struct CommitDialog {
     dialog: gtk::Dialog,
 }
@@ -14,11 +16,11 @@ pub struct CommitDialog {
 impl CommitDialog {
     pub fn new(files: &[String], margin: u32) -> Self {
         let dialog = gtk::Dialog::new();
-        dialog.set_title(Some("Commit"));
+        dialog.set_title(Some(&tr!("Commit")));
         dialog.set_modal(true);
         dialog.set_default_size(450, 500);
-        dialog.add_button("_Cancel", gtk::ResponseType::Cancel);
-        dialog.add_button("Co_mmit", gtk::ResponseType::Ok);
+        dialog.add_button(&tr!("_Cancel"), gtk::ResponseType::Cancel);
+        dialog.add_button(&tr!("Co_mmit"), gtk::ResponseType::Ok);
 
         let content = dialog.content_area();
         content.set_spacing(18);
@@ -27,9 +29,12 @@ impl CommitDialog {
         content.set_margin_top(12);
         content.set_margin_bottom(12);
 
-        let files_label = gtk::Label::new(Some("Commit Files"));
+        let files_label = gtk::Label::new(Some(&tr!("Commit Files")));
         files_label.set_xalign(0.0);
-        files_label.set_markup("<b>Commit Files</b>");
+        files_label.set_markup(&format!(
+            "<b>{}</b>",
+            glib::markup_escape_text(&tr!("Commit Files"))
+        ));
         content.append(&files_label);
 
         let files_scrolled = gtk::ScrolledWindow::new();
@@ -43,9 +48,12 @@ impl CommitDialog {
         files_scrolled.set_child(Some(&fl));
         content.append(&files_scrolled);
 
-        let log_label = gtk::Label::new(Some("Log Message"));
+        let log_label = gtk::Label::new(Some(&tr!("Log Message")));
         log_label.set_xalign(0.0);
-        log_label.set_markup("<b>Log Message</b>");
+        log_label.set_markup(&format!(
+            "<b>{}</b>",
+            glib::markup_escape_text(&tr!("Log Message"))
+        ));
         content.append(&log_label);
 
         let log_scrolled = gtk::ScrolledWindow::new();

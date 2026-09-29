@@ -6,6 +6,8 @@
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
+use crate::tr;
+
 /// A dialog for generating and copying unified diff patches.
 pub struct PatchDialog {
     dialog: gtk::Dialog,
@@ -16,10 +18,10 @@ impl PatchDialog {
     /// Create a new patch dialog with the given patch content.
     pub fn new(patch_content: &str) -> Self {
         let dialog = gtk::Dialog::new();
-        dialog.set_title(Some("Format as Patch"));
+        dialog.set_title(Some(&tr!("Format as Patch")));
         dialog.set_default_size(600, 400);
-        dialog.add_button("Copy to Clipboard", gtk::ResponseType::Accept);
-        dialog.add_button("Close", gtk::ResponseType::Close);
+        dialog.add_button(&tr!("Copy to Clipboard"), gtk::ResponseType::Accept);
+        dialog.add_button(&tr!("Close"), gtk::ResponseType::Close);
 
         let content = dialog.content_area();
         let scrolled = gtk::ScrolledWindow::new();

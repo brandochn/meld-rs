@@ -17,6 +17,8 @@ use sourceview5::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use crate::tr;
+
 /// A search-and-replace bar that can be dynamically attached to any `gsv::View`.
 pub struct FindBar {
     container: gtk::Box,
@@ -43,20 +45,20 @@ impl FindBar {
         container.set_visible(false);
 
         let entry = gtk::SearchEntry::new();
-        entry.set_placeholder_text(Some("Find..."));
+        entry.set_placeholder_text(Some(&tr!("Find")));
         entry.set_width_chars(24);
         container.append(&entry);
 
         let case_sensitive = gtk::CheckButton::with_label("Aa");
-        case_sensitive.set_tooltip_text(Some("Match case"));
+        case_sensitive.set_tooltip_text(Some(&tr!("Match case")));
         container.append(&case_sensitive);
 
         let whole_word = gtk::CheckButton::with_label("W");
-        whole_word.set_tooltip_text(Some("Whole words"));
+        whole_word.set_tooltip_text(Some(&tr!("Whole words")));
         container.append(&whole_word);
 
         let regex = gtk::CheckButton::with_label(".*");
-        regex.set_tooltip_text(Some("Regular expression"));
+        regex.set_tooltip_text(Some(&tr!("Regular expression")));
         container.append(&regex);
 
         let prev_btn = gtk::Button::from_icon_name("go-up-symbolic");
@@ -66,16 +68,16 @@ impl FindBar {
         container.append(&next_btn);
 
         let replace_entry = gtk::Entry::new();
-        replace_entry.set_placeholder_text(Some("Replace with..."));
+        replace_entry.set_placeholder_text(Some(&tr!("Replace")));
         replace_entry.set_width_chars(16);
         replace_entry.set_visible(false);
         container.append(&replace_entry);
 
-        let replace_button = gtk::Button::with_label("Replace");
+        let replace_button = gtk::Button::with_label(&tr!("Replace"));
         replace_button.set_visible(false);
         container.append(&replace_button);
 
-        let replace_all_button = gtk::Button::with_label("Replace All");
+        let replace_all_button = gtk::Button::with_label(&tr!("Replace All"));
         replace_all_button.set_visible(false);
         container.append(&replace_all_button);
 
@@ -148,7 +150,8 @@ impl FindBar {
         let entry_replace_all = replace_entry.clone();
         replace_all_button.connect_clicked(move |_| {
             let count = replace_all(&ctx_replace_all, &entry_replace_all.text());
-            status_replace_all.set_text(&format!("{} replaced", count));
+            status_replace_all
+                .set_text(&tr!("{count} replaced").replace("{count}", &count.to_string()));
         });
 
         // Close button — hide the bar and clear the search context.
@@ -195,7 +198,7 @@ impl FindBar {
         context.connect_occurrences_count_notify(move |ctx| {
             let count = ctx.occurrences_count();
             let text = if count >= 0 {
-                format!("{} matches", count)
+                tr!("{count} matches").replace("{count}", &count.to_string())
             } else {
                 String::new()
             };
@@ -291,10 +294,14 @@ fn find_text(
             if let Some(view) = text_view.borrow().as_ref() {
                 view.scroll_mark_onscreen(&buffer.get_insert());
             }
-            status.set_text(if wrapped { "Wrapped" } else { "" });
+            if wrapped {
+                status.set_text(&tr!("Wrapped"));
+            } else {
+                status.set_text("");
+            }
         }
         None => {
-            status.set_text("Not found");
+            status.set_text(&tr!("Not found"));
         }
     }
 }
@@ -326,7 +333,7 @@ fn replace_current(
             let mut s = start;
             let mut e = end;
             if ctx.replace(&mut s, &mut e, replacement).is_err() {
-                status.set_text("Replace failed");
+                status.set_text(&tr!("Replace failed"));
                 return;
             }
         }

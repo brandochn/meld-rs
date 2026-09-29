@@ -8,6 +8,8 @@ use glib::prelude::*;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
+use crate::tr;
+
 /// A custom tab label with ellipsized text and a close button.
 pub struct TabLabel {
     pub widget: gtk::Box,
@@ -22,7 +24,7 @@ impl TabLabel {
 
         let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 4);
 
-        let label = gtk::Label::new(Some(text));
+        let label = gtk::Label::new(Some(&tr!(text)));
         label.set_ellipsize(pango::EllipsizeMode::Middle);
         label.set_width_request(150);
         label.set_single_line_mode(true);
@@ -36,7 +38,7 @@ impl TabLabel {
         close_button.set_child(Some(&close_icon));
         close_button.set_has_frame(false);
         close_button.set_focus_on_click(false);
-        close_button.set_tooltip_text(Some("Close Tab"));
+        close_button.set_tooltip_text(Some(&tr!("Close Tab")));
         close_button.add_css_class("flat");
         close_button.add_css_class("small-button");
         hbox.append(&close_button);
@@ -52,7 +54,7 @@ impl TabLabel {
 
     /// Update the label text.
     pub fn set_text(&self, text: &str) {
-        self.label.set_text(text);
+        self.label.set_text(&tr!(text));
     }
 
     /// Connect to the close button's clicked signal.

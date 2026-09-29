@@ -21,6 +21,7 @@ use crate::diff::engine::DiffOp;
 use crate::diff::file_compare::{
     self, DirDiffCache, FileCompareOptions, FileCompareResult, StatItem,
 };
+use crate::tr;
 use crate::ui::style;
 use crate::window::MeldPage;
 
@@ -86,14 +87,14 @@ impl DirDiff {
         toolbar.add_css_class("toolbar");
         toolbar.add_css_class("meld-actionbar");
 
-        let compare_btn = gtk::Button::with_label("Compare");
-        let refresh_btn = gtk::Button::with_label("Refresh");
-        let expand_btn = gtk::Button::with_label("Expand All");
-        let collapse_btn = gtk::Button::with_label("Collapse All");
-        let new_cb = gtk::CheckButton::with_label("New");
-        let modified_cb = gtk::CheckButton::with_label("Modified");
-        let missing_cb = gtk::CheckButton::with_label("Missing");
-        let identical_cb = gtk::CheckButton::with_label("Show identical");
+        let compare_btn = gtk::Button::with_label(&tr!("Compare"));
+        let refresh_btn = gtk::Button::with_label(&tr!("Refresh"));
+        let expand_btn = gtk::Button::with_label(&tr!("Expand All"));
+        let collapse_btn = gtk::Button::with_label(&tr!("Collapse All"));
+        let new_cb = gtk::CheckButton::with_label(&tr!("New"));
+        let modified_cb = gtk::CheckButton::with_label(&tr!("Modified"));
+        let missing_cb = gtk::CheckButton::with_label(&tr!("Missing"));
+        let identical_cb = gtk::CheckButton::with_label(&tr!("Show identical"));
         new_cb.set_active(true);
         modified_cb.set_active(true);
         missing_cb.set_active(true);
@@ -142,7 +143,7 @@ impl DirDiff {
             for (i, col_name) in columns.iter().enumerate() {
                 let renderer = gtk::CellRendererText::new();
                 let column = gtk::TreeViewColumn::new();
-                column.set_title(col_name);
+                column.set_title(&tr!(*col_name));
                 column.pack_start(&renderer, true);
                 column.add_attribute(&renderer, "text", i as i32);
                 column.set_resizable(true);
@@ -334,9 +335,6 @@ impl MeldPage for DirDiff {
     fn close(&self) -> gtk::ResponseType {
         self.cancel_scan();
         gtk::ResponseType::Ok
-    }
-    fn label(&self) -> String {
-        "Directory Comparison".into()
     }
     fn show_filters(&self) -> (bool, bool, bool) {
         (false, true, false)
@@ -617,7 +615,7 @@ fn populate_row(store: &gtk::TreeStore, iter: &gtk::TreeIter, entry: &DirDiffEnt
         entry.name.clone()
     };
     store.set_value(iter, 0, &display.to_value());
-    store.set_value(iter, 1, &entry.state.as_str().to_value());
+    store.set_value(iter, 1, &tr!(entry.state.as_str()).to_value());
     store.set_value(iter, 2, &size_str.to_value());
     store.set_value(iter, 3, &mod_str.to_value());
     store.set_value(iter, 4, &entry.is_dir.to_value());

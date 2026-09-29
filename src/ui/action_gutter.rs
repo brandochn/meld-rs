@@ -16,6 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::diff::engine::{Chunk, DiffOp};
+use crate::tr;
 use crate::ui::style;
 
 /// Which direction the gutter "points" (left-to-right or right-to-left).
@@ -142,8 +143,8 @@ impl ActionGutter {
             let popover = gtk::Popover::new();
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
 
-            let up_btn = gtk::Button::with_label("Copy Up");
-            let down_btn = gtk::Button::with_label("Copy Down");
+            let up_btn = gtk::Button::with_label(&tr!("Copy Up"));
+            let down_btn = gtk::Button::with_label(&tr!("Copy Down"));
 
             let cb_pop = Rc::clone(&action_cb_click);
             let chunks_pop = Rc::clone(&chunks);

@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
+use crate::tr;
 use crate::vc::{self, Vc, VcEntry, VcFileStatus};
 use crate::window::MeldPage;
 
@@ -36,17 +37,17 @@ impl VcView {
         action_bar.add_css_class("toolbar");
         action_bar.add_css_class("meld-actionbar");
 
-        let commit_btn = gtk::Button::with_label("Commit…");
+        let commit_btn = gtk::Button::with_label(&tr!("Commit…"));
         let refresh_btn = gtk::Button::from_icon_name("view-refresh-symbolic");
-        refresh_btn.set_tooltip_text(Some("Refresh"));
+        refresh_btn.set_tooltip_text(Some(&tr!("Refresh")));
         let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
-        add_btn.set_tooltip_text(Some("Add to version control"));
+        add_btn.set_tooltip_text(Some(&tr!("Add to version control")));
         let remove_btn = gtk::Button::from_icon_name("list-remove-symbolic");
-        remove_btn.set_tooltip_text(Some("Remove from version control"));
+        remove_btn.set_tooltip_text(Some(&tr!("Remove from version control")));
         let revert_btn = gtk::Button::from_icon_name("document-revert-symbolic");
-        revert_btn.set_tooltip_text(Some("Revert working copy"));
+        revert_btn.set_tooltip_text(Some(&tr!("Revert working copy to original state")));
         let resolve_btn = gtk::Button::from_icon_name("emblem-ok-symbolic");
-        resolve_btn.set_tooltip_text(Some("Mark as resolved"));
+        resolve_btn.set_tooltip_text(Some(&tr!("Mark as resolved in version control")));
 
         let linked_grp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         linked_grp.add_css_class("linked");
@@ -81,7 +82,7 @@ impl VcView {
         for (i, name) in ["File", "Status", "VCS"].iter().enumerate() {
             let renderer = gtk::CellRendererText::new();
             let column = gtk::TreeViewColumn::new();
-            column.set_title(name);
+            column.set_title(&tr!(*name));
             column.pack_start(&renderer, true);
             column.add_attribute(&renderer, "text", i as i32);
             column.set_resizable(true);
@@ -100,9 +101,12 @@ impl VcView {
         console_vbox.set_margin_start(6);
         console_vbox.set_margin_end(6);
 
-        let console_label = gtk::Label::new(Some("Console output"));
+        let console_label = gtk::Label::new(Some(&tr!("Console output")));
         console_label.set_xalign(0.0);
-        console_label.set_markup("<b>Console output</b>");
+        console_label.set_markup(&format!(
+            "<b>{}</b>",
+            glib::markup_escape_text(&tr!("Console output"))
+        ));
         console_vbox.append(&console_label);
 
         let console_scrolled = gtk::ScrolledWindow::new();
@@ -273,17 +277,6 @@ impl MeldPage for VcView {
     fn close(&self) -> gtk::ResponseType {
         gtk::ResponseType::Ok
     }
-    fn label(&self) -> String {
-        self.location
-            .borrow()
-            .as_ref()
-            .and_then(|l| {
-                Path::new(l)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-            })
-            .unwrap_or("Version Control".into())
-    }
     fn show_filters(&self) -> (bool, bool, bool) {
         (true, false, false)
     }
@@ -367,7 +360,8 @@ fn refresh_vc(
         }
         Err(e) => {
             let mut end = console_buffer.end_iter();
-            console_buffer.insert(&mut end, &format!("Error: {e}\n"));
+            let line = tr!("Error: {error}").replace("{error}", &e.translated());
+            console_buffer.insert(&mut end, &format!("{line}\n"));
         }
     }
 }
@@ -383,14 +377,14 @@ fn populate_vc(tv: &gtk::TreeView, entries: &[VcEntry]) {
     for entry in entries {
         let iter = store.append(None);
         let status_icon = match entry.status {
-            VcFileStatus::Modified => "\u{270E} Modified",
-            VcFileStatus::Staged => "\u{2713} Staged",
-            VcFileStatus::Untracked => "? Untracked",
-            VcFileStatus::Missing => "\u{2717} Missing",
-            VcFileStatus::Conflicted => "\u{26A0} Conflicted",
-            VcFileStatus::Deleted => "\u{2715} Deleted",
-            VcFileStatus::Renamed => "\u{2192} Renamed",
-            _ => "-",
+            VcFileStatus::Modified => format!("\u{270E} {}", tr!("Modified")),
+            VcFileStatus::Staged => format!("\u{2713} {}", tr!("Staged")),
+            VcFileStatus::Untracked => format!("? {}", tr!("Untracked")),
+            VcFileStatus::Missing => format!("\u{2717} {}", tr!("Missing")),
+            VcFileStatus::Conflicted => format!("\u{26A0} {}", tr!("Conflicted")),
+            VcFileStatus::Deleted => format!("\u{2715} {}", tr!("Deleted")),
+            VcFileStatus::Renamed => format!("\u{2192} {}", tr!("Renamed")),
+            _ => "-".to_string(),
         };
         store.set_value(&iter, 0, &entry.path.to_value());
         store.set_value(&iter, 1, &status_icon.to_value());

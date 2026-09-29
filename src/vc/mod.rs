@@ -9,6 +9,8 @@ pub mod svn;
 
 use std::path::Path;
 
+use crate::tr;
+
 use self::git::Git;
 use self::hg::Mercurial;
 use self::svn::Svn;
@@ -31,6 +33,30 @@ pub enum VcError {
     /// No VCS was detected in the given directory.
     #[error("No VCS detected in '{0}'")]
     NoVcsDetected(String),
+}
+
+impl VcError {
+    /// User-facing, translatable form of this error.
+    ///
+    /// `thiserror`'s `#[error]` attribute is applied at compile time, so the
+    /// display text is produced here instead (mirroring Meld, which formats
+    /// these messages with `_()`).
+    pub fn translated(&self) -> String {
+        match self {
+            VcError::ToolNotFound(tool) => {
+                tr!("VCS tool '{tool}' not found").replace("{tool}", tool)
+            }
+            VcError::CommandFailed(message) => {
+                tr!("VCS command failed: {message}").replace("{message}", message)
+            }
+            VcError::ParseError(message) => {
+                tr!("VCS parse error: {message}").replace("{message}", message)
+            }
+            VcError::NoVcsDetected(path) => {
+                tr!("No VCS detected in '{path}'").replace("{path}", path)
+            }
+        }
+    }
 }
 
 /// Status of a file under version control.

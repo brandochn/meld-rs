@@ -18,6 +18,7 @@ use crate::config::recent::RecentType;
 use crate::config::settings::{MeldSettings, PaneOrder};
 use crate::diff::dirdiff::DirDiff;
 use crate::diff::filediff::FileDiff;
+use crate::tr;
 use crate::ui::new_diff_tab::DiffType;
 use crate::ui::tab_manager::TabLabel;
 use crate::ui::vc_view::VcView;
@@ -62,7 +63,17 @@ pub trait MeldPage {
     fn close(&self) -> gtk::ResponseType;
     fn on_container_switch_in(&self) {}
     fn on_container_switch_out(&self) {}
-    fn label(&self) -> String;
+
+    /// True for the "New comparison" placeholder tab, which the window removes
+    /// once a real comparison has been created.
+    ///
+    /// This is the page-identity hook. It must not be derived from display text:
+    /// those are localized, so comparing them against an English literal silently
+    /// stops matching in every non-English locale (which is how the placeholder
+    /// tab used to be leaked).
+    fn is_new_comparison_placeholder(&self) -> bool {
+        false
+    }
     fn show_filters(&self) -> (bool, bool, bool) {
         (false, false, false)
     }
@@ -387,11 +398,11 @@ fn show_help_overlay(parent: Option<&gtk::Window>) {
 
     for (group_title, shortcuts) in groups {
         let group = gtk::ShortcutsGroup::builder().build();
-        group.set_title(Some(group_title));
+        group.set_title(Some(&tr!(group_title)));
         group.set_visible(true);
         for (source, title) in *shortcuts {
             let shortcut = gtk::ShortcutsShortcut::builder().build();
-            shortcut.set_title(Some(title));
+            shortcut.set_title(Some(&tr!(title)));
             // GTK only auto-resolves `action-name` when the shortcuts window
             // is associated via the private `gtk_shortcuts_window_set_window`,
             // which gtk-rs does not expose. Set the accelerator explicitly.
@@ -467,13 +478,13 @@ impl MeldWindow {
         grp_left.add_css_class("linked");
 
         let new_btn = gtk::Button::from_icon_name("tab-new-symbolic");
-        new_btn.set_tooltip_text(Some("Start a new comparison"));
+        new_btn.set_tooltip_text(Some(&tr!("Start a new comparison")));
         new_btn.set_focus_on_click(false);
         grp_left.append(&new_btn);
 
         let recent_btn = gtk::MenuButton::new();
         recent_btn.set_icon_name("document-open-recent-symbolic");
-        recent_btn.set_tooltip_text(Some("Open a recent comparison"));
+        recent_btn.set_tooltip_text(Some(&tr!("Open a recent comparison")));
         recent_btn.set_focus_on_click(false);
         grp_left.append(&recent_btn);
         header.pack_start(&grp_left);
@@ -481,12 +492,12 @@ impl MeldWindow {
         let grp_changes = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         grp_changes.add_css_class("linked");
         let prev_change_btn = gtk::Button::from_icon_name("go-up-symbolic");
-        prev_change_btn.set_tooltip_text(Some("Go to the previous change"));
+        prev_change_btn.set_tooltip_text(Some(&tr!("Go to the previous change")));
         prev_change_btn.set_focus_on_click(false);
         prev_change_btn.add_css_class("image-button");
         grp_changes.append(&prev_change_btn);
         let next_change_btn = gtk::Button::from_icon_name("go-down-symbolic");
-        next_change_btn.set_tooltip_text(Some("Go to the next change"));
+        next_change_btn.set_tooltip_text(Some(&tr!("Go to the next change")));
         next_change_btn.set_focus_on_click(false);
         next_change_btn.add_css_class("image-button");
         grp_changes.append(&next_change_btn);
@@ -495,13 +506,13 @@ impl MeldWindow {
         let grp_conflicts = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         grp_conflicts.add_css_class("linked");
         let prev_conflict_btn = gtk::Button::from_icon_name("go-top-symbolic");
-        prev_conflict_btn.set_tooltip_text(Some("Go to the previous conflict"));
+        prev_conflict_btn.set_tooltip_text(Some(&tr!("Go to the previous conflict")));
         prev_conflict_btn.set_focus_on_click(false);
         prev_conflict_btn.add_css_class("image-button");
         prev_conflict_btn.set_visible(false);
         grp_conflicts.append(&prev_conflict_btn);
         let next_conflict_btn = gtk::Button::from_icon_name("go-bottom-symbolic");
-        next_conflict_btn.set_tooltip_text(Some("Go to the next conflict"));
+        next_conflict_btn.set_tooltip_text(Some(&tr!("Go to the next conflict")));
         next_conflict_btn.set_focus_on_click(false);
         next_conflict_btn.add_css_class("image-button");
         next_conflict_btn.set_visible(false);
@@ -514,13 +525,13 @@ impl MeldWindow {
         let grp_push = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         grp_push.add_css_class("linked");
         let push_left_btn = gtk::Button::from_icon_name("go-previous-symbolic");
-        push_left_btn.set_tooltip_text(Some("Push current change to the left"));
+        push_left_btn.set_tooltip_text(Some(&tr!("Push current change to the left")));
         push_left_btn.set_focus_on_click(false);
         push_left_btn.add_css_class("image-button");
         push_left_btn.set_action_name(Some("view.file-push-left"));
         grp_push.append(&push_left_btn);
         let push_right_btn = gtk::Button::from_icon_name("go-next-symbolic");
-        push_right_btn.set_tooltip_text(Some("Push current change to the right"));
+        push_right_btn.set_tooltip_text(Some(&tr!("Push current change to the right")));
         push_right_btn.set_focus_on_click(false);
         push_right_btn.add_css_class("image-button");
         push_right_btn.set_action_name(Some("view.file-push-right"));
@@ -529,7 +540,7 @@ impl MeldWindow {
 
         let copy_btn = gtk::MenuButton::new();
         copy_btn.set_icon_name("edit-copy-symbolic");
-        copy_btn.set_tooltip_text(Some("Copy chunks"));
+        copy_btn.set_tooltip_text(Some(&tr!("Copy chunks")));
         copy_btn.set_focus_on_click(false);
         copy_btn.add_css_class("image-button");
         copy_btn.add_css_class("raised");
@@ -556,7 +567,7 @@ impl MeldWindow {
             ),
         ] {
             let item = gtk::Button::new();
-            let item_label = gtk::Label::new(Some(label));
+            let item_label = gtk::Label::new(Some(&tr!(label)));
             item_label.set_xalign(0.0);
             item_label.set_hexpand(true);
             item.set_child(Some(&item_label));
@@ -570,7 +581,7 @@ impl MeldWindow {
         view_toolbar.append(&copy_btn);
 
         let delete_btn = gtk::Button::from_icon_name("edit-delete-symbolic");
-        delete_btn.set_tooltip_text(Some("Delete change"));
+        delete_btn.set_tooltip_text(Some(&tr!("Delete change")));
         delete_btn.set_focus_on_click(false);
         delete_btn.add_css_class("image-button");
         delete_btn.add_css_class("raised");
@@ -581,22 +592,22 @@ impl MeldWindow {
 
         let gear_btn = gtk::MenuButton::new();
         gear_btn.set_icon_name("open-menu-symbolic");
-        gear_btn.set_tooltip_text(Some("Menu"));
+        gear_btn.set_tooltip_text(Some(&tr!("Menu")));
         gear_btn.set_focus_on_click(false);
         header.pack_end(&gear_btn);
 
         let vc_filter_btn = gtk::MenuButton::new();
-        vc_filter_btn.set_label("Version Filters");
+        vc_filter_btn.set_label(&tr!("Version Filters"));
         vc_filter_btn.set_visible(false);
         header.pack_end(&vc_filter_btn);
 
         let folder_filter_btn = gtk::MenuButton::new();
-        folder_filter_btn.set_label("File Filters");
+        folder_filter_btn.set_label(&tr!("File Filters"));
         folder_filter_btn.set_visible(false);
         header.pack_end(&folder_filter_btn);
 
         let text_filter_btn = gtk::MenuButton::new();
-        text_filter_btn.set_label("Text Filters");
+        text_filter_btn.set_label(&tr!("Text Filters"));
         text_filter_btn.set_visible(false);
         header.pack_end(&text_filter_btn);
 
@@ -773,7 +784,7 @@ impl MeldWindow {
                     let mut pages = p_clone.borrow_mut();
                     let mut indices = Vec::new();
                     for (i, page) in pages.iter().enumerate() {
-                        if page.label() == "New comparison" {
+                        if page.is_new_comparison_placeholder() {
                             indices.push(i);
                         }
                     }
@@ -1455,7 +1466,7 @@ impl MeldWindow {
             vbox.set_margin_start(12);
             vbox.set_margin_end(12);
 
-            let header = gtk::Label::new(Some("Text Filters"));
+            let header = gtk::Label::new(Some(&tr!("Text Filters")));
             header.add_css_class("heading");
             header.set_halign(gtk::Align::Start);
             vbox.append(&header);
@@ -1902,7 +1913,7 @@ fn wire_new_diff_tab_standalone(
                 let mut pages = p_clone.borrow_mut();
                 let mut indices = Vec::new();
                 for (i, page) in pages.iter().enumerate() {
-                    if page.label() == "New comparison" {
+                    if page.is_new_comparison_placeholder() {
                         indices.push(i);
                     }
                 }
@@ -1988,58 +1999,76 @@ fn build_gear_menu() -> gio::Menu {
 
     // File section
     let file_section = gio::Menu::new();
-    file_section.append(Some("Save As..."), Some("view.save-as"));
-    file_section.append(Some("Save A_ll"), Some("view.save-all"));
-    file_section.append(Some("Revert Files..."), Some("view.revert"));
-    file_section.append(Some("_Open Externally"), Some("view.open-external"));
+    file_section.append(Some(&tr!("Save As…")), Some("view.save-as"));
+    file_section.append(Some(&tr!("Save A_ll")), Some("view.save-all"));
+    file_section.append(Some(&tr!("Revert Files…")), Some("view.revert"));
+    file_section.append(Some(&tr!("_Open Externally")), Some("view.open-external"));
     menu.append_section(None, &file_section);
 
     // Refresh section
     let refresh_section = gio::Menu::new();
-    refresh_section.append(Some("Refresh Comparison"), Some("view.refresh"));
+    refresh_section.append(Some(&tr!("Refresh Comparison")), Some("view.refresh"));
     menu.append_section(None, &refresh_section);
 
     // Find section
     let find_section = gio::Menu::new();
-    find_section.append(Some("_Find..."), Some("view.find"));
-    find_section.append(Some("_Replace..."), Some("view.find-replace"));
+    find_section.append(Some(&tr!("_Find…")), Some("view.find"));
+    find_section.append(Some(&tr!("_Replace…")), Some("view.find-replace"));
     menu.append_section(None, &find_section);
 
     // View submenu with sections matching the original menus.ui
     let view_sub = gio::Menu::new();
     let view_section = gio::Menu::new();
-    view_section.append(Some("Fullscreen"), Some("win.fullscreen"));
-    view_section.append(Some("Overview Map"), Some("view.show-overview-map"));
+    view_section.append(Some(&tr!("Fullscreen")), Some("win.fullscreen"));
+    view_section.append(Some(&tr!("Overview Map")), Some("view.show-overview-map"));
     view_section.append(
-        Some("Version Control Console"),
+        Some(&tr!("Version Control Console")),
         Some("view.vc-console-visible"),
     );
-    view_section.append(Some("Lock Scrolling"), Some("view.lock-scrolling"));
+    view_section.append(Some(&tr!("Lock Scrolling")), Some("view.lock-scrolling"));
     view_sub.append_section(None, &view_section);
     let swap_section = gio::Menu::new();
-    swap_section.append(Some("Swap Left and Right Panes"), Some("view.swap-2-panes"));
+    swap_section.append(
+        Some(&tr!("Swap Left and Right Panes")),
+        Some("view.swap-2-panes"),
+    );
     view_sub.append_section(None, &swap_section);
-    menu.append_submenu(Some("_View"), &view_sub);
+    menu.append_submenu(Some(&tr!("_View")), &view_sub);
 
     // Comparison submenu with sections matching the original menus.ui
     let cmp_sub = gio::Menu::new();
-    cmp_sub.append(Some("_Stop"), Some("win.stop"));
+    cmp_sub.append(Some(&tr!("_Stop")), Some("win.stop"));
     let merge_section = gio::Menu::new();
-    merge_section.append(Some("Merge All from _Left"), Some("view.merge-all-left"));
-    merge_section.append(Some("Merge All from _Right"), Some("view.merge-all-right"));
-    merge_section.append(Some("Merge _All"), Some("view.merge-all"));
+    merge_section.append(
+        Some(&tr!("Merge All from _Left")),
+        Some("view.merge-all-left"),
+    );
+    merge_section.append(
+        Some(&tr!("Merge All from _Right")),
+        Some("view.merge-all-right"),
+    );
+    merge_section.append(Some(&tr!("Merge _All")), Some("view.merge-all"));
     cmp_sub.append_section(None, &merge_section);
     let tool_section = gio::Menu::new();
-    tool_section.append(Some("Format as _Patch..."), Some("view.format-as-patch"));
+    tool_section.append(
+        Some(&tr!("Format as _Patch…")),
+        Some("view.format-as-patch"),
+    );
     cmp_sub.append_section(None, &tool_section);
-    menu.append_submenu(Some("_Comparison"), &cmp_sub);
+    menu.append_submenu(Some(&tr!("_Comparison")), &cmp_sub);
 
     // Application section
     let app_section = gio::Menu::new();
-    app_section.append(Some("_Preferences"), Some("win.preferences"));
-    app_section.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
-    app_section.append(Some("_Help"), Some("app.help"));
-    app_section.append(Some("_About Meld"), Some("app.about"));
+    app_section.append(Some(&tr!("_Preferences")), Some("win.preferences"));
+    app_section.append(
+        Some(&tr!("Keyboard Shortcuts")),
+        Some("win.show-help-overlay"),
+    );
+    app_section.append(Some(&tr!("_Help")), Some("app.help"));
+    // Brand name with a mnemonic (like the other menu items); intentionally left
+    // untranslated, since no msgid exists and translating it would rename the
+    // application.
+    app_section.append(Some("_About Meld-rs"), Some("app.about"));
     menu.append_section(None, &app_section);
 
     menu

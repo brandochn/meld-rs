@@ -17,6 +17,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
+use crate::tr;
+
 /// (id, label) for each available folder column, in default display order.
 const AVAILABLE_COLUMNS: &[(&str, &str)] = &[
     ("size", "Size"),
@@ -109,7 +111,7 @@ fn create_row(
     rows: &Rows,
 ) -> adw::SwitchRow {
     let row = adw::SwitchRow::new();
-    row.set_title(label);
+    row.set_title(&tr!(label));
     row.set_active(active);
 
     // Drag handle for reordering rows.
@@ -130,11 +132,11 @@ fn create_row(
     menu_button.set_icon_name("view-more-symbolic");
     menu_button.add_css_class("flat");
     menu_button.set_valign(gtk::Align::Center);
-    menu_button.set_tooltip_text(Some("Column options"));
+    menu_button.set_tooltip_text(Some(&tr!("Column options")));
     menu_button.insert_action_group("row", Some(&group));
     let menu = gio::Menu::new();
-    menu.append(Some("Move Up"), Some("row.move-up"));
-    menu.append(Some("Move Down"), Some("row.move-down"));
+    menu.append(Some(&tr!("Move Up")), Some("row.move-up"));
+    menu.append(Some(&tr!("Move Down")), Some("row.move-down"));
     menu_button.set_menu_model(Some(&menu));
     row.add_suffix(&menu_button);
 
