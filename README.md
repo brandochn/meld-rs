@@ -1,8 +1,18 @@
 # Meld-rs
 
+![Meld-rs icon](resources/icons/scalable/apps/org.gnome.meld-rs.svg)
+
 **Meld-rs** is a complete rewrite of the [Meld](https://gitlab.gnome.org/GNOME/meld) visual diff
 and merge tool in **Rust** using **gtk-rs** (GTK 4). It provides side-by-side file and directory
 comparison, 3-way merge, and version control integration (Git, SVN, Mercurial).
+
+> [!NOTE]
+> Meld-rs is an independent community project inspired by Meld and written in
+> Rust. It is not affiliated with, endorsed by, or maintained by the
+> [GNOME Project](https://www.gnome.org/) or the upstream Meld maintainers.
+> Meld-rs reuses Meld's GPL-licensed localization resources and gettext
+> catalogs, allowing it to build upon the translation work contributed by the
+> community.
 
 > [!WARNING]
 > This project is in an **early experimental phase** and under active development.
@@ -108,6 +118,31 @@ When running from source without installing:
 cargo run -- <file1> <file2>
 ```
 
+## Desktop integration (launcher icon)
+
+The application icon is embedded in the binary, so windows always show it. To make
+the icon appear in your desktop's launcher, task bar, and application menus, install
+the bundled icon and `.desktop` entry into your data directory:
+
+```bash
+# Linux / macOS — per-user install (no root needed)
+./scripts/install-desktop.sh
+
+# Linux — system-wide install
+sudo ./scripts/install-desktop.sh /usr/local
+```
+
+```powershell
+# Windows (MSYS2 MINGW64 prefix, auto-detected)
+scripts\install-desktop.ps1
+```
+
+The icon is installed to `share/icons/hicolor/scalable/apps/org.gnome.meld-rs.svg`,
+matching the `Icon=org.gnome.meld-rs` key in the desktop entry.
+
+> The desktop entry launches `meld-rs` from `PATH`, so install the binary there
+> (e.g. `cargo install --path .`) for the launcher to work.
+
 ## Running Tests
 
 The `gui` feature is enabled by default, which links against GTK 4 and requires
@@ -155,6 +190,16 @@ Meld-rs is licensed under the GNU General Public License v2.0 or later (GPL-2.0-
 the same license as the original Meld.
 
 See [LICENSE](LICENSE) for the full text.
+
+## Disclaimer
+
+Meld-rs is an independent community project inspired by
+[Meld](https://gitlab.gnome.org/GNOME/meld). It is not affiliated with,
+sponsored by, or endorsed by the [GNOME Project](https://www.gnome.org/) or the
+upstream Meld maintainers.
+
+"Meld" and "GNOME" are referenced solely to identify the software ecosystem and
+compatibility goals of this project.
 
 ## Contributing
 
