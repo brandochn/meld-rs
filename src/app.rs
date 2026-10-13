@@ -21,6 +21,21 @@ use crate::window::MeldWindow;
 const LANGUAGE_SCHEMA_GRESOURCE: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/meld-language-schema.gresource"));
 
+/// Compiled GResource providing the bundled application icon.
+#[cfg(icons_available)]
+const APP_ICON_GRESOURCE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/meld-icons.gresource"));
+
+/// Resource path under which the icon GResource is mounted. GTK treats this as
+/// part of the hicolor icon theme, so `scalable/apps/org.gnome.meld-rs.svg`
+/// resolves for the icon name `org.gnome.meld-rs`.
+#[cfg(icons_available)]
+const ICON_RESOURCE_PATH: &str = "/org/gnome/meld-rs/icons";
+
+/// Fallback icon source, used when `glib-compile-resources` was unavailable at
+/// build time and the GResource could not be compiled.
+#[cfg(not(icons_available))]
+const APP_ICON_SVG: &str = include_str!("../resources/icons/scalable/apps/org.gnome.meld-rs.svg");
+
 pub const APP_ID: &str = "org.gnome.meld-rs";
 pub const APP_NAME: &str = "Meld-rs";
 pub const RESOURCE_BASE: &str = "/org/gnome/meld-rs";
@@ -348,6 +363,7 @@ fn ensure_initialized(app: &gtk::Application, done: &Cell<bool>) {
     setup_actions(app);
     setup_css();
     setup_style_schemes();
+    setup_app_icon();
     setup_language_schema();
     apply_style_variant();
     done.set(true);
@@ -395,6 +411,53 @@ fn setup_style_schemes() {
     let manager = sourceview5::StyleSchemeManager::default();
     manager.append_search_path(&dir.to_string_lossy());
     manager.force_rescan();
+}
+
+/// Make the bundled application icon available to the GTK icon theme.
+///
+/// The icon is compiled into a GResource by `build.rs` and registered here,
+/// then its resource path is added to the icon theme. `MeldApp::new` sets
+/// `org.gnome.meld-rs` as the default window icon name, so once the icon theme
+/// knows where to look, every window (and the about dialog) picks it up.
+///
+/// If the GResource was not compiled (e.g. `glib-compile-resources` missing at
+/// build time), the embedded SVG is written to the user data directory and
+/// added as a search path instead, so the icon still resolves.
+fn setup_app_icon() {
+    let Some(display) = gdk4::Display::default() else {
+        log::warn!("setup_app_icon: no display available");
+        return;
+    };
+    let theme = gtk::IconTheme::for_display(&display);
+
+    #[cfg(icons_available)]
+    {
+        let bytes = glib::Bytes::from_static(APP_ICON_GRESOURCE);
+        match gio::Resource::from_data(&bytes) {
+            Ok(resource) => {
+                gio::resources_register(&resource);
+                theme.add_resource_path(ICON_RESOURCE_PATH);
+            }
+            Err(e) => log::warn!("setup_app_icon: failed to load icon resource: {e}"),
+        }
+    }
+
+    #[cfg(not(icons_available))]
+    {
+        if let Some(dir) = dirs::data_dir().map(|d| d.join("meld-rs").join("icons")) {
+            let dest = dir.join("hicolor").join("scalable").join("apps");
+            if std::fs::create_dir_all(&dest).is_ok()
+                && std::fs::write(dest.join("org.gnome.meld-rs.svg"), APP_ICON_SVG).is_ok()
+            {
+                theme.add_search_path(&dir);
+            } else {
+                log::warn!(
+                    "setup_app_icon: could not write fallback icon to {}",
+                    dir.display()
+                );
+            }
+        }
+    }
 }
 
 /// Ensure GtkSourceView can load its `.lang` syntax-highlighting definitions.
@@ -584,6 +647,7 @@ fn show_about_dialog(parent: Option<&gtk::Window>) {
     dialog.set_transient_for(parent);
     dialog.set_program_name(Some(APP_NAME));
     dialog.set_version(Some(VERSION));
+    dialog.set_logo_icon_name(Some(APP_ID));
     dialog.set_comments(Some(&tr!(
         "Visual diff and merge tool — rewritten in Rust with gtk-rs\nby Hildebrando Chávez Núñez"
     )));

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Bundle the application icon resources under /org/gnome/meld-rs/icons.
+     GTK treats a resource path added via gtk_icon_theme_add_resource_path()
+     as part of the hicolor icon theme, so the icon lives in the standard
+     <size>/<category>/<name> layout (here scalable/apps/). -->
+<gresources>
+  <gresource prefix="/org/gnome/meld-rs/icons">
+    <file>scalable/apps/org.gnome.meld-rs.svg</file>
+  </gresource>
+</gresources>

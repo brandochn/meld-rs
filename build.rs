@@ -6,7 +6,9 @@
 /// 2. Compiles the missing RelaxNG schema into a GResource so that
 ///    GtkSourceView can load language-spec `.lang` files on Windows/MSYS2
 ///    (where the bundled `language-specs.gresource` is missing `language2.rng`).
-/// 3. Compiles the vendored gettext catalogs (`po/*.po`) with `msgfmt` into
+/// 3. Compiles the application icon into a GResource so it can be registered
+///    with the GTK icon theme at startup.
+/// 4. Compiles the vendored gettext catalogs (`po/*.po`) with `msgfmt` into
 ///    `target/share/locale/<lang>/LC_MESSAGES/meld-rs.mo` so the runtime can
 ///    load them.  If `msgfmt` is unavailable the UI gracefully falls back to
 ///    English and a warning is emitted.
@@ -14,12 +16,15 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(gresource_available)");
+    println!("cargo::rustc-check-cfg=cfg(icons_available)");
     println!("cargo:rerun-if-changed=po");
+    println!("cargo:rerun-if-changed=resources/icons");
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
 
     compile_schemas(&out_dir);
     compile_gresource(&out_dir);
+    compile_icons(&out_dir);
     compile_translations(&out_dir);
 }
 
@@ -95,6 +100,32 @@ fn compile_gresource(out_dir: &Path) {
         }
         Err(e) => {
             eprintln!("build.rs: glib-compile-resources not found ({e})");
+        }
+    }
+}
+
+/// Compile the application icon into a GResource so it can be registered with
+/// the GTK icon theme at startup (see `app::setup_app_icon`).
+fn compile_icons(out_dir: &Path) {
+    let gresource_xml = "resources/icons/meld-icons.gresource.xml";
+    let gresource_out = out_dir.join("meld-icons.gresource");
+
+    match std::process::Command::new("glib-compile-resources")
+        .arg("--target")
+        .arg(&gresource_out)
+        .arg("--sourcedir=resources/icons")
+        .arg(gresource_xml)
+        .status()
+    {
+        Ok(status) if status.success() => {
+            println!("cargo:warning=Icon GResource compiled successfully");
+            println!("cargo:rustc-cfg=icons_available");
+        }
+        Ok(status) => {
+            eprintln!("build.rs: glib-compile-resources exited with {status} for icons");
+        }
+        Err(e) => {
+            eprintln!("build.rs: glib-compile-resources not found ({e}); app icon will be loaded from disk");
         }
     }
 }
