@@ -1,6 +1,11 @@
 # Meld-rs
 
+<div align="center">
+
 ![Meld-rs icon](resources/icons/scalable/apps/org.gnome.meld-rs.svg)
+
+</div>
+
 
 **Meld-rs** is a complete rewrite of the [Meld](https://gitlab.gnome.org/GNOME/meld) visual diff
 and merge tool in **Rust** using **gtk-rs** (GTK 4). It provides side-by-side file and directory
