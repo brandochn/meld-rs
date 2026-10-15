@@ -26,7 +26,7 @@ const LANGUAGE_SCHEMA_GRESOURCE: &[u8] =
 const APP_ICON_GRESOURCE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/meld-icons.gresource"));
 
 /// Resource path under which the icon GResource is mounted. GTK treats this as
-/// part of the hicolor icon theme, so `scalable/apps/org.gnome.meld-rs.svg`
+/// part of the hicolor icon theme, so `256x256/apps/org.gnome.meld-rs.png`
 /// resolves for the icon name `org.gnome.meld-rs`.
 #[cfg(icons_available)]
 const ICON_RESOURCE_PATH: &str = "/org/gnome/meld-rs/icons";
@@ -34,7 +34,7 @@ const ICON_RESOURCE_PATH: &str = "/org/gnome/meld-rs/icons";
 /// Fallback icon source, used when `glib-compile-resources` was unavailable at
 /// build time and the GResource could not be compiled.
 #[cfg(not(icons_available))]
-const APP_ICON_SVG: &str = include_str!("../resources/icons/scalable/apps/org.gnome.meld-rs.svg");
+const APP_ICON_PNG: &[u8] = include_bytes!("../resources/icons/256x256/apps/org.gnome.meld-rs.png");
 
 /// Application stylesheet, always loaded.
 const BASE_CSS: &str = include_str!("../resources/css/meld.css");
@@ -471,8 +471,14 @@ fn setup_style_schemes() {
 /// `org.gnome.meld-rs` as the default window icon name, so once the icon theme
 /// knows where to look, every window (and the about dialog) picks it up.
 ///
+/// The bundled icon is a PNG rather than the SVG: GTK needs a gdk-pixbuf
+/// loader module to decode SVG, and that module is not guaranteed to be
+/// present (it is missing from our own AppImage, where the icon failed with
+/// "Unrecognized image file format").  PNG support is built into gdk-pixbuf, so
+/// it always works.
+///
 /// If the GResource was not compiled (e.g. `glib-compile-resources` missing at
-/// build time), the embedded SVG is written to the user data directory and
+/// build time), the embedded PNG is written to the user data directory and
 /// added as a search path instead, so the icon still resolves.
 fn setup_app_icon() {
     let Some(display) = gdk4::Display::default() else {
@@ -496,9 +502,9 @@ fn setup_app_icon() {
     #[cfg(not(icons_available))]
     {
         if let Some(dir) = dirs::data_dir().map(|d| d.join("meld-rs").join("icons")) {
-            let dest = dir.join("hicolor").join("scalable").join("apps");
+            let dest = dir.join("hicolor").join("256x256").join("apps");
             if std::fs::create_dir_all(&dest).is_ok()
-                && std::fs::write(dest.join("org.gnome.meld-rs.svg"), APP_ICON_SVG).is_ok()
+                && std::fs::write(dest.join("org.gnome.meld-rs.png"), APP_ICON_PNG).is_ok()
             {
                 theme.add_search_path(&dir);
             } else {

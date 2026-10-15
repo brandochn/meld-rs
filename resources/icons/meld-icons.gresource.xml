@@ -1,10 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Bundle the application icon resources under /org/gnome/meld-rs/icons.
      GTK treats a resource path added via gtk_icon_theme_add_resource_path()
-     as part of the hicolor icon theme, so the icon lives in the standard
-     <size>/<category>/<name> layout (here scalable/apps/). -->
+     as part of the hicolor icon theme, so the icons live in the standard
+     <size>/<category>/<name> layout.
+
+     Raster PNGs rather than the SVG: GTK decodes SVG through a gdk-pixbuf
+     loader module, which is not guaranteed to be present (it is missing from
+     our own AppImage, where the icon failed with "Unrecognized image file
+     format" and was not drawn).  PNG support is compiled into gdk-pixbuf
+     itself, so it always works.
+
+     Regenerate from resources/icons/scalable/apps/org.gnome.meld-rs.svg with
+     any SVG rasteriser, e.g. `rsvg-convert -w <size> -h <size>`. -->
 <gresources>
   <gresource prefix="/org/gnome/meld-rs/icons">
-    <file>scalable/apps/org.gnome.meld-rs.svg</file>
+    <file>16x16/apps/org.gnome.meld-rs.png</file>
+    <file>32x32/apps/org.gnome.meld-rs.png</file>
+    <file>48x48/apps/org.gnome.meld-rs.png</file>
+    <file>64x64/apps/org.gnome.meld-rs.png</file>
+    <file>128x128/apps/org.gnome.meld-rs.png</file>
+    <file>256x256/apps/org.gnome.meld-rs.png</file>
   </gresource>
 </gresources>
