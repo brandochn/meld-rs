@@ -25,6 +25,11 @@ const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 /// Tests in one binary run on parallel threads and share the process
 /// environment and the global catalog, so every test that mutates them must
 /// hold this lock for its whole body.
+///
+/// `set_var`/`remove_var` race with *any* concurrent `getenv`, not only with
+/// other writers, so a test whose body reads the environment - directly or
+/// through `built_locale_dir` - must hold this lock for its *whole* body too.
+/// Acquiring it late or releasing it mid-test makes the suite flaky.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn env_guard() -> MutexGuard<'static, ()> {
@@ -87,6 +92,8 @@ const CANARY_GERMAN: &str = "Neuen Vergleich starten";
 
 #[test]
 fn every_vendored_language_has_a_loadable_catalog() {
+    let _guard = env_guard();
+
     let Some(locale_dir) = built_locale_dir() else {
         eprintln!("skipping: no compiled locale dir (msgfmt unavailable at build time)");
         return;
@@ -100,7 +107,6 @@ fn every_vendored_language_has_a_loadable_catalog() {
         languages.len()
     );
 
-    let _guard = env_guard();
     let mut missing = Vec::new();
     let mut too_small = Vec::new();
     let mut total = 0usize;
@@ -140,13 +146,16 @@ fn every_vendored_language_has_a_loadable_catalog() {
 
 #[test]
 fn every_vendored_language_is_selected_by_the_loader() {
+    // One guard for the whole loop: re-acquiring it per iteration would release
+    // the environment mid-test and reopen the race.
+    let _guard = env_guard();
+
     let Some(locale_dir) = built_locale_dir() else {
         eprintln!("skipping: no compiled locale dir");
         return;
     };
 
     for language in vendored_languages() {
-        let _guard = env_guard();
         set_locale(&locale_dir, &language);
         meld_rs::i18n::init();
         assert_eq!(
@@ -159,6 +168,8 @@ fn every_vendored_language_is_selected_by_the_loader() {
 
 #[test]
 fn real_catalog_plural_rules_select_expected_forms() {
+    let _guard = env_guard();
+
     let Some(locale_dir) = built_locale_dir() else {
         eprintln!("skipping: no compiled locale dir");
         return;
@@ -166,7 +177,6 @@ fn real_catalog_plural_rules_select_expected_forms() {
 
     // Polish has nplurals=3 with three *distinct* forms, so the selected index
     // is observable from the returned text.
-    let _guard = env_guard();
     set_locale(&locale_dir, "pl");
     meld_rs::i18n::init();
     assert_eq!(meld_rs::i18n::current_language().as_deref(), Some("pl"));
@@ -191,6 +201,8 @@ fn real_catalog_plural_rules_select_expected_forms() {
 
 #[test]
 fn translations_and_both_fallbacks_behave() {
+    let _guard = env_guard();
+
     let Some(locale_dir) = built_locale_dir() else {
         eprintln!("skipping: no compiled locale dir");
         return;
@@ -198,7 +210,6 @@ fn translations_and_both_fallbacks_behave() {
 
     // Exact German strings, including the gear-menu labels that were previously
     // unmarked.
-    let _guard = env_guard();
     set_locale(&locale_dir, "de");
     meld_rs::i18n::init();
     assert_eq!(meld_rs::i18n::current_language().as_deref(), Some("de"));
@@ -253,6 +264,8 @@ fn translations_and_both_fallbacks_behave() {
 
 #[test]
 fn locale_dir_override_is_honoured() {
+    let _guard = env_guard();
+
     let Some(real_dir) = built_locale_dir() else {
         eprintln!("skipping: no compiled locale dir");
         return;
@@ -265,7 +278,6 @@ fn locale_dir_override_is_honoured() {
 
     // Stage the German catalog under a language name that does not exist in the
     // real locale dir, so only the override can supply it.
-    let _guard = env_guard();
     let scratch = std::env::temp_dir().join(format!("meld-rs-i18n-{}", std::process::id()));
     let target_dir = scratch.join("zz").join("LC_MESSAGES");
     std::fs::create_dir_all(&target_dir).expect("create scratch locale dir");
