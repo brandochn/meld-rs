@@ -7,7 +7,7 @@ use glib::prelude::*;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -35,6 +35,19 @@ const ICON_RESOURCE_PATH: &str = "/org/gnome/meld-rs/icons";
 /// build time and the GResource could not be compiled.
 #[cfg(not(icons_available))]
 const APP_ICON_SVG: &str = include_str!("../resources/icons/scalable/apps/org.gnome.meld-rs.svg");
+
+/// Application stylesheet, always loaded.
+const BASE_CSS: &str = include_str!("../resources/css/meld.css");
+
+/// Dark-appearance overrides, appended to the base stylesheet only while the
+/// application is using a dark colour scheme.
+///
+/// These rules used to sit in a `@media (prefers-color-scheme: dark)` block,
+/// but GTK only gained `@media` support after 4.14 — the version this crate
+/// targets.  Older GTK rejected the rule with "Unknown @ rule" and silently
+/// dropped every override, so the stylesheet is now selected in [`reload_css`]
+/// instead of relying on the parser.
+const DARK_CSS: &str = include_str!("../resources/css/meld-dark.css");
 
 pub const APP_ID: &str = "org.gnome.meld-rs";
 pub const APP_NAME: &str = "Meld-rs";
@@ -361,11 +374,13 @@ fn ensure_initialized(app: &gtk::Application, done: &Cell<bool>) {
         return;
     }
     setup_actions(app);
+    // Apply the saved colour scheme first so the initial stylesheet load in
+    // `setup_css` already matches the requested appearance.
+    apply_style_variant();
     setup_css();
     setup_style_schemes();
     setup_app_icon();
     setup_language_schema();
-    apply_style_variant();
     done.set(true);
 }
 
@@ -377,10 +392,19 @@ fn apply_style_variant() {
     crate::ui::style::apply_style_variant(&variant);
 }
 
+std::thread_local! {
+    /// The application `CssProvider`, kept so its contents can be refreshed
+    /// when the colour scheme changes.
+    static CSS_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
+}
+
+/// Install the application stylesheet and keep it in sync with the appearance.
 fn setup_css() {
-    let css = include_str!("../resources/css/meld.css");
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(css);
+    CSS_PROVIDER.with(|slot| *slot.borrow_mut() = Some(provider.clone()));
+
+    reload_css();
+
     if let Some(display) = gdk4::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,
@@ -388,6 +412,33 @@ fn setup_css() {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+
+    // The appearance can change at any time, either from the system preference
+    // or from the `style-variant` setting, so refresh the stylesheet when it
+    // does.  Both properties are watched because either may update first.
+    let manager = adw::StyleManager::default();
+    let _ = manager.connect_dark_notify(|_| reload_css());
+    let _ = manager.connect_color_scheme_notify(|_| reload_css());
+}
+
+/// Load the base stylesheet, plus the dark overrides when the current
+/// appearance is dark.
+///
+/// `load_from_data` replaces whatever the provider held, so light mode simply
+/// omits the dark rules.
+fn reload_css() {
+    let dark = crate::ui::style::is_dark();
+    let css = if dark {
+        format!("{BASE_CSS}\n{DARK_CSS}")
+    } else {
+        BASE_CSS.to_string()
+    };
+    log::debug!("stylesheet loaded (dark: {dark}, {} bytes)", css.len());
+    CSS_PROVIDER.with(|slot| {
+        if let Some(provider) = slot.borrow().as_ref() {
+            provider.load_from_data(&css);
+        }
+    });
 }
 
 /// Install Meld's `meld-base` / `meld-dark` GtkSourceView style schemes.

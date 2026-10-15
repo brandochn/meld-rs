@@ -1,0 +1,104 @@
+/* Dark-appearance overrides for the diff highlighting colours.
+ *
+ * Loaded on top of `meld.css` when the application is using a dark colour
+ * scheme (see `app::reload_css`).  Keep these rules in the same order as their
+ * light counterparts in `meld.css`, so the cascade resolves identically. */
+
+.meld-insert {
+    background: #123806;
+    color: #4e6206;
+}
+.meld-insert textview {
+    background: #245515;
+}
+
+.meld-replace {
+    background: #003266;
+    color: #1d59d6;
+}
+.meld-replace textview {
+    background: #0053a6;
+}
+
+.meld-conflict {
+    background: #7a2a28;
+    color: #ff0000;
+}
+.meld-conflict textview {
+    background: #ac3b39;
+}
+
+.meld-delete {
+    background: #cccccc;
+    color: #a40000;
+}
+
+.meld-inline {
+    background: #24527e;
+}
+
+/* Differentiated inline tags — dark mode */
+.meld-inline-delete {
+    background: #7a2828;
+}
+
+.meld-inline-insert {
+    background: #285728;
+}
+
+.meld-inline-replace {
+    background: #28487a;
+}
+
+.meld-current-line-highlight {
+    background: rgba(17, 17, 0, 0.25);
+}
+
+.meld-overscroll {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.meld-syncpoint-outline {
+    color: #bbbbbb;
+}
+
+.meld-unknown-text {
+    color: #aaaaaa;
+}
+
+.meld-current-chunk-highlight {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.map-overlay {
+    background: rgba(200, 200, 200, 0.4);
+}
+
+textview.diff-delete {
+    background-color: #cccccc;
+    color: #a40000;
+}
+textview.diff-insert {
+    background-color: #123806;
+    color: #4e6206;
+}
+textview.diff-replace {
+    background-color: #003266;
+    color: #1d59d6;
+}
+textview.diff-conflict {
+    background-color: #7a2a28;
+    color: #ff0000;
+}
+textview.diff-inline {
+    background-color: #24527e;
+}
+textview.diff-inline-delete {
+    background-color: #7a2828;
+}
+textview.diff-inline-insert {
+    background-color: #285728;
+}
+textview.diff-inline-replace {
+    background-color: #28487a;
+}
