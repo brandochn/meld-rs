@@ -19,10 +19,11 @@ comparison, 3-way merge, and version control integration (Git, SVN, Mercurial).
 > catalogs, allowing it to build upon the translation work contributed by the
 > community.
 
-> [!WARNING]
-> This project is in an **early experimental phase** and under active development.
-> Expect bugs, incomplete features, and breaking changes. Use with caution —
-> do not rely on it for production or critical workflows yet.
+> [!IMPORTANT]
+> Meld-rs has matured past its early stage and is now stable enough to use with
+> caution. It remains under active development, so expect the occasional rough
+> edge, missing feature, or bug — it is not yet recommended as the sole tool for
+> critical workflows.
 
 ## Features
 
@@ -41,6 +42,21 @@ comparison, 3-way merge, and version control integration (Git, SVN, Mercurial).
 ## Screenshots
 
 ![Meld-rs screenshot](screenshots/Meld-rs.png)
+
+## Download
+
+Prebuilt Linux AppImages are attached to the
+[GitHub releases](https://github.com/brandochn/meld-rs/releases) — built
+automatically when a version tag is pushed. `scripts/build-appimage.sh` also
+writes new ones into [`publish/`](publish/) when run locally.
+
+The AppImage is self-contained: no installation is required, and because the
+GTK 4 runtime is bundled you do not need any system packages.
+
+```bash
+chmod +x meld-rs-0.1.0-x86_64.AppImage
+./meld-rs-0.1.0-x86_64.AppImage file_a.txt file_b.txt
+```
 
 ## Requirements
 
@@ -88,6 +104,36 @@ scripts\build.ps1         # Windows (PowerShell, detects MSYS2)
 scripts\build.bat         # Windows (CMD)
 scripts\run.ps1           # Windows (PowerShell, build & run)
 ```
+
+### Building an AppImage
+
+`scripts/build-appimage.sh` builds the release binary, assembles an AppDir
+(GTK 4 runtime libraries, GSettings schemas, icon, desktop entry and gettext
+catalogs) with [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy), and
+writes the resulting AppImage into `publish/`:
+
+```bash
+./scripts/build-appimage.sh
+# -> publish/meld-rs-0.1.0-x86_64.AppImage
+```
+
+It requires `cargo`, `patchelf`, `glib-compile-schemas` and `wget`;
+`linuxdeploy` is downloaded automatically on first run.
+
+### Releasing
+
+Pushing a version tag that matches the `version` in `Cargo.toml` builds the
+AppImage on GitHub Actions and attaches it to a GitHub release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow lives in `.github/workflows/release.yml`. It can also be started by
+hand from the repository's *Actions* tab; in that case it only verifies the
+packaging and keeps the AppImage as a workflow artifact instead of publishing a
+release.
 
 ## Running
 
