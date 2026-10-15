@@ -1,0 +1,38 @@
+#!/bin/bash
+# AppRun entrypoint for the Meld-rs AppImage.
+#
+# Sets up the runtime search paths so the libraries and data files bundled in
+# the AppDir are found before the host's, then launches the application.
+# Mirrors the environment fixups in scripts/meld-rs.sh.
+set -euo pipefail
+
+# Resolve the AppDir root.  The AppImage runtime exports APPDIR; fall back to
+# the script's own directory when running from an extracted AppDir.
+if [ -n "${APPDIR:-}" ]; then
+    here="${APPDIR}"
+else
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+# Bundled shared libraries (GTK4, GLib, GdkPixbuf, ...).
+if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+    export LD_LIBRARY_PATH="${here}/usr/lib:${LD_LIBRARY_PATH}"
+else
+    export LD_LIBRARY_PATH="${here}/usr/lib"
+fi
+
+# GSettings schemas, the icon theme and other GLib data files live under
+# usr/share.  Keep the host defaults appended so a system GTK install still
+# works if it is present.
+if [ -n "${XDG_DATA_DIRS:-}" ]; then
+    export XDG_DATA_DIRS="${here}/usr/share:${XDG_DATA_DIRS}"
+else
+    export XDG_DATA_DIRS="${here}/usr/share:/usr/local/share:/usr/share"
+fi
+
+# The app does not look up gettext catalogs through XDG_DATA_DIRS; it reads
+# MELD_RS_LOCALEDIR first (see i18n::locale_dirs()), so point it at the
+# bundled translations explicitly.
+export MELD_RS_LOCALEDIR="${here}/usr/share/locale"
+
+exec "${here}/usr/bin/meld-rs" "$@"

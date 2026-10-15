@@ -1,0 +1,4 @@
+# This directory holds release artifacts built for manual publication
+# (currently the Linux AppImage produced by scripts/build-appimage.sh).
+# The built binaries themselves are git-ignored; only this placeholder is
+# tracked so the directory exists in the repository.
