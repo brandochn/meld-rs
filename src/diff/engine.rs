@@ -1257,6 +1257,9 @@ pub fn consume_blank_lines(chunks: &mut Vec<Chunk>, text_a: &[String], text_b: &
 /// Split a line into tokens at whitespace, punctuation, and
 /// CamelCase/snake_case boundaries. Returns (tokens, start_offsets).
 ///
+/// `start_offsets` are **character indices** into the original line, so they
+/// can be used directly with character-based APIs such as GTK text iters.
+///
 /// Each token is a contiguous run of alphanumeric characters or an
 /// individual punctuation/whitespace character. CamelCase identifiers
 /// like `FooBar` are split into `["Foo", "Bar"]`.
@@ -1292,16 +1295,16 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
                 if c == '_' {
                     // snake_case boundary
                     tokens.push(line[byte_of(word_start)..byte_of(i)].to_string());
-                    offsets.push(byte_of(word_start));
+                    offsets.push(word_start);
                     // Emit underscore as its own token
                     tokens.push("_".to_string());
-                    offsets.push(byte_of(i));
+                    offsets.push(i);
                     i += 1;
                     word_start = i;
                     // Find next alphanumeric start
                     while i < len && !chars[i].is_alphanumeric() && chars[i] != '_' {
                         tokens.push(chars[i].to_string());
-                        offsets.push(byte_of(i));
+                        offsets.push(i);
                         i += 1;
                     }
                     word_start = i;
@@ -1315,14 +1318,14 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
                 {
                     // camelCase boundary: "fooBar" -> "foo", "Bar"
                     tokens.push(line[byte_of(word_start)..byte_of(i)].to_string());
-                    offsets.push(byte_of(word_start));
+                    offsets.push(word_start);
                     word_start = i;
                     prev_kind = kind;
                     i += 1;
                 } else if !c.is_alphanumeric() {
                     // End of word at punctuation/whitespace
                     tokens.push(line[byte_of(word_start)..byte_of(i)].to_string());
-                    offsets.push(byte_of(word_start));
+                    offsets.push(word_start);
                     word_start = i;
                     break;
                 } else {
@@ -1334,12 +1337,12 @@ fn tokenize_with_offsets(line: &str) -> (Vec<String>, Vec<usize>) {
             // Emit the remaining word
             if word_start < i.min(len) {
                 tokens.push(line[byte_of(word_start)..byte_of(i.min(len))].to_string());
-                offsets.push(byte_of(word_start));
+                offsets.push(word_start);
             }
         } else {
             // Punctuation/whitespace — each character is its own token
             tokens.push(ch.to_string());
-            offsets.push(byte_of(start));
+            offsets.push(start);
             i += 1;
         }
     }
@@ -1578,7 +1581,7 @@ impl InlineDiffer {
                         let end = if end_idx < offsets_a.len() {
                             offsets_a[end_idx]
                         } else {
-                            line_a.len()
+                            line_a.chars().count()
                         };
                         if start < end {
                             changes.push(InlineChange {
@@ -1596,7 +1599,7 @@ impl InlineDiffer {
                         let end = if end_idx < offsets_b.len() {
                             offsets_b[end_idx]
                         } else {
-                            line_b.len()
+                            line_b.chars().count()
                         };
                         if start < end {
                             changes.push(InlineChange {
@@ -1711,7 +1714,9 @@ impl InlineDiffer {
                         || !line.as_bytes()[end].is_ascii_alphanumeric()
                             && line.as_bytes()[end] != b'_';
                     if before_ok && after_ok {
-                        results.push((trimmed_id.to_string(), (start, end)));
+                        let start_chars = line[..start].chars().count();
+                        let end_chars = line[..end].chars().count();
+                        results.push((trimmed_id.to_string(), (start_chars, end_chars)));
                     }
                     search_pos = end;
                 }
@@ -2958,6 +2963,103 @@ mod tests {
         assert!(changes.is_empty());
     }
 
+    /// Select the characters covered by an inline change.
+    fn inline_text(line: &str, change: &InlineChange) -> String {
+        line.chars()
+            .skip(change.start)
+            .take(change.end.saturating_sub(change.start))
+            .collect()
+    }
+
+    #[test]
+    fn test_compare_line_tokens_multibyte_prefix_offsets_are_characters() {
+        // Regression test for issue #33: the `├─` prefix is 6 bytes but
+        // only 2 characters, so byte offsets shift the highlight right.
+        let a = "├─ IDLEACQINT (Scan-Intervall Leerlauf) : 255 ms (0xFF)";
+        let b = "├─ IDLEACQINT (Scan-Intervall Leerlauf) : 100 ms (0x64)";
+        let changes = InlineDiffer::compare_line_tokens(a, b);
+
+        assert!(changes
+            .iter()
+            .any(|c| c.op == DiffOp::Delete && inline_text(a, c) == "255"));
+        assert!(changes
+            .iter()
+            .any(|c| c.op == DiffOp::Insert && inline_text(b, c) == "100"));
+    }
+
+    #[test]
+    fn test_compare_line_tokens_multibyte_prefix_multiple_changes() {
+        let a = "├─ ACTV2IDLETO (Timeout zu Leerlauf)    : 255 * 200 ms -> 51000 ms (0xF1)";
+        let b = "├─ ACTV2IDLETO (Timeout zu Leerlauf)    : 20 * 200 ms -> 4000 ms (0x14)";
+        let changes = InlineDiffer::compare_line_tokens(a, b);
+
+        let deleted: Vec<String> = changes
+            .iter()
+            .filter(|c| c.op == DiffOp::Delete)
+            .map(|c| inline_text(a, c))
+            .collect();
+        assert!(deleted.iter().any(|s| s == "255"), "deleted: {deleted:?}");
+        assert!(deleted.iter().any(|s| s == "51000"), "deleted: {deleted:?}");
+
+        let inserted: Vec<String> = changes
+            .iter()
+            .filter(|c| c.op == DiffOp::Insert)
+            .map(|c| inline_text(b, c))
+            .collect();
+        assert!(inserted.iter().any(|s| s == "20"), "inserted: {inserted:?}");
+        assert!(
+            inserted.iter().any(|s| s == "4000"),
+            "inserted: {inserted:?}"
+        );
+    }
+
+    #[test]
+    fn test_compare_line_tokens_multibyte_prefix_last_token() {
+        let a = "└─ Rohdaten (Register 02-04)                 : 0x32 0xC3 0x00";
+        let b = "└─ Rohdaten (Register 02-04)                 : 0x32 0x83 0x00";
+        let changes = InlineDiffer::compare_line_tokens(a, b);
+
+        assert!(changes
+            .iter()
+            .any(|c| c.op == DiffOp::Delete && inline_text(a, c) == "C3"));
+        assert!(changes
+            .iter()
+            .any(|c| c.op == DiffOp::Insert && inline_text(b, c) == "0x83"));
+    }
+
+    #[test]
+    fn test_compare_line_tokens_multibyte_offsets_within_char_bounds() {
+        let a = "├─ IDLEACQINT (Scan-Intervall Leerlauf) : 255 ms (0xFF)";
+        let b = "├─ IDLEACQINT (Scan-Intervall Leerlauf) : 100 ms (0x64)";
+        let changes = InlineDiffer::compare_line_tokens(a, b);
+
+        let a_len = a.chars().count();
+        let b_len = b.chars().count();
+        for c in &changes {
+            let line_len = if c.op == DiffOp::Insert { b_len } else { a_len };
+            assert!(c.start <= c.end, "invalid range: {c:?}");
+            assert!(
+                c.end <= line_len,
+                "range past end: {c:?} line_len={line_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_compare_line_tokens_ascii_offsets_unchanged() {
+        let a = "ACTV2IDLETO (Timeout zu Leerlauf) : 255 * 200 ms -> 51000 ms";
+        let b = "ACTV2IDLETO (Timeout zu Leerlauf) : 20 * 200 ms -> 4000 ms";
+        let changes = InlineDiffer::compare_line_tokens(a, b);
+
+        let deleted: Vec<String> = changes
+            .iter()
+            .filter(|c| c.op == DiffOp::Delete)
+            .map(|c| inline_text(a, c))
+            .collect();
+        assert!(deleted.iter().any(|s| s == "255"), "deleted: {deleted:?}");
+        assert!(deleted.iter().any(|s| s == "51000"), "deleted: {deleted:?}");
+    }
+
     #[test]
     fn test_parse_import_line_basic() {
         let line = "import { Foo, Bar } from 'my-module';";
@@ -3027,6 +3129,25 @@ mod tests {
         let b = "const y = 42;";
         let changes = InlineDiffer::compare_imports(a, b);
         assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_compare_imports_offsets_are_characters() {
+        // `café` is 5 bytes but 4 chars, so byte-based offsets for the
+        // following identifier would drift right.
+        let a = "import { café, Foo } from 'm';";
+        let b = "import { café, Bar } from 'm';";
+        let changes = InlineDiffer::compare_imports(a, b);
+
+        let deleted: Vec<&InlineChange> =
+            changes.iter().filter(|c| c.op == DiffOp::Delete).collect();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(inline_text(a, deleted[0]), "Foo");
+
+        let inserted: Vec<&InlineChange> =
+            changes.iter().filter(|c| c.op == DiffOp::Insert).collect();
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(inline_text(b, inserted[0]), "Bar");
     }
 
     #[test]
