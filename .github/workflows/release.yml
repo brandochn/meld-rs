@@ -80,6 +80,22 @@ jobs:
       - name: Build the AppImage
         run: ./scripts/build-appimage.sh
 
+      - name: Validate the desktop entry
+        run: |
+          desktop="target/release/share/applications/org.gnome.meld-rs.desktop"
+          desktop-file-validate "$desktop"
+          grep -qx 'Name=Meld-rs' "$desktop"
+          if grep -q '^Name\[' "$desktop"; then
+            echo "::error::Localized Name keys are not expected"
+            exit 1
+          fi
+          grep -qx 'Comment\[de\]=Dateien vergleichen und zusammenführen' "$desktop"
+          grep -qx 'GenericName\[de\]=Diff-Betrachter' "$desktop"
+          if grep -q '^_' "$desktop"; then
+            echo "::error::Underscore-prefixed keys found"
+            exit 1
+          fi
+
       - name: Upload the AppImage as a workflow artifact
         uses: actions/upload-artifact@v4
         with:

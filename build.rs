@@ -12,6 +12,10 @@
 ///    `target/share/locale/<lang>/LC_MESSAGES/meld-rs.mo` so the runtime can
 ///    load them.  If `msgfmt` is unavailable the UI gracefully falls back to
 ///    English and a warning is emitted.
+/// 5. Generates the localized desktop entry from
+///    `resources/org.gnome.meld-rs.desktop.in` into
+///    `target/share/applications/` with `msgfmt --desktop`, falling back to
+///    the English template when `msgfmt` is unavailable.
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -19,6 +23,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(icons_available)");
     println!("cargo:rerun-if-changed=po");
     println!("cargo:rerun-if-changed=resources/icons");
+    println!("cargo:rerun-if-changed=resources/org.gnome.meld-rs.desktop.in");
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
 
@@ -26,6 +31,7 @@ fn main() {
     compile_gresource(&out_dir);
     compile_icons(&out_dir);
     compile_translations(&out_dir);
+    compile_desktop_entry(&out_dir);
 }
 
 /// Directory shared with the schema/gresource/locale outputs
@@ -192,5 +198,58 @@ fn compile_translations(out_dir: &Path) {
 
     if compiled > 0 {
         println!("cargo:warning=Compiled {compiled}/{total} gettext catalogs");
+    }
+}
+
+/// Generate the desktop entry into `target/share/applications/` with
+/// `msgfmt --desktop`, falling back to the English template on failure.
+fn compile_desktop_entry(out_dir: &Path) {
+    let Some(apps_dir) = target_share_dir(out_dir).map(|p| p.join("applications")) else {
+        eprintln!("build.rs: cannot determine target share dir; skipping desktop entry");
+        return;
+    };
+
+    if let Err(e) = std::fs::create_dir_all(&apps_dir) {
+        eprintln!(
+            "build.rs: failed to create desktop entry dir {}: {e}",
+            apps_dir.display()
+        );
+        return;
+    }
+
+    let template = "resources/org.gnome.meld-rs.desktop.in";
+    let dest = apps_dir.join("org.gnome.meld-rs.desktop");
+
+    match std::process::Command::new("msgfmt")
+        .arg("--desktop")
+        .arg(format!("--template={template}"))
+        .arg("-d")
+        .arg("po")
+        .arg("-o")
+        .arg(&dest)
+        .status()
+    {
+        Ok(status) if status.success() => {
+            println!("cargo:warning=Desktop entry generated successfully");
+        }
+        Ok(status) => {
+            eprintln!(
+                "build.rs: msgfmt exited with {status} for {template}; using English template"
+            );
+            copy_desktop_template(template, &dest);
+        }
+        Err(e) => {
+            eprintln!("build.rs: msgfmt not found ({e}); using English template");
+            copy_desktop_template(template, &dest);
+        }
+    }
+}
+
+fn copy_desktop_template(template: &str, dest: &Path) {
+    if let Err(e) = std::fs::copy(template, dest) {
+        eprintln!(
+            "build.rs: failed to copy desktop template to {}: {e}",
+            dest.display()
+        );
     }
 }

@@ -560,7 +560,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_cache_hit_and_miss() {
         let a = temp_file("cache_a.txt", b"cached content");

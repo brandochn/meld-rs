@@ -25,17 +25,33 @@ else
 fi
 
 icon_src="$repo_dir/resources/icons/scalable/apps/org.gnome.meld-rs.svg"
-desktop_src="$repo_dir/resources/org.gnome.meld-rs.desktop"
+desktop_template="$repo_dir/resources/org.gnome.meld-rs.desktop.in"
 
 icon_dir="$data_dir/icons/hicolor/scalable/apps"
 apps_dir="$data_dir/applications"
+desktop_out="$apps_dir/org.gnome.meld-rs.desktop"
 
 mkdir -p "$icon_dir" "$apps_dir"
 cp -f "$icon_src" "$icon_dir/org.gnome.meld-rs.svg"
-cp -f "$desktop_src" "$apps_dir/org.gnome.meld-rs.desktop"
+
+if command -v msgfmt >/dev/null 2>&1; then
+    if ! msgfmt --desktop --template="$desktop_template" -d "$repo_dir/po" -o "$desktop_out"; then
+        echo "warning: msgfmt failed; installing the English template" >&2
+        cp -f "$desktop_template" "$desktop_out"
+    fi
+else
+    echo "warning: msgfmt not found; installing the English template" >&2
+    cp -f "$desktop_template" "$desktop_out"
+fi
+
+if command -v desktop-file-validate >/dev/null 2>&1; then
+    if ! desktop-file-validate "$desktop_out"; then
+        echo "warning: desktop-file-validate reported problems" >&2
+    fi
+fi
 
 echo "Installed icon     -> $icon_dir/org.gnome.meld-rs.svg"
-echo "Installed launcher -> $apps_dir/org.gnome.meld-rs.desktop"
+echo "Installed launcher -> $desktop_out"
 
 # Refresh desktop caches so the new icon and entry are picked up without
 # requiring a re-login.

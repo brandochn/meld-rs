@@ -52,3 +52,23 @@ If meld-rs-only strings ever need translating, the researched path is:
 
 or, alternatively, keep a separate catalog domain for meld-rs-only strings and
 add it to the runtime lookup as a fallback behind the Meld domain.
+
+## Desktop entry
+
+The desktop entry is generated from `resources/org.gnome.meld-rs.desktop.in`
+with `msgfmt --desktop` and the catalogs in this directory:
+
+```bash
+mkdir -p target/debug/share/applications
+msgfmt --desktop \
+  --template=resources/org.gnome.meld-rs.desktop.in \
+  -d po \
+  -o target/debug/share/applications/org.gnome.meld-rs.desktop
+```
+
+`build.rs` runs this automatically into
+`target/<profile>/share/applications/`. The template uses plain keys only
+(`Name`, `GenericName`, `Comment`, `Keywords`); `_`-prefixed keys are not part
+of the Desktop Entry Specification and are dropped by `msgfmt`. `Name=Meld-rs`
+is intentionally left untranslated because no catalog contains that msgid. If
+`msgfmt` is unavailable, the English template is installed unchanged.

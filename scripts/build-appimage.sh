@@ -16,7 +16,7 @@ repo_dir="$(cd "${script_dir}/.." && pwd)"
 cd "${repo_dir}"
 
 app_id="org.gnome.meld-rs"
-desktop_src="resources/${app_id}.desktop"
+desktop_src="target/release/share/applications/${app_id}.desktop"
 icon_src="resources/icons/scalable/apps/${app_id}.svg"
 apprun_src="packaging/AppRun"
 
@@ -43,12 +43,10 @@ if [ ! -f "${apprun_src}" ]; then
     echo "ERROR: missing AppRun source: ${apprun_src}" >&2
     exit 1
 fi
-for src in "${desktop_src}" "${icon_src}"; do
-    if [ ! -f "${src}" ]; then
-        echo "ERROR: missing source file: ${src}" >&2
-        exit 1
-    fi
-done
+if [ ! -f "${icon_src}" ]; then
+    echo "ERROR: missing icon source: ${icon_src}" >&2
+    exit 1
+fi
 
 # ── 1. Release build ──────────────────────────────────────────────────────
 echo "==> Building release binary"
@@ -57,6 +55,11 @@ cargo build --release
 binary="${repo_dir}/target/release/meld-rs"
 if [ ! -x "${binary}" ]; then
     echo "ERROR: release binary not found at ${binary}" >&2
+    exit 1
+fi
+
+if [ ! -f "${desktop_src}" ]; then
+    echo "ERROR: generated desktop entry not found at ${desktop_src}" >&2
     exit 1
 fi
 

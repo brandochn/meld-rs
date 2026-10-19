@@ -152,15 +152,20 @@ fn block_similarity(left: &[String], right: &[String]) -> f64 {
 
     let tokenize = |line: &str| -> HashSet<String> {
         line.split(|c: char| {
-            c.is_whitespace() || c == ',' || c == ';' || c == '{' || c == '}' || c == '(' || c == ')'
+            c.is_whitespace()
+                || c == ','
+                || c == ';'
+                || c == '{'
+                || c == '}'
+                || c == '('
+                || c == ')'
         })
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect()
     };
 
-    let left_tokens: HashSet<String> =
-        left.iter().flat_map(|l| tokenize(l).into_iter()).collect();
+    let left_tokens: HashSet<String> = left.iter().flat_map(|l| tokenize(l).into_iter()).collect();
     let right_tokens: HashSet<String> =
         right.iter().flat_map(|l| tokenize(l).into_iter()).collect();
 
@@ -206,19 +211,19 @@ mod tests {
 
     #[test]
     fn test_detect_moved_import() {
-        let left: Vec<String> = vec![
-            "a".into(),
-            "import { X } from 'm';".into(),
-            "b".into(),
-        ];
-        let right: Vec<String> = vec![
-            "import { X } from 'm';".into(),
-            "a".into(),
-            "b".into(),
-        ];
+        let left: Vec<String> = vec!["a".into(), "import { X } from 'm';".into(), "b".into()];
+        let right: Vec<String> = vec!["import { X } from 'm';".into(), "a".into(), "b".into()];
         let matched_left: HashSet<usize> = vec![0, 2].into_iter().collect();
         let matched_right: HashSet<usize> = vec![1, 2].into_iter().collect();
-        let map = MoveMap::build(&left, &right, &matched_left, &matched_right, 0.8, 1, &AtomicBool::new(false));
+        let map = MoveMap::build(
+            &left,
+            &right,
+            &matched_left,
+            &matched_right,
+            0.8,
+            1,
+            &AtomicBool::new(false),
+        );
         assert!(!map.moves.is_empty());
         assert_eq!(map.moves[0].left_start, 1);
         assert_eq!(map.moves[0].left_end, 2);

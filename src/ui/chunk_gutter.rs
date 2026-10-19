@@ -134,10 +134,8 @@ mod imp {
             let mut band: Option<(gdk::RGBA, f32, f32)> = None;
             let flush = |band: &mut Option<(gdk::RGBA, f32, f32)>, snapshot: &gtk::Snapshot| {
                 if let Some((color, top, bottom)) = band.take() {
-                    snapshot.append_color(
-                        &color,
-                        &graphene::Rect::new(0.0, top, width, bottom - top),
-                    );
+                    snapshot
+                        .append_color(&color, &graphene::Rect::new(0.0, top, width, bottom - top));
                 }
             };
 

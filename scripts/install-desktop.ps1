@@ -33,10 +33,32 @@ $appsDir = Join-Path $share "applications"
 
 New-Item -ItemType Directory -Force -Path $iconDir, $appsDir | Out-Null
 Copy-Item "$repo\resources\icons\scalable\apps\org.gnome.meld-rs.svg" -Destination $iconDir -Force
-Copy-Item "$repo\resources\org.gnome.meld-rs.desktop" -Destination $appsDir -Force
+
+$desktopTemplate = "$repo\resources\org.gnome.meld-rs.desktop.in"
+$desktopOut = Join-Path $appsDir "org.gnome.meld-rs.desktop"
+
+$msgfmt = Get-Command msgfmt -ErrorAction SilentlyContinue
+if ($msgfmt) {
+    & $msgfmt.Source --desktop "--template=$desktopTemplate" -d "$repo\po" -o $desktopOut
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "msgfmt failed; installing the English template"
+        Copy-Item $desktopTemplate -Destination $desktopOut -Force
+    }
+} else {
+    Write-Warning "msgfmt not found; installing the English template"
+    Copy-Item $desktopTemplate -Destination $desktopOut -Force
+}
+
+$validator = Get-Command desktop-file-validate -ErrorAction SilentlyContinue
+if ($validator) {
+    & $validator.Source $desktopOut
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "desktop-file-validate reported problems"
+    }
+}
 
 Write-Host "Installed icon     -> $iconDir\org.gnome.meld-rs.svg"
-Write-Host "Installed launcher -> $appsDir\org.gnome.meld-rs.desktop"
+Write-Host "Installed launcher -> $desktopOut"
 
 # Refresh the icon cache if the tool is available.
 $iconCacheDir = Join-Path $share "icons\hicolor"

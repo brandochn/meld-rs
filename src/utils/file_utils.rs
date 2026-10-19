@@ -84,7 +84,6 @@ pub fn read_file_lines(path: &Path) -> Result<Vec<String>, FileUtilError> {
     Ok(content.lines().map(|l| l.to_owned()).collect())
 }
 
-
 /// Format a path relative to the user's home directory.
 ///
 /// If the path is under `$HOME`, the home portion is replaced with `~`.
@@ -146,12 +145,7 @@ pub fn format_parent_relative_path(parent: &Path, child: &Path) -> String {
     let last = components[components.len() - 1]
         .as_os_str()
         .to_string_lossy();
-    format!(
-        "…/{}/{}/…/{}",
-        parent_name.to_string_lossy(),
-        first,
-        last
-    )
+    format!("…/{}/{}/…/{}", parent_name.to_string_lossy(), first, last)
 }
 
 /// Shorten a list of paths for display by removing common prefix parts.
@@ -221,7 +215,6 @@ pub fn shorten_names(names: &[PathBuf]) -> Vec<String> {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_find_shared_parent_empty() {
         assert_eq!(find_shared_parent(&[]), None);
@@ -274,7 +267,6 @@ mod tests {
         assert_eq!(find_shared_parent(&[a, b]), Some(PathBuf::from("/foo")));
     }
 
-
     #[test]
     fn test_files_identical_same_path() {
         let tmp = std::env::temp_dir().join("meld_identical_test.txt");
@@ -282,7 +274,6 @@ mod tests {
         assert!(files_identical(&tmp, &tmp).unwrap());
         std::fs::remove_file(&tmp).ok();
     }
-
 
     #[test]
     fn test_read_file_lines() {
@@ -292,7 +283,6 @@ mod tests {
         assert_eq!(lines.len(), 3);
         std::fs::remove_file(&tmp).ok();
     }
-
 
     #[test]
     fn test_shorten_names_empty() {
