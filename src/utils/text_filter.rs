@@ -12,7 +12,11 @@
 
 use regex::bytes::Regex;
 
-/// A contiguous byte range to dim in the original buffer.
+/// A contiguous range in the original buffer.
+///
+/// [`apply_text_filters`] produces **byte** offsets. GTK text iterators count
+/// characters, so callers that apply tags must convert the ranges with
+/// [`dim_ranges_to_char_offsets`] first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DimRange {
     pub start: usize,
@@ -148,6 +152,70 @@ fn merge_intervals(ranges: &mut [(usize, usize)]) -> Vec<(usize, usize)> {
     }
     merged.push(current);
     merged
+}
+
+/// Convert byte-offset [`DimRange`]s into character offsets.
+///
+/// `ranges` must be sorted by start offset and non-overlapping, as produced by
+/// [`apply_text_filters`] (which merges intervals). The returned `DimRange`
+/// values use **character** indices, suitable for GTK text iterators such as
+/// `gtk::TextBuffer::iter_at_offset`.
+///
+/// Offsets that fall inside a multi-byte UTF-8 character (possible with
+/// byte-oriented regex patterns) are rounded to the enclosing character: the
+/// range start is rounded down and the range end is rounded up.
+pub fn dim_ranges_to_char_offsets(text: &str, ranges: &[DimRange]) -> Vec<DimRange> {
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+
+    debug_assert!(
+        ranges.windows(2).all(|w| {
+            w[0].start <= w[1].start && (w[0].start >= w[0].end || w[0].end <= w[1].start)
+        }),
+        "dim ranges must be sorted and non-overlapping"
+    );
+
+    let mut result = Vec::with_capacity(ranges.len());
+    let mut chars = text.char_indices().peekable();
+    // Number of character starts consumed so far.
+    let mut chars_seen = 0usize;
+
+    for range in ranges {
+        let start_byte = range.start.min(text.len());
+        let end_byte = range.end.min(text.len());
+        if start_byte >= end_byte {
+            continue;
+        }
+
+        // The last character boundary at or before `start_byte` is the index
+        // of the character enclosing the range start.
+        while let Some(&(byte, _)) = chars.peek() {
+            if byte > start_byte {
+                break;
+            }
+            chars.next();
+            chars_seen += 1;
+        }
+        let start = chars_seen.saturating_sub(1);
+
+        // The first character boundary at or after `end_byte` equals the
+        // number of character starts strictly before `end_byte`.
+        while let Some(&(byte, _)) = chars.peek() {
+            if byte >= end_byte {
+                break;
+            }
+            chars.next();
+            chars_seen += 1;
+        }
+        let end = chars_seen;
+
+        if start < end {
+            result.push(DimRange { start, end });
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -305,6 +373,128 @@ mod tests {
         let mut ranges: Vec<(usize, usize)> = vec![];
         let merged = merge_intervals(&mut ranges);
         assert!(merged.is_empty());
+    }
+
+    // -- dim_ranges_to_char_offsets --
+
+    /// Return the characters selected by a character-offset range.
+    fn selected_text(text: &str, range: &DimRange) -> String {
+        text.chars()
+            .skip(range.start)
+            .take(range.end - range.start)
+            .collect()
+    }
+
+    #[test]
+    fn test_dim_ranges_issue_36_non_ascii_filter() {
+        // Regression test for issue #36: `ä` is 2 bytes, so byte offsets used
+        // as character offsets shift the range and cover an extra character.
+        let text = vec!["xyzäbcdefghijklmnopq"; 7].join("\n");
+        let patterns = vec![Regex::new("ä").unwrap()];
+        let (_filtered, byte_ranges) = apply_text_filters(text.as_bytes(), &patterns);
+        let char_ranges = dim_ranges_to_char_offsets(&text, &byte_ranges);
+
+        // Each line is 20 characters plus `\n`, so line starts are 21 apart.
+        let expected: Vec<DimRange> = (0..7)
+            .map(|line| DimRange {
+                start: line * 21 + 3,
+                end: line * 21 + 4,
+            })
+            .collect();
+        assert_eq!(char_ranges, expected);
+        for range in &char_ranges {
+            assert_eq!(selected_text(&text, range), "ä");
+        }
+    }
+
+    #[test]
+    fn test_dim_ranges_ascii_unchanged() {
+        let text = "alpha\nbeta\nalpha beta\n";
+        let patterns = vec![Regex::new("alpha").unwrap()];
+        let (_filtered, byte_ranges) = apply_text_filters(text.as_bytes(), &patterns);
+        let char_ranges = dim_ranges_to_char_offsets(text, &byte_ranges);
+
+        assert_eq!(char_ranges, byte_ranges);
+    }
+
+    #[test]
+    fn test_dim_ranges_emoji_and_umlaut() {
+        let text = "a😀bäc";
+        let patterns = vec![Regex::new("😀").unwrap(), Regex::new("ä").unwrap()];
+        let (_filtered, byte_ranges) = apply_text_filters(text.as_bytes(), &patterns);
+        let char_ranges = dim_ranges_to_char_offsets(text, &byte_ranges);
+
+        assert_eq!(
+            char_ranges,
+            vec![DimRange { start: 1, end: 2 }, DimRange { start: 3, end: 4 },]
+        );
+        let selected: Vec<String> = char_ranges
+            .iter()
+            .map(|range| selected_text(text, range))
+            .collect();
+        assert_eq!(selected, vec!["😀".to_string(), "ä".to_string()]);
+    }
+
+    #[test]
+    fn test_dim_ranges_multiple_matches_on_one_line() {
+        let text = "äxöy😀z";
+        let patterns = vec![
+            Regex::new("ä").unwrap(),
+            Regex::new("ö").unwrap(),
+            Regex::new("😀").unwrap(),
+        ];
+        let (_filtered, byte_ranges) = apply_text_filters(text.as_bytes(), &patterns);
+        let char_ranges = dim_ranges_to_char_offsets(text, &byte_ranges);
+
+        assert_eq!(
+            char_ranges,
+            vec![
+                DimRange { start: 0, end: 1 },
+                DimRange { start: 2, end: 3 },
+                DimRange { start: 4, end: 5 },
+            ]
+        );
+        let selected: Vec<String> = char_ranges
+            .iter()
+            .map(|range| selected_text(text, range))
+            .collect();
+        assert_eq!(
+            selected,
+            vec!["ä".to_string(), "ö".to_string(), "😀".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_dim_ranges_edge_cases() {
+        // Empty range list.
+        assert!(dim_ranges_to_char_offsets("abc", &[]).is_empty());
+
+        // Match at the end of the text (`ä` occupies bytes 1..3).
+        let ranges = [DimRange { start: 1, end: 3 }];
+        assert_eq!(
+            dim_ranges_to_char_offsets("xä", &ranges),
+            vec![DimRange { start: 1, end: 2 }]
+        );
+
+        // A byte range inside a multi-byte character expands to that character.
+        let ranges = [DimRange { start: 2, end: 3 }];
+        assert_eq!(
+            dim_ranges_to_char_offsets("xäy", &ranges),
+            vec![DimRange { start: 1, end: 2 }]
+        );
+
+        // Out-of-bounds ranges are clamped to the text.
+        let ranges = [DimRange { start: 1, end: 999 }];
+        assert_eq!(
+            dim_ranges_to_char_offsets("xäy", &ranges),
+            vec![DimRange { start: 1, end: 3 }]
+        );
+
+        // Empty text and inverted ranges produce no output.
+        let ranges = [DimRange { start: 0, end: 1 }];
+        assert!(dim_ranges_to_char_offsets("", &ranges).is_empty());
+        let ranges = [DimRange { start: 2, end: 1 }];
+        assert!(dim_ranges_to_char_offsets("abc", &ranges).is_empty());
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ glob_to_regex Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
