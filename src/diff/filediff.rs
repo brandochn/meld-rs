@@ -700,8 +700,10 @@ impl FileDiff {
 
     /// Apply dimming tags to matching text regions in all panes.
     ///
-    /// Uses the cached compiled regex patterns to find matching byte ranges
-    /// and applies the "dimmed" text tag for visual feedback.
+    /// Uses the cached compiled regex patterns to find matching byte ranges.
+    /// The engine reports byte offsets, but GTK text iterators count
+    /// characters, so the ranges are converted with
+    /// `dim_ranges_to_char_offsets` before the `dimmed` tag is applied.
     fn apply_text_dimming(&self) {
         let patterns = self.text_filter_patterns.borrow();
         if patterns.is_empty() {
@@ -731,8 +733,10 @@ impl FileDiff {
             // Get full buffer content as bytes and compute dim ranges
             let text = buffer.text(&start_iter, &end_iter, false).to_string();
             let content = text.as_bytes();
-            let (_filtered, dim_ranges) =
+            let (_filtered, byte_ranges) =
                 crate::utils::text_filter::apply_text_filters(content, &patterns);
+            let dim_ranges =
+                crate::utils::text_filter::dim_ranges_to_char_offsets(&text, &byte_ranges);
 
             // Apply dimmed tags to matching ranges
             if let Some(tag) = tag_table.lookup("dimmed") {
