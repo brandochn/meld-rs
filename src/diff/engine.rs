@@ -7,7 +7,7 @@
 //!
 //! Replaces the Python `difflib`/matchers module from the original Meld.
 
-use similar::{ChangeTag, TextDiff};
+use similar::{ChangeTag, DiffTag, TextDiff};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Operation type for a diff chunk.
@@ -1384,6 +1384,26 @@ pub struct InlineChange {
     pub op: DiffOp,
 }
 
+/// A character range within both sides of an inline diff.
+///
+/// Used for chunk-level inline highlighting. Offsets are character indices
+/// (not byte offsets), matching `similar::TextDiff::from_chars` and the
+/// character offsets used by GTK text iterators. An empty range on one side
+/// represents a pure insertion or deletion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineRange {
+    /// Start character offset in the left (A) text.
+    pub start_a: usize,
+    /// End character offset (exclusive) in the left (A) text.
+    pub end_a: usize,
+    /// Start character offset in the right (B) text.
+    pub start_b: usize,
+    /// End character offset (exclusive) in the right (B) text.
+    pub end_b: usize,
+    /// The diff operation for this range.
+    pub op: DiffOp,
+}
+
 /// Computes character-level (word) differences within a single line.
 ///
 /// Uses `similar`'s character-level diff to identify which parts of a
@@ -1400,11 +1420,9 @@ impl InlineDiffer {
     /// Lines below this threshold are treated as fully replaced (returns empty).
     /// This avoids O(L²) worst-case behaviour on unrelated long lines.
     ///
-    /// Mirrors Python Meld's character-level diff pipeline:
-    /// 1. Compute char-level diff via `similar::TextDiff::from_chars`
-    /// 2. Filter out tiny equal segments (< 3 chars, except at boundaries)
-    ///    to reduce visual noise
-    /// 3. Merge consecutive Delete+Insert runs into Replace chunks
+    /// Note: this helper only returns non-equal runs. For Meld's chunk-level
+    /// `process_matches` behaviour (which also highlights short internal equal
+    /// runs), use [`InlineDiffer::highlight_ranges`].
     pub fn compare_line(line_a: &str, line_b: &str) -> Vec<InlineChange> {
         if line_a == line_b {
             return Vec::new();
@@ -1450,9 +1468,10 @@ impl InlineDiffer {
         for (i, r) in raw.iter().enumerate() {
             match r.tag {
                 ChangeTag::Equal => {
-                    // Skip equal segments smaller than 3 chars that are not
-                    // at the very start or end of the changed span (mirroring
-                    // Python Meld's process_matches() filter).
+                    // This filter is a no-op for the returned changes: Equal
+                    // runs are never emitted. See `highlight_ranges` for the
+                    // Meld-compatible rule that keeps short internal equal
+                    // runs so they are highlighted too.
                     let at_start = first_change.map_or(false, |fc| i < fc);
                     let at_end = last_change.map_or(false, |lc| i > lc);
                     if r.len < 3 && !at_start && !at_end {
@@ -1486,6 +1505,137 @@ impl InlineDiffer {
         // buffers — merging them into a single Replace produces wrong
         // bounds on one pane.  Keep them separate for per-pane accuracy.
         changes
+    }
+
+    /// Return the character ranges that Meld-style inline highlighting should
+    /// paint for a whole `Replace` chunk.
+    ///
+    /// This implements Meld's `process_matches()` rule
+    /// (`meld/filediff.py:2049-2063`) over the chunk's full text:
+    ///
+    /// - every non-`Equal` opcode is kept;
+    /// - an `Equal` opcode is kept only when it does not touch the chunk
+    ///   boundaries and either side is shorter than three characters.
+    ///
+    /// Keeping short internal equal runs bridges the small gaps that a
+    /// character-level diff leaves inside a replaced block, so the highlight
+    /// reads as one contiguous change. Long equal runs and equal runs at the
+    /// chunk edges are discarded.
+    ///
+    /// All offsets are character indices, not byte offsets.
+    pub fn highlight_ranges(line_a: &str, line_b: &str) -> Vec<InlineRange> {
+        if line_a == line_b || !Self::are_lines_similar_enough(line_a, line_b, 0.15) {
+            return Vec::new();
+        }
+
+        let len_a = line_a.chars().count();
+        let len_b = line_b.chars().count();
+        let diff = TextDiff::from_chars(line_a, line_b);
+        let mut ranges = Vec::with_capacity(diff.ops().len());
+
+        for op in diff.ops() {
+            let start_a = op.old_range().start;
+            let end_a = op.old_range().end;
+            let start_b = op.new_range().start;
+            let end_b = op.new_range().end;
+
+            let keep = match op.tag() {
+                DiffTag::Equal => {
+                    let at_start = start_a == 0 && start_b == 0;
+                    let at_end = end_a == len_a && end_b == len_b;
+                    !at_start && !at_end && (end_a - start_a < 3 || end_b - start_b < 3)
+                }
+                _ => true,
+            };
+            if !keep {
+                continue;
+            }
+
+            let op = match op.tag() {
+                DiffTag::Equal => DiffOp::Equal,
+                DiffTag::Delete => DiffOp::Delete,
+                DiffTag::Insert => DiffOp::Insert,
+                DiffTag::Replace => DiffOp::Replace,
+            };
+            ranges.push(InlineRange {
+                start_a,
+                end_a,
+                start_b,
+                end_b,
+                op,
+            });
+        }
+
+        ranges
+    }
+
+    /// Token-level variant of [`InlineDiffer::highlight_ranges`].
+    ///
+    /// Tokenizes both lines, diffs the token sequences, and maps the kept
+    /// token opcodes back to character ranges. The same Meld `process_matches`
+    /// rule is applied using character lengths: non-equal token runs are kept,
+    /// short (< 3 characters) equal runs strictly inside the line are kept, and
+    /// long or boundary equal runs are discarded.
+    ///
+    /// Trailing CR/LF is stripped before tokenizing, since the line-level
+    /// caller already handles line boundaries and the newline is never part of
+    /// an inline highlight.
+    pub fn highlight_ranges_tokens(line_a: &str, line_b: &str) -> Vec<InlineRange> {
+        let a = line_a.trim_end_matches(['\n', '\r']);
+        let b = line_b.trim_end_matches(['\n', '\r']);
+        if a == b {
+            return Vec::new();
+        }
+
+        let (tokens_a, offsets_a) = tokenize_with_offsets(a);
+        let (tokens_b, offsets_b) = tokenize_with_offsets(b);
+        let joined_a = tokens_a.join("\n");
+        let joined_b = tokens_b.join("\n");
+        if !Self::are_lines_similar_enough(&joined_a, &joined_b, 0.15) {
+            return Vec::new();
+        }
+
+        let len_a = a.chars().count();
+        let len_b = b.chars().count();
+        let diff = TextDiff::from_lines(&joined_a, &joined_b);
+        let mut ranges = Vec::with_capacity(diff.ops().len());
+
+        for op in diff.ops() {
+            let (ta_start, ta_end) = (op.old_range().start, op.old_range().end);
+            let (tb_start, tb_end) = (op.new_range().start, op.new_range().end);
+            let start_a = offsets_a.get(ta_start).copied().unwrap_or(len_a);
+            let end_a = offsets_a.get(ta_end).copied().unwrap_or(len_a);
+            let start_b = offsets_b.get(tb_start).copied().unwrap_or(len_b);
+            let end_b = offsets_b.get(tb_end).copied().unwrap_or(len_b);
+
+            let keep = match op.tag() {
+                DiffTag::Equal => {
+                    let at_start = start_a == 0 && start_b == 0;
+                    let at_end = end_a == len_a && end_b == len_b;
+                    !at_start && !at_end && (end_a - start_a < 3 || end_b - start_b < 3)
+                }
+                _ => true,
+            };
+            if !keep {
+                continue;
+            }
+
+            let op = match op.tag() {
+                DiffTag::Equal => DiffOp::Equal,
+                DiffTag::Delete => DiffOp::Delete,
+                DiffTag::Insert => DiffOp::Insert,
+                DiffTag::Replace => DiffOp::Replace,
+            };
+            ranges.push(InlineRange {
+                start_a,
+                end_a,
+                start_b,
+                end_b,
+                op,
+            });
+        }
+
+        ranges
     }
 
     /// Quick pre-check to avoid O(L²) character diff on clearly unrelated lines.
@@ -3058,6 +3208,198 @@ mod tests {
             .collect();
         assert!(deleted.iter().any(|s| s == "255"), "deleted: {deleted:?}");
         assert!(deleted.iter().any(|s| s == "51000"), "deleted: {deleted:?}");
+    }
+
+    /// Merge adjacent/overlapping ranges for easier assertions.
+    fn union_ranges(ranges: impl Iterator<Item = (usize, usize)>) -> Vec<(usize, usize)> {
+        let mut v: Vec<(usize, usize)> = ranges.filter(|(s, e)| s < e).collect();
+        v.sort_unstable();
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        for (s, e) in v {
+            if let Some(last) = out.last_mut() {
+                if s <= last.1 {
+                    last.1 = last.1.max(e);
+                    continue;
+                }
+            }
+            out.push((s, e));
+        }
+        out
+    }
+
+    #[test]
+    fn test_highlight_ranges_issue_chunk() {
+        let a = "first line all zero\n";
+        let b = "first line\n  a new line\n";
+        let ranges = InlineDiffer::highlight_ranges(a, b);
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_a, r.end_a))),
+            vec![(10, 19)]
+        );
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_b, r.end_b))),
+            vec![(10, 23)]
+        );
+    }
+
+    #[test]
+    fn test_highlight_ranges_keeps_short_internal_equal() {
+        let a = "aaXbbYcc";
+        let b = "aaZbbWcc";
+        let ranges = InlineDiffer::highlight_ranges(a, b);
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_a, r.end_a))),
+            vec![(2, 6)]
+        );
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_b, r.end_b))),
+            vec![(2, 6)]
+        );
+    }
+
+    #[test]
+    fn test_highlight_ranges_drops_long_internal_equal() {
+        let a = "aaXlongequalYcc";
+        let b = "aaZlongequalWcc";
+        let ranges = InlineDiffer::highlight_ranges(a, b);
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_a, r.end_a))),
+            vec![(2, 3), (12, 13)]
+        );
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_b, r.end_b))),
+            vec![(2, 3), (12, 13)]
+        );
+    }
+
+    #[test]
+    fn test_highlight_ranges_drops_boundary_equal() {
+        let a = "abXcd";
+        let b = "abYcd";
+        let ranges = InlineDiffer::highlight_ranges(a, b);
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_a, r.end_a))),
+            vec![(2, 3)]
+        );
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_b, r.end_b))),
+            vec![(2, 3)]
+        );
+    }
+
+    #[test]
+    fn test_highlight_ranges_multibyte_offsets_are_characters() {
+        let a = "Länge: alt";
+        let b = "Länge: neu";
+        let ranges = InlineDiffer::highlight_ranges(a, b);
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_a, r.end_a))),
+            vec![(7, 10)]
+        );
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_b, r.end_b))),
+            vec![(7, 10)]
+        );
+        // 10 characters, not 11 bytes (the ä is two bytes).
+        assert!(ranges.iter().all(|r| r.end_a <= 10 && r.end_b <= 10));
+    }
+
+    #[test]
+    fn test_highlight_ranges_invariants() {
+        let a = "first line all zero\n";
+        let b = "first line\n  a new line\n";
+        let len_a = a.chars().count();
+        let len_b = b.chars().count();
+        let ranges = InlineDiffer::highlight_ranges(a, b);
+
+        let mut last_a = 0;
+        let mut last_b = 0;
+        for r in &ranges {
+            assert!(r.start_a <= r.end_a && r.end_a <= len_a);
+            assert!(r.start_b <= r.end_b && r.end_b <= len_b);
+            assert!(r.start_a >= last_a, "A ranges out of order: {r:?}");
+            assert!(r.start_b >= last_b, "B ranges out of order: {r:?}");
+            last_a = r.end_a;
+            last_b = r.end_b;
+        }
+    }
+
+    #[test]
+    fn test_highlight_ranges_tokens_absorbs_short_internal_equal() {
+        let a = "X Y";
+        let b = "Z W";
+        let ranges = InlineDiffer::highlight_ranges_tokens(a, b);
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_a, r.end_a))),
+            vec![(0, 3)]
+        );
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_b, r.end_b))),
+            vec![(0, 3)]
+        );
+    }
+
+    #[test]
+    fn test_highlight_ranges_tokens_rename() {
+        let a = "fooBarBaz";
+        let b = "fooBarQux";
+        let ranges = InlineDiffer::highlight_ranges_tokens(a, b);
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_a, r.end_a))),
+            vec![(6, 9)]
+        );
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_b, r.end_b))),
+            vec![(6, 9)]
+        );
+    }
+
+    #[test]
+    fn test_highlight_ranges_tokens_trailing_newline() {
+        let a = "X Y\n";
+        let b = "Z W\n";
+        let ranges = InlineDiffer::highlight_ranges_tokens(a, b);
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_a, r.end_a))),
+            vec![(0, 3)]
+        );
+        assert_eq!(
+            union_ranges(ranges.iter().map(|r| (r.start_b, r.end_b))),
+            vec![(0, 3)]
+        );
+    }
+
+    #[test]
+    fn test_compare_line_issue_chunk_characterization() {
+        // Characterization test: `compare_line` must keep its current output.
+        // It intentionally does not include short equal runs; the chunk-level
+        // Meld-compatible rule lives in `highlight_ranges`.
+        let a = "first line all zero\n";
+        let b = "first line\n  a new line\n";
+        let changes: Vec<(DiffOp, usize, usize)> = InlineDiffer::compare_line(a, b)
+            .iter()
+            .map(|c| (c.op, c.start, c.end))
+            .collect();
+        use DiffOp::{Delete, Insert};
+        assert_eq!(
+            changes,
+            vec![
+                (Insert, 10, 11),
+                (Insert, 11, 12),
+                (Insert, 14, 15),
+                (Insert, 15, 16),
+                (Insert, 16, 17),
+                (Insert, 17, 18),
+                (Insert, 18, 19),
+                (Delete, 13, 14),
+                (Delete, 14, 15),
+                (Delete, 15, 16),
+                (Insert, 20, 21),
+                (Insert, 21, 22),
+                (Delete, 17, 18),
+                (Delete, 18, 19),
+            ]
+        );
     }
 
     #[test]
