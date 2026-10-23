@@ -195,12 +195,12 @@ pub fn inline_insert_hex() -> &'static str {
     }
 }
 
+/// Hex string for the inline-replace tag.
+///
+/// Meld uses a single `meld:inline` colour for all intra-line changes, so this
+/// intentionally matches [`inline_hex`].
 pub fn inline_replace_hex() -> &'static str {
-    if is_dark() {
-        "#28487a"
-    } else {
-        "#4488ff"
-    }
+    inline_hex()
 }
 
 /// Select the GtkSourceView style scheme to use, tied to the current

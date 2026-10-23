@@ -3505,11 +3505,13 @@ fn apply_diff_tags_to_buffer(
     }
 }
 
-/// Apply word-level (inline) diff highlighting within a Replace chunk.
+/// Apply inline diff highlighting within a Replace chunk.
 ///
-/// For each line in the Replace chunk, computes character-level diff between
-/// the corresponding lines in both buffers and applies differentiated inline
-/// tags to highlight the specific characters that changed:
+/// When the two sides have different line counts, this computes a
+/// character-level diff over the whole chunk and applies Meld's
+/// `process_matches` ranges (see `InlineDiffer::highlight_ranges`). When the
+/// line counts match, it keeps the per-line path and honours
+/// `inline_diff_mode`. `"none"` disables inline highlighting entirely.
 fn apply_inline_diff(
     buffer: &gsv::Buffer,
     other_buffer: &gsv::Buffer,
@@ -3522,6 +3524,10 @@ fn apply_inline_diff(
     let (start_a, end_a, start_b, end_b) = (chunk.start_a, chunk.end_a, chunk.start_b, chunk.end_b);
     let count_a = end_a - start_a;
     let count_b = end_b - start_b;
+
+    if inline_diff_mode == "none" {
+        return;
+    }
 
     // Guard: skip inline diff for very large Replace chunks.
     // A Replace with hundreds of lines is likely a wholesale section
@@ -3551,35 +3557,36 @@ fn apply_inline_diff(
             let text_a = buf_a.text(&sa, &ea, false).to_string();
             let text_b = buf_b.text(&sb, &eb, false).to_string();
             if !text_a.is_empty() && !text_b.is_empty() && text_a != text_b {
-                let changes = InlineDiffer::compare_line(&text_a, &text_b);
                 let base_a = sa.offset() as usize;
                 let base_b = sb.offset() as usize;
+                let Some(tag) = tag_table.lookup("diff-inline-replace") else {
+                    return;
+                };
 
-                for change in &changes {
-                    // Pane 0 shows Deletes (removed from A = buffer)
-                    // Pane 1 shows Inserts (added to B = buffer)
-                    let (base, target_buf) = match (pane, change.op) {
-                        (0, DiffOp::Delete) => (base_a, buffer),
-                        (1, DiffOp::Insert) => (base_b, buffer),
-                        _ => continue,
+                // This function is invoked once per pane; paint only the side
+                // that belongs to the current pane's buffer.
+                for range in InlineDiffer::highlight_ranges(&text_a, &text_b) {
+                    let (target_buf, base, start, end) = if pane == 0 {
+                        (buf_a, base_a, range.start_a, range.end_a)
+                    } else {
+                        (buf_b, base_b, range.start_b, range.end_b)
                     };
+                    if start >= end {
+                        continue;
+                    }
 
-                    let s_off = base + change.start;
-                    let e_off = base + change.end;
-                    let tag_name = "diff-inline-replace";
-
-                    if let Some(tag) = tag_table.lookup(tag_name) {
-                        let mut s = target_buf.iter_at_offset(s_off as i32);
-                        let mut e = target_buf.iter_at_offset(e_off as i32);
-                        if !s.is_cursor_position() {
-                            s.backward_cursor_position();
-                        }
-                        if !e.is_cursor_position() {
-                            e.forward_cursor_position();
-                        }
-                        if s.offset() < e.offset() {
-                            target_buf.apply_tag(&tag, &s, &e);
-                        }
+                    let s_off = base + start;
+                    let e_off = base + end;
+                    let mut s = target_buf.iter_at_offset(s_off as i32);
+                    let mut e = target_buf.iter_at_offset(e_off as i32);
+                    if !s.is_cursor_position() {
+                        s.backward_cursor_position();
+                    }
+                    if !e.is_cursor_position() {
+                        e.forward_cursor_position();
+                    }
+                    if s.offset() < e.offset() {
+                        target_buf.apply_tag(&tag, &s, &e);
                     }
                 }
             }
@@ -3628,12 +3635,12 @@ fn apply_inline_diff(
             continue;
         }
 
-        let inline_changes = match inline_diff_mode {
-            "characters" => InlineDiffer::compare_line(&text_a, &text_b),
-            "tokens" => (*cache.compare_line_tokens(&text_a, &text_b)).clone(),
+        let ranges = match inline_diff_mode {
+            "characters" => InlineDiffer::highlight_ranges(&text_a, &text_b),
+            "tokens" => (*cache.compare_line_token_ranges(&text_a, &text_b)).clone(),
             _ => Vec::new(),
         };
-        if inline_changes.is_empty() {
+        if ranges.is_empty() {
             continue;
         }
 
@@ -3642,43 +3649,32 @@ fn apply_inline_diff(
             Some(iter) => iter,
             None => continue,
         };
+        let Some(tag) = tag_table.lookup("diff-inline-replace") else {
+            return;
+        };
 
-        for change in inline_changes.iter() {
-            let apply = match (pane, change.op) {
-                (0, DiffOp::Delete | DiffOp::Replace) => true,
-                (0, DiffOp::Insert) => false,
-                (1, DiffOp::Insert | DiffOp::Replace) => true,
-                (1, DiffOp::Delete) => false,
-                _ => false,
+        for range in ranges {
+            let (start, end) = if pane == 0 {
+                (range.start_a, range.end_a)
+            } else {
+                (range.start_b, range.end_b)
             };
-            if !apply {
+            if start >= end {
                 continue;
             }
-            let tag_name = if chunk.op == DiffOp::Replace {
-                "diff-inline-replace"
-            } else {
-                match change.op {
-                    DiffOp::Delete => "diff-inline-delete",
-                    DiffOp::Insert => "diff-inline-insert",
-                    DiffOp::Replace => "diff-inline-replace",
-                    DiffOp::Equal => continue,
-                }
-            };
 
-            if let Some(tag) = tag_table.lookup(tag_name) {
-                let start_offset = base_iter.offset() as usize + change.start;
-                let end_offset = base_iter.offset() as usize + change.end;
-                let mut s = buffer.iter_at_offset(start_offset as i32);
-                let mut e = buffer.iter_at_offset(end_offset as i32);
-                if !s.is_cursor_position() {
-                    s.backward_cursor_position();
-                }
-                if !e.is_cursor_position() {
-                    e.forward_cursor_position();
-                }
-                if s.offset() < e.offset() {
-                    buffer.apply_tag(&tag, &s, &e);
-                }
+            let start_offset = base_iter.offset() as usize + start;
+            let end_offset = base_iter.offset() as usize + end;
+            let mut s = buffer.iter_at_offset(start_offset as i32);
+            let mut e = buffer.iter_at_offset(end_offset as i32);
+            if !s.is_cursor_position() {
+                s.backward_cursor_position();
+            }
+            if !e.is_cursor_position() {
+                e.forward_cursor_position();
+            }
+            if s.offset() < e.offset() {
+                buffer.apply_tag(&tag, &s, &e);
             }
         }
     }

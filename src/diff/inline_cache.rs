@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::diff::engine::{InlineChange, InlineDiffer};
+use crate::diff::engine::{InlineChange, InlineDiffer, InlineRange};
 
 /// Maximum number of cached inline diff results.
 /// The original Meld uses `size_hint * 2` as the cache limit.
@@ -20,6 +20,16 @@ const DEFAULT_CACHE_SIZE: usize = 512;
 /// character-level (`compare_line`) cache entries for the same line pair.
 const TOKEN_KEY_XOR: u64 = 0x8000_0000_0000_0000;
 
+/// Constant XORed into token-range cache keys. Ranges are stored in a separate
+/// map, but a distinct key namespace keeps the intent explicit and avoids
+/// collisions if the maps are ever merged.
+const TOKEN_RANGE_KEY_XOR: u64 = 0xC000_0000_0000_0000;
+
+/// Cached per-line inline changes.
+type ChangeCache = RefCell<HashMap<u64, (u64, Rc<Vec<InlineChange>>)>>;
+/// Cached per-line token-level inline ranges.
+type RangeCache = RefCell<HashMap<u64, (u64, Rc<Vec<InlineRange>>)>>;
+
 /// A simple LRU cache for inline diff results.
 ///
 /// Keyed by `(line_a_hash, line_b_hash)` to avoid storing full strings
@@ -27,7 +37,9 @@ const TOKEN_KEY_XOR: u64 = 0x8000_0000_0000_0000;
 #[derive(Debug)]
 pub struct InlineDiffCache {
     /// Cached results: key → (generation, result).
-    cache: RefCell<HashMap<u64, (u64, Rc<Vec<InlineChange>>)>>,
+    cache: ChangeCache,
+    /// Cached token-level highlight ranges: key → (generation, result).
+    range_cache: RangeCache,
     /// Monotonically increasing generation counter.
     generation: RefCell<u64>,
     /// Maximum number of entries before eviction.
@@ -44,6 +56,7 @@ impl InlineDiffCache {
     pub fn with_capacity(max_entries: usize) -> Self {
         Self {
             cache: RefCell::new(HashMap::new()),
+            range_cache: RefCell::new(HashMap::new()),
             generation: RefCell::new(0),
             max_entries,
         }
@@ -153,9 +166,56 @@ impl InlineDiffCache {
         result
     }
 
+    /// Get the token-level inline highlight ranges for a pair of lines, using
+    /// the cache if available.
+    ///
+    /// Unlike [`compare_line_tokens`], this returns both-side character ranges
+    /// and includes the short internal equal runs that Meld's `process_matches`
+    /// keeps, so the caller can paint contiguous inline highlights.
+    pub fn compare_line_token_ranges(&self, line_a: &str, line_b: &str) -> Rc<Vec<InlineRange>> {
+        if line_a == line_b {
+            return Rc::new(Vec::new());
+        }
+
+        let key = Self::hash_pair(line_a, line_b) ^ TOKEN_RANGE_KEY_XOR;
+
+        {
+            let cache = self.range_cache.borrow();
+            if let Some((_, result)) = cache.get(&key) {
+                return Rc::clone(result);
+            }
+        }
+
+        let ranges = InlineDiffer::highlight_ranges_tokens(line_a, line_b);
+        let result = Rc::new(ranges);
+
+        let mut cache = self.range_cache.borrow_mut();
+        let mut gen = self.generation.borrow_mut();
+
+        *gen += 1;
+        cache.insert(key, (*gen, Rc::clone(&result)));
+
+        if cache.len() > self.max_entries {
+            let mut oldest_key: Option<u64> = None;
+            let mut oldest_gen = u64::MAX;
+            for (k, (g, _)) in cache.iter() {
+                if *g < oldest_gen {
+                    oldest_gen = *g;
+                    oldest_key = Some(*k);
+                }
+            }
+            if let Some(k) = oldest_key {
+                cache.remove(&k);
+            }
+        }
+
+        result
+    }
+
     /// Clear all cached entries.
     pub fn clear(&self) {
         self.cache.borrow_mut().clear();
+        self.range_cache.borrow_mut().clear();
         *self.generation.borrow_mut() = 0;
     }
 }
@@ -279,5 +339,25 @@ mod tests {
         let result = cache.compare_line_tokens(a, b);
         // Should produce insert/delete/replace changes for the token diff.
         assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_token_ranges_cache_hit() {
+        let cache = InlineDiffCache::new();
+        let a = "foo bar baz\n";
+        let b = "foo qux baz\n";
+
+        let r1 = cache.compare_line_token_ranges(a, b);
+        let r2 = cache.compare_line_token_ranges(a, b);
+
+        assert!(Rc::ptr_eq(&r1, &r2));
+        assert!(!r1.is_empty());
+    }
+
+    #[test]
+    fn test_token_ranges_identical_lines_return_empty() {
+        let cache = InlineDiffCache::new();
+        let result = cache.compare_line_token_ranges("same line\n", "same line\n");
+        assert!(result.is_empty());
     }
 }
