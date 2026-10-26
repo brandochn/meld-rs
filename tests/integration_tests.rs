@@ -2,6 +2,8 @@
 
 use meld_rs::diff::engine::{DiffOp, Differ, LineCache};
 use meld_rs::diff::matchers::CachedSequenceMatcher;
+use meld_rs::utils::text_filter::filter_lines_preserving_count;
+use regex::bytes::Regex;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 
@@ -192,4 +194,57 @@ fn test_tokenize_with_offsets_camelcase() {
     let changes = InlineDiffer::compare_line_tokens("fooBarBaz", "fooBarQux");
     // Should find the differing token at the end
     assert!(!changes.is_empty());
+}
+
+#[test]
+fn test_filtered_lines_only_comments_are_equal() {
+    let patterns = vec![Regex::new(r"//.*").unwrap()];
+    let a = filter_lines_preserving_count(
+        vec!["foo".into(), "// comment a".into(), "bar".into()],
+        &patterns,
+    );
+    let b = filter_lines_preserving_count(
+        vec!["foo".into(), "// comment b".into(), "bar".into()],
+        &patterns,
+    );
+
+    let result = Differ::new(a, b).compare();
+    assert!(result.chunks.iter().all(|c| c.op == DiffOp::Equal));
+}
+
+#[test]
+fn test_filtered_lines_keep_real_change_only() {
+    let patterns = vec![Regex::new(r"//.*").unwrap()];
+    let a = filter_lines_preserving_count(
+        vec!["foo(1);".into(), "// old comment".into(), "bar".into()],
+        &patterns,
+    );
+    let b = filter_lines_preserving_count(
+        vec!["foo(2);".into(), "// new comment".into(), "bar".into()],
+        &patterns,
+    );
+
+    let result = Differ::new(a, b).compare();
+    let changed: Vec<_> = result
+        .chunks
+        .iter()
+        .filter(|c| c.op != DiffOp::Equal)
+        .collect();
+    assert_eq!(changed.len(), 1);
+    assert_eq!((changed[0].start_a, changed[0].end_a), (0, 1));
+    assert_eq!((changed[0].start_b, changed[0].end_b), (0, 1));
+}
+
+#[test]
+fn test_filtered_lines_without_patterns_match_raw_diff() {
+    let patterns: Vec<Regex> = vec![];
+    let a = vec!["foo".to_string(), "// a".to_string(), "bar".to_string()];
+    let b = vec!["foo".to_string(), "// b".to_string(), "bar".to_string()];
+
+    let raw = Differ::new(a.clone(), b.clone()).compare();
+    let filtered_a = filter_lines_preserving_count(a, &patterns);
+    let filtered_b = filter_lines_preserving_count(b, &patterns);
+    let filtered = Differ::new(filtered_a, filtered_b).compare();
+
+    assert_eq!(raw.chunks, filtered.chunks);
 }

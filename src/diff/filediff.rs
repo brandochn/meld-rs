@@ -87,7 +87,7 @@ pub struct FileDiff {
     show_connectors: Rc<Cell<bool>>,
     /// Inline diff mode: "characters", "tokens", or "none".
     inline_diff_mode: Rc<RefCell<String>>,
-    /// Cached compiled text-filter patterns for visual dimming.
+    /// Cached compiled text-filter patterns used for diffing and visual dimming.
     text_filter_patterns: Rc<RefCell<Vec<regex::bytes::Regex>>>,
     /// Shared find bar (Ctrl+F) for in-file text search.
     find_bar: Rc<FindBar>,
@@ -686,6 +686,10 @@ impl FileDiff {
     }
 
     /// Compile text filter patterns from user settings.
+    ///
+    /// Updates the cached patterns and refreshes visual dimming. This method
+    /// does not recompute the diff; callers must invoke [`Self::compute_diff`]
+    /// after changing the patterns (currently done by `apply_settings`).
     pub fn set_text_filter_patterns(&self, patterns: &[String]) {
         use regex::bytes::Regex;
         let mut compiled = Vec::new();
@@ -706,13 +710,23 @@ impl FileDiff {
     /// `dim_ranges_to_char_offsets` before the `dimmed` tag is applied.
     fn apply_text_dimming(&self) {
         let patterns = self.text_filter_patterns.borrow();
-        if patterns.is_empty() {
-            return;
-        }
 
         for pane in &self.panes {
             let buffer = &pane.buffer;
             let tag_table = buffer.tag_table();
+
+            let start_iter = buffer.start_iter();
+            let end_iter = buffer.end_iter();
+
+            // Clear existing dimmed tags even when filters are disabled, so
+            // stale highlighting does not survive a settings change.
+            if let Some(tag) = tag_table.lookup("dimmed") {
+                buffer.remove_tag(&tag, &start_iter, &end_iter);
+            }
+
+            if patterns.is_empty() {
+                continue;
+            }
 
             // Ensure the dimmed tag exists
             if tag_table.lookup("dimmed").is_none() {
@@ -721,13 +735,6 @@ impl FileDiff {
                     .foreground_rgba(&gdk::RGBA::new(0.5, 0.5, 0.5, 0.4))
                     .build();
                 tag_table.add(&tag);
-            }
-
-            // Clear existing dimmed tags
-            let start_iter = buffer.start_iter();
-            let end_iter = buffer.end_iter();
-            if let Some(tag) = tag_table.lookup("dimmed") {
-                buffer.remove_tag(&tag, &start_iter, &end_iter);
             }
 
             // Get full buffer content as bytes and compute dim ranges
@@ -1195,8 +1202,15 @@ impl FileDiff {
             return;
         }
 
-        let text_a = buffer_text_lines(&self.panes[0].buffer);
-        let text_b = buffer_text_lines(&self.panes[1].buffer);
+        let patterns = self.text_filter_patterns.borrow().clone();
+        let text_a = crate::utils::text_filter::filter_lines_preserving_count(
+            buffer_text_lines(&self.panes[0].buffer),
+            &patterns,
+        );
+        let text_b = crate::utils::text_filter::filter_lines_preserving_count(
+            buffer_text_lines(&self.panes[1].buffer),
+            &patterns,
+        );
 
         let chunks = Rc::clone(&self.chunks);
         let line_cache = Rc::clone(&self.line_cache);
@@ -2025,6 +2039,7 @@ impl FileDiff {
         let line_cache = Rc::clone(&self.line_cache);
         let ignore_blank_lines = Rc::clone(&self.ignore_blank_lines);
         let inline_diff_mode = Rc::clone(&self.inline_diff_mode);
+        let text_filter_patterns = Rc::clone(&self.text_filter_patterns);
         let overlays: Vec<gtk::DrawingArea> = self
             .panes
             .iter()
@@ -2051,6 +2066,7 @@ impl FileDiff {
             let line_cache = Rc::clone(&line_cache);
             let ignore_blank_lines_f = Rc::clone(&ignore_blank_lines);
             let inline_diff_mode_f = Rc::clone(&inline_diff_mode);
+            let text_filter_patterns_f = Rc::clone(&text_filter_patterns);
             let overlays_f = overlays.clone();
             let diff_maps_f = diff_maps.clone();
             let line_gutters_f = line_gutters.clone();
@@ -2060,8 +2076,15 @@ impl FileDiff {
                     return;
                 }
 
-                let text_a = buffer_text_lines(&buffers[0]);
-                let text_b = buffer_text_lines(&buffers[1]);
+                let patterns = text_filter_patterns_f.borrow().clone();
+                let text_a = crate::utils::text_filter::filter_lines_preserving_count(
+                    buffer_text_lines(&buffers[0]),
+                    &patterns,
+                );
+                let text_b = crate::utils::text_filter::filter_lines_preserving_count(
+                    buffer_text_lines(&buffers[1]),
+                    &patterns,
+                );
 
                 let chunks = Rc::clone(&chunks);
                 let line_cache = Rc::clone(&line_cache);
