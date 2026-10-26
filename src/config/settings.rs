@@ -536,6 +536,16 @@ mod tests {
     }
 
     #[test]
+    fn test_toggle_text_filter_updates_active_regexes() {
+        let mut s = MeldSettings::default();
+        s.text_filters[1].enabled = true;
+        assert_eq!(s.active_text_filter_regexes(), vec!["//.*".to_string()]);
+
+        s.text_filters[1].enabled = false;
+        assert!(s.active_text_filter_regexes().is_empty());
+    }
+
+    #[test]
     fn test_serialize_roundtrip() {
         let s = MeldSettings::default();
         let json = serde_json::to_string(&s).unwrap();
