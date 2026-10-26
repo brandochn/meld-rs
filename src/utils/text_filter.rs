@@ -7,6 +7,10 @@
 //!   2. Dim ranges (for visual dimming)     Ã¢â‚¬â€ byte spans where the dim tag
 //!      should be applied in the source view
 //!
+//! [`filter_lines_preserving_count`] applies the same filters line by line for
+//! callers that need a filtered sequence for a line diff. It preserves the line
+//! count so chunk indices stay aligned with the original buffer.
+//!
 //! Interval merging ensures that overlapping/adjacent matches produce a
 //! single contiguous dim region rather than flickering tag boundaries.
 
@@ -85,6 +89,34 @@ pub fn apply_text_filters(content: &[u8], patterns: &[Regex]) -> (Vec<u8>, Vec<D
     }
 
     (filtered, dim_ranges)
+}
+
+/// Apply text filters to each line independently, preserving the line count.
+///
+/// This is the line-based counterpart to [`apply_text_filters`], used when the
+/// result feeds a line diff. Each line is filtered in isolation so a pattern can
+/// never merge or split lines. The output always has the same number of elements
+/// as the input and does not introduce newline characters (inputs are expected
+/// to be single lines, as produced by `str::lines()`).
+///
+/// The filtered text is converted with `String::from_utf8_lossy` because the
+/// compiled patterns operate on raw bytes; a pattern that cuts a multi-byte
+/// character therefore yields the Unicode replacement character rather than
+/// failing.
+pub fn filter_lines_preserving_count(mut lines: Vec<String>, patterns: &[Regex]) -> Vec<String> {
+    if patterns.is_empty() {
+        return lines;
+    }
+
+    let expected_len = lines.len();
+    for line in &mut lines {
+        let (bytes, _dims) = apply_text_filters(line.as_bytes(), patterns);
+        *line = String::from_utf8_lossy(&bytes).into_owned();
+    }
+
+    debug_assert_eq!(lines.len(), expected_len);
+    debug_assert!(lines.iter().all(|line| !line.contains('\n')));
+    lines
 }
 
 /// Convert a shell glob pattern (e.g. `*.csv`, `thing*csv`) to a compiled
@@ -559,5 +591,81 @@ mod tests {
         assert!(re.is_match(b"test_foo"));
         assert!(re.is_match(b"test_"));
         assert!(!re.is_match(b"footest_"));
+    }
+
+    // ── filter_lines_preserving_count ──
+
+    #[test]
+    fn test_filter_lines_no_patterns_returns_original() {
+        let lines = vec!["alpha".to_string(), "beta".to_string()];
+        let patterns: Vec<Regex> = vec![];
+        let filtered = filter_lines_preserving_count(lines.clone(), &patterns);
+        assert_eq!(filtered, lines);
+    }
+
+    #[test]
+    fn test_filter_lines_comment_only_line_becomes_empty() {
+        let lines = vec!["// comment".to_string(), "code".to_string()];
+        let patterns = vec![Regex::new(r"//.*").unwrap()];
+        let filtered = filter_lines_preserving_count(lines, &patterns);
+        assert_eq!(filtered, vec![String::new(), "code".to_string()]);
+    }
+
+    #[test]
+    fn test_filter_lines_whole_line_becomes_empty() {
+        let lines = vec!["entire line".to_string()];
+        let patterns = vec![Regex::new(r"^.*$").unwrap()];
+        let filtered = filter_lines_preserving_count(lines, &patterns);
+        assert_eq!(filtered, vec![String::new()]);
+    }
+
+    #[test]
+    fn test_filter_lines_partial_match_keeps_remainder() {
+        let lines = vec!["code // comment".to_string()];
+        let patterns = vec![Regex::new(r"//.*").unwrap()];
+        let filtered = filter_lines_preserving_count(lines, &patterns);
+        assert_eq!(filtered, vec!["code ".to_string()]);
+    }
+
+    #[test]
+    fn test_filter_lines_preserves_count_and_has_no_newlines() {
+        let lines = vec![
+            "one".to_string(),
+            "// two".to_string(),
+            String::new(),
+            "four".to_string(),
+        ];
+        let patterns = vec![Regex::new(r"//.*").unwrap()];
+        let filtered = filter_lines_preserving_count(lines.clone(), &patterns);
+        assert_eq!(filtered.len(), lines.len());
+        assert!(filtered.iter().all(|line| !line.contains('\n')));
+    }
+
+    #[test]
+    fn test_filter_lines_utf8_comment_does_not_corrupt_remainder() {
+        let lines = vec!["café 🚀 // comentario".to_string()];
+        let patterns = vec![Regex::new(r"//.*").unwrap()];
+        let filtered = filter_lines_preserving_count(lines, &patterns);
+        assert_eq!(filtered, vec!["café 🚀 ".to_string()]);
+    }
+
+    #[test]
+    fn test_filter_lines_multibyte_cut_is_lossy_but_stays_one_line() {
+        // (?-u) disables Unicode mode so the pattern matches the raw 0xC3 byte
+        // that starts the two-byte UTF-8 sequence of 'é'.
+        let lines = vec!["café".to_string()];
+        let patterns = vec![Regex::new(r"(?-u:\xC3)").unwrap()];
+        let filtered = filter_lines_preserving_count(lines, &patterns);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0], "caf\u{FFFD}");
+        assert!(!filtered[0].contains('\n'));
+    }
+
+    #[test]
+    fn test_filter_lines_multiline_pattern_does_not_cross_lines() {
+        let lines = vec!["a".to_string(), "b".to_string()];
+        let patterns = vec![Regex::new(r"a\nb").unwrap()];
+        let filtered = filter_lines_preserving_count(lines.clone(), &patterns);
+        assert_eq!(filtered, lines);
     }
 }
