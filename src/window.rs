@@ -41,7 +41,10 @@ pub struct MeldWindow {
     prev_conflict_btn: gtk::Button,
     next_conflict_btn: gtk::Button,
     /// Persisted user settings (includes vc_left_is_local, vc_merge_file_order).
-    settings: Rc<MeldSettings>,
+    ///
+    /// Shared and reloadable so that changes made from the text-filter
+    /// popover or preferences apply to comparisons opened afterwards.
+    settings: Rc<RefCell<MeldSettings>>,
 }
 
 /// Sensitivity state for the header-bar change actions, mirroring Meld's
@@ -468,7 +471,7 @@ impl MeldWindow {
         window.set_title(Some("Meld-rs"));
         window.set_default_size(1280, 720);
 
-        let settings = Rc::new(MeldSettings::load().unwrap_or_default());
+        let settings = Rc::new(RefCell::new(MeldSettings::load().unwrap_or_default()));
 
         let header = gtk::HeaderBar::new();
         header.set_show_title_buttons(true);
@@ -684,6 +687,7 @@ impl MeldWindow {
         _auto_merge: bool,
         setup_cb: bool,
     ) {
+        let settings = self.settings.borrow().clone();
         if setup_cb {
             open_comparison_in_notebook(
                 &self.notebook,
@@ -691,17 +695,17 @@ impl MeldWindow {
                 gfiles,
                 auto_compare,
                 _auto_merge,
-                &self.settings,
+                &settings,
                 &self.window,
             );
         } else {
             let num_panes = gfiles.len().max(2);
             let filediff = FileDiff::new(num_panes);
-            filediff.set_font(self.settings.use_system_font, &self.settings.custom_font);
-            filediff.set_ignore_blanks(self.settings.ignore_blank_lines);
-            filediff.set_show_connectors(self.settings.show_connectors);
-            filediff.set_inline_diff_mode(&self.settings.inline_diff_mode);
-            filediff.apply_settings(&self.settings);
+            filediff.set_font(settings.use_system_font, &settings.custom_font);
+            filediff.set_ignore_blanks(settings.ignore_blank_lines);
+            filediff.set_show_connectors(settings.show_connectors);
+            filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+            filediff.apply_settings(&settings);
             filediff.connect_gutter_key_modes(&self.window);
             filediff.set_files(gfiles);
             let label = create_closeable_tab_label("File Comparison", &self.notebook, &self.pages);
@@ -713,12 +717,13 @@ impl MeldWindow {
 
     pub fn open_file_merge(&self, gfiles: &[gio::File], output: Option<&str>) {
         let num_panes = 3usize;
+        let settings = self.settings.borrow().clone();
         let filediff = FileDiff::new(num_panes);
-        filediff.set_font(self.settings.use_system_font, &self.settings.custom_font);
-        filediff.set_ignore_blanks(self.settings.ignore_blank_lines);
-        filediff.set_show_connectors(self.settings.show_connectors);
-        filediff.set_inline_diff_mode(&self.settings.inline_diff_mode);
-        filediff.apply_settings(&self.settings);
+        filediff.set_font(settings.use_system_font, &settings.custom_font);
+        filediff.set_ignore_blanks(settings.ignore_blank_lines);
+        filediff.set_show_connectors(settings.show_connectors);
+        filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+        filediff.apply_settings(&settings);
         filediff.connect_gutter_key_modes(&self.window);
         filediff.set_files(gfiles);
         if let Some(out) = output {
@@ -770,12 +775,13 @@ impl MeldWindow {
     ) {
         let nb = notebook.clone();
         let p = Rc::clone(pages);
-        let s = Rc::new(self.settings.clone());
+        let s = Rc::clone(&self.settings);
         let w = self.window.clone();
         tab.set_diff_created_callback(Box::new(move |req: DiffRequest| {
             let auto_compare = false;
             let auto_merge = false;
-            handle_diff_request(&nb, &p, &req, auto_compare, auto_merge, &s, &w);
+            let settings = s.borrow().clone();
+            handle_diff_request(&nb, &p, &req, auto_compare, auto_merge, &settings, &w);
 
             let p_clone = Rc::clone(&p);
             let nb_clone = nb.clone();
@@ -828,7 +834,8 @@ impl MeldWindow {
                 move |paths| {
                     let gfiles: Vec<gio::File> =
                         paths.iter().map(|p| gio::File::for_path(p)).collect();
-                    open_comparison_in_notebook(&nb, &p, &gfiles, false, false, &s, &w);
+                    let settings = s.borrow().clone();
+                    open_comparison_in_notebook(&nb, &p, &gfiles, false, false, &settings, &w);
                 }
             });
             pop.set_child(Some(selector.widget()));
@@ -976,6 +983,7 @@ impl MeldWindow {
         let w = self.window.clone();
         drop_target.connect_drop(move |_, value, _x, _y| {
             if let Ok(gfile) = value.get::<gio::File>() {
+                let settings = settings.borrow().clone();
                 open_comparison_in_notebook(&nb, &p, &[gfile], false, false, &settings, &w);
                 true
             } else {
@@ -987,17 +995,24 @@ impl MeldWindow {
 
     fn setup_preferences_action(&self) {
         let pages = self.pages.clone();
+        let settings = Rc::clone(&self.settings);
         let window = self.window.clone();
 
         let prefs_action = gio::SimpleAction::new("preferences", None);
         let pages_cb = pages.clone();
+        let settings_cb = Rc::clone(&settings);
         let w = window.clone();
         prefs_action.connect_activate(move |_, _| {
             let p = pages_cb.clone();
+            let s = Rc::clone(&settings_cb);
             let parent = Some(w.upcast_ref::<gtk::Window>());
             let dialog = crate::ui::preferences::PreferencesDialog::new(
                 Box::new(move || {
                     if let Ok(reloaded) = MeldSettings::load() {
+                        {
+                            let mut current = s.borrow_mut();
+                            *current = reloaded.clone();
+                        }
                         for page in p.borrow().iter() {
                             page.apply_settings(&reloaded);
                         }
@@ -1017,11 +1032,16 @@ impl MeldWindow {
     /// (and their documents) alive.
     fn setup_theme_watcher(&self) {
         let pages_weak = Rc::downgrade(&self.pages);
+        let settings = Rc::clone(&self.settings);
         adw::StyleManager::default().connect_dark_notify(move |_| {
             let Some(pages) = pages_weak.upgrade() else {
                 return;
             };
             if let Ok(reloaded) = MeldSettings::load() {
+                {
+                    let mut current = settings.borrow_mut();
+                    *current = reloaded.clone();
+                }
                 for page in pages.borrow().iter() {
                     page.apply_settings(&reloaded);
                 }
@@ -1452,6 +1472,7 @@ impl MeldWindow {
     /// for every text filter defined in the current settings.
     fn setup_text_filter_popover(&self) {
         let settings = Rc::clone(&self.settings);
+        let pages = Rc::clone(&self.pages);
         let btn = self.text_filter_btn.clone();
 
         let popover = gtk::Popover::new();
@@ -1471,21 +1492,53 @@ impl MeldWindow {
             header.set_halign(gtk::Align::Start);
             vbox.append(&header);
 
-            let filters = settings.text_filters.clone();
+            let filters = match MeldSettings::load() {
+                Ok(current) => current.text_filters,
+                Err(e) => {
+                    log::error!("Failed to load text filter settings: {}", e);
+                    settings.borrow().text_filters.clone()
+                }
+            };
 
             for (i, filter) in filters.iter().enumerate() {
                 let cb = gtk::CheckButton::with_label(&filter.name);
                 cb.set_active(filter.enabled);
+                let settings_cb = Rc::clone(&settings);
+                let pages_cb = Rc::clone(&pages);
                 cb.connect_toggled(move |check| {
-                    // Persist the toggle by reloading settings from disk,
-                    // updating the relevant filter, and saving back.
-                    if let Ok(mut updated) = MeldSettings::load() {
-                        if let Some(f) = updated.text_filters.get_mut(i) {
-                            f.enabled = check.is_active();
+                    // Reload before mutating so we do not overwrite changes
+                    // saved by another settings surface (e.g. preferences).
+                    // Fall back to the in-memory copy if the file is unreadable.
+                    let mut updated = match MeldSettings::load() {
+                        Ok(current) => current,
+                        Err(e) => {
+                            log::error!("Failed to load text filter settings: {}", e);
+                            settings_cb.borrow().clone()
                         }
-                        if let Err(e) = updated.save() {
-                            log::error!("Failed to save text filter setting: {}", e);
-                        }
+                    };
+
+                    let Some(filter) = updated.text_filters.get_mut(i) else {
+                        return;
+                    };
+                    let enabled = check.is_active();
+                    if filter.enabled == enabled {
+                        return;
+                    }
+                    filter.enabled = enabled;
+
+                    if let Err(e) = updated.save() {
+                        log::error!("Failed to save text filter setting: {}", e);
+                    }
+
+                    // Keep the window's copy current without holding the
+                    // borrow while pages re-apply settings.
+                    {
+                        let mut current = settings_cb.borrow_mut();
+                        *current = updated.clone();
+                    }
+
+                    for page in pages_cb.borrow().iter() {
+                        page.apply_settings(&updated);
                     }
                 });
                 vbox.append(&cb);
@@ -1893,17 +1946,18 @@ fn wire_new_diff_tab_standalone(
     tab: &dyn MeldPage,
     notebook: &gtk::Notebook,
     pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
-    settings: &MeldSettings,
+    settings: &Rc<RefCell<MeldSettings>>,
     window: &gtk::ApplicationWindow,
 ) {
     let nb = notebook.clone();
     let p = Rc::clone(pages);
-    let s = Rc::new(settings.clone());
+    let s = Rc::clone(settings);
     let w = window.clone();
     tab.set_diff_created_callback(Box::new(move |req: DiffRequest| {
         let auto_compare = false;
         let auto_merge = false;
-        handle_diff_request(&nb, &p, &req, auto_compare, auto_merge, &s, &w);
+        let settings = s.borrow().clone();
+        handle_diff_request(&nb, &p, &req, auto_compare, auto_merge, &settings, &w);
 
         // Remove NewDiffTab on the next idle cycle
         let p_clone = Rc::clone(&p);
