@@ -1220,6 +1220,7 @@ impl FileDiff {
         let inline_cache = Rc::clone(&self.inline_cache);
         let ignore_blank_lines = Rc::clone(&self.ignore_blank_lines);
         let inline_diff_mode = Rc::clone(&self.inline_diff_mode);
+        let large_file_notice: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
         let overlays: Vec<gtk::DrawingArea> = self
             .panes
             .iter()
@@ -1237,6 +1238,21 @@ impl FileDiff {
             })
             .collect();
 
+        // Large comparisons run on the background thread but can take a long
+        // time; show a notice so the window does not look hung.  The banner is
+        // a single slot, so only reveal it when nothing else is displayed; the
+        // completion handler below replaces or hides it.
+        let msg_token_at_start = self.shared_msgarea.notice_token();
+        let had_message_at_start = self.shared_msgarea.is_revealed();
+        if text_a.len().max(text_b.len()) > crate::diff::diff_state::LARGE_FILE_LINES
+            && !had_message_at_start
+        {
+            self.shared_msgarea
+                .show_info_dismissable(&tr!("Comparing a very large file, this may take a while."));
+            large_file_notice.set(Some(self.shared_msgarea.notice_token()));
+        }
+
+        let large_file_notice = Rc::clone(&large_file_notice);
         self.diff_state.borrow_mut().schedule_diff(
             text_a.clone(),
             text_b.clone(),
@@ -1309,7 +1325,17 @@ impl FileDiff {
                     shared_msgarea.show_info(&tr!("Enter text to compare files"));
                 } else if is_identical {
                     shared_msgarea.show_info_dismissable(&tr!("Files are identical"));
-                } else {
+                } else if let Some(token) = large_file_notice.get() {
+                    // Only clear the notice this diff put up; another message
+                    // (encoding warning, saved, …) may have replaced it.
+                    shared_msgarea.hide_if_current(token);
+                } else if !had_message_at_start
+                    && shared_msgarea.notice_token() == msg_token_at_start
+                {
+                    // Nothing was displayed when the diff started and nothing
+                    // replaced it while it ran: safe to clear a stale banner
+                    // (matches the previous behaviour).  If a message already
+                    // existed or appeared meanwhile, leave it alone.
                     shared_msgarea.hide();
                 }
             }),

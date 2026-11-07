@@ -7,6 +7,11 @@ use std::time::Duration;
 
 use crate::diff::engine::{Chunk, DiffOp, Differ};
 
+/// Above this many lines per side a comparison is slow enough (the line diff is
+/// quadratic in the worst case, see issue #44) that the UI shows a notice while
+/// it runs instead of looking hung.
+pub const LARGE_FILE_LINES: usize = 200_000;
+
 pub struct DiffResult {
     pub chunks: Vec<Chunk>,
     pub text_a: Vec<String>,

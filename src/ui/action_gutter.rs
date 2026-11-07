@@ -19,6 +19,28 @@ use crate::diff::engine::{Chunk, DiffOp};
 use crate::tr;
 use crate::ui::style;
 
+/// Visible line range `(first, end_exclusive)` of a text view, in buffer
+/// coordinates.
+fn visible_line_range(view: &gtk::TextView) -> Option<(usize, usize)> {
+    let buffer = view.buffer();
+    if buffer.line_count() <= 0 {
+        return None;
+    }
+    let rect = view.visible_rect();
+    let first = view.line_at_y(rect.y()).0.line().max(0) as usize;
+    let last = view.line_at_y(rect.y() + rect.height()).0.line().max(0) as usize;
+    Some((first, last + 1))
+}
+
+/// True when `[start, end)` has at least one line in `range`. Zero-width
+/// chunks are treated as one line wide so boundary insertions are drawn.
+fn visible_range_overlaps(range: Option<(usize, usize)>, start: usize, end: usize) -> bool {
+    match range {
+        Some((lo, hi)) => start < hi && lo < end.max(start + 1),
+        None => true,
+    }
+}
+
 /// Which direction the gutter "points" (left-to-right or right-to-left).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GutterDirection {
@@ -307,6 +329,11 @@ impl ActionGutter {
 
             let mut new_buttons = Vec::new();
 
+            // Visible line range of the source view: chunks outside it cannot
+            // be drawn, so they are skipped instead of being walked on every
+            // redraw.
+            let visible = visible_line_range(&draw_source);
+
             for (i, chunk) in chunks.iter().enumerate() {
                 if chunk.op == DiffOp::Equal {
                     continue;
@@ -325,6 +352,10 @@ impl ActionGutter {
                     (chunk.start_b, chunk.end_b)
                 };
                 let content = ce > cs;
+
+                if !visible_range_overlaps(visible, cs, ce) {
+                    continue;
+                }
 
                 let y_start = line_to_y(cs);
                 let y_end = if content { line_to_y(ce) } else { y_start };

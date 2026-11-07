@@ -36,7 +36,10 @@ mod imp {
 
     #[derive(Default)]
     pub struct ChunkGutterRenderer {
-        pub chunks: RefCell<Vec<Chunk>>,
+        /// Per-line operation for the pane this renderer belongs to; `Equal`
+        /// means "no background". Built in `set_chunks` so a line lookup is
+        /// O(1) instead of scanning the whole chunk list per visible line.
+        pub line_ops: RefCell<Vec<DiffOp>>,
         pub pane: Cell<usize>,
         /// Visible lines for the current snapshot cycle, captured in `begin`
         /// and cleared in `end`. Used to paint continuous chunk bands.
@@ -164,22 +167,13 @@ mod imp {
         }
 
         fn bg_for_line(&self, line: usize) -> Option<gdk::RGBA> {
-            let pane = self.pane.get();
-            for chunk in self.chunks.borrow().iter() {
-                if chunk.op == DiffOp::Equal {
-                    continue;
-                }
-                let (cs, ce) = if pane == 0 {
-                    (chunk.start_a, chunk.end_a)
-                } else {
-                    (chunk.start_b, chunk.end_b)
-                };
-                if line >= cs && line < ce {
-                    let (r, g, b) = style::fill_color(chunk.op)?;
-                    return Some(gdk::RGBA::new(r as f32, g as f32, b as f32, 1.0));
-                }
+            let ops = self.line_ops.borrow();
+            let op = *ops.get(line)?;
+            if op == DiffOp::Equal {
+                return None;
             }
-            None
+            let (r, g, b) = style::fill_color(op)?;
+            Some(gdk::RGBA::new(r as f32, g as f32, b as f32, 1.0))
         }
     }
 }
@@ -202,8 +196,33 @@ impl ChunkGutterRenderer {
     }
 
     /// Update the chunk list and trigger a redraw.
+    ///
+    /// The per-line index is rebuilt here so painting a line is O(1) no matter
+    /// how many chunks the diff produced.
     pub fn set_chunks(&self, chunks: &[Chunk]) {
-        self.imp().chunks.replace(chunks.to_vec());
+        let pane = self.imp().pane.get();
+        let mut max_line = 0usize;
+        for chunk in chunks {
+            let end = if pane == 0 { chunk.end_a } else { chunk.end_b };
+            max_line = max_line.max(end);
+        }
+
+        let mut ops = vec![DiffOp::Equal; max_line];
+        for chunk in chunks {
+            if chunk.op == DiffOp::Equal {
+                continue;
+            }
+            let (start, end) = if pane == 0 {
+                (chunk.start_a, chunk.end_a)
+            } else {
+                (chunk.start_b, chunk.end_b)
+            };
+            for line in start..end.min(max_line) {
+                ops[line] = chunk.op;
+            }
+        }
+
+        self.imp().line_ops.replace(ops);
         self.queue_draw();
     }
 }
