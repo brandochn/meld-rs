@@ -32,7 +32,7 @@ pub struct MeldWindow {
     /// Action group behind the gear menu's `view.*` entries.
     view_group: gio::SimpleActionGroup,
     view_toolbar: gtk::Box,
-    _spinner: gtk::Spinner,
+    spinner: gtk::Spinner,
     prev_change_btn: gtk::Button,
     next_change_btn: gtk::Button,
     vc_filter_btn: gtk::MenuButton,
@@ -177,6 +177,14 @@ pub trait MeldPage {
     /// Install a callback invoked whenever change-action sensitivity may have
     /// changed (cursor/focus movement, chunk edits).
     fn set_change_action_watch(&self, _cb: Box<dyn Fn() + 'static>) {}
+
+    /// Whether this page has background work (diff, inline tagging) pending.
+    fn is_busy(&self) -> bool {
+        false
+    }
+
+    /// Install a callback invoked whenever the page's busy state changes.
+    fn set_busy_watch(&self, _cb: Box<dyn Fn() + 'static>) {}
 }
 
 /// Payload sent from `NewDiffTab` when the user requests a comparison.
@@ -465,6 +473,33 @@ fn refresh_change_action_sensitivity(
     }
 }
 
+/// Apply the active page's busy state to the header spinner and window cursor.
+///
+/// Only immutable borrows of `pages` are taken: this can run from
+/// `connect_switch_page` or from inside the nested dialog loops used by page
+/// `close()` / `action_revert()`.
+fn refresh_busy_indicator(
+    spinner: &gtk::Spinner,
+    window: &gtk::ApplicationWindow,
+    pages: &Weak<RefCell<Vec<Box<dyn MeldPage>>>>,
+    notebook: &gtk::Notebook,
+    page_idx: Option<u32>,
+) {
+    let idx = page_idx.or_else(|| notebook.current_page());
+    let busy = match (idx, pages.upgrade()) {
+        (Some(idx), Some(pages)) => pages
+            .borrow()
+            .get(idx as usize)
+            .map(|page| page.is_busy())
+            .unwrap_or(false),
+        _ => false,
+    };
+
+    spinner.set_spinning(busy);
+    spinner.set_visible(busy);
+    window.set_cursor_from_name(if busy { Some("wait") } else { None });
+}
+
 impl MeldWindow {
     pub fn new(app: &gtk::Application) -> Self {
         let window = gtk::ApplicationWindow::new(app);
@@ -638,7 +673,7 @@ impl MeldWindow {
             pages,
             view_group,
             view_toolbar,
-            _spinner: spinner,
+            spinner,
             prev_change_btn: prev_change_btn.clone(),
             next_change_btn: next_change_btn.clone(),
             vc_filter_btn,
@@ -899,8 +934,17 @@ impl MeldWindow {
         let view_group_sw = self.view_group.clone();
         let nb_switch = self.notebook.clone();
         let pages_weak = Rc::downgrade(&pages_switch);
+        let spinner_busy = self.spinner.clone();
+        let window_busy = self.window.downgrade();
+        let nb_busy = self.notebook.downgrade();
 
         self.notebook.connect_switch_page(move |_, _, idx| {
+            // Reflect the newly active page's busy state before anything else
+            // can re-enter this handler.
+            if let (Some(win), Some(nb)) = (window_busy.upgrade(), nb_busy.upgrade()) {
+                refresh_busy_indicator(&spinner_busy, &win, &pages_weak, &nb, Some(idx));
+            }
+
             let pages = pages_switch.borrow();
             if let Some(page) = pages.get(idx as usize) {
                 let (vc, folder, text) = page.show_filters();
@@ -922,6 +966,19 @@ impl MeldWindow {
                 let nb_w = nb_switch.clone();
                 page.set_change_action_watch(Box::new(move || {
                     refresh_change_action_sensitivity(&group_w, &pages_w, &nb_w);
+                }));
+
+                // Install a watch so a busy transition can refresh the header
+                // spinner, even when the final transition happens inside a
+                // nested dialog loop. WeakRefs avoid a window/notebook cycle.
+                let spinner_page = spinner_busy.clone();
+                let window_page = window_busy.clone();
+                let nb_page = nb_busy.clone();
+                let pages_page = pages_weak.clone();
+                page.set_busy_watch(Box::new(move || {
+                    if let (Some(win), Some(nb)) = (window_page.upgrade(), nb_page.upgrade()) {
+                        refresh_busy_indicator(&spinner_page, &win, &pages_page, &nb, None);
+                    }
                 }));
 
                 // Enable only the `view.*` actions the active page handles,
