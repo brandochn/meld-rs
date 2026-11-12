@@ -1512,13 +1512,17 @@ impl InlineDiffer {
             return Vec::new();
         }
 
+        // The similarity guard must look at the original lines: tokenisation
+        // inserts separators and changes lengths, which makes the joined token
+        // strings look unrelated even when the lines differ in a few chars.
+        if !Self::are_lines_similar_enough(a, b, 0.15) {
+            return Vec::new();
+        }
+
         let (tokens_a, offsets_a) = tokenize_with_offsets(a);
         let (tokens_b, offsets_b) = tokenize_with_offsets(b);
         let joined_a = tokens_a.join("\n");
         let joined_b = tokens_b.join("\n");
-        if !Self::are_lines_similar_enough(&joined_a, &joined_b, 0.15) {
-            return Vec::new();
-        }
 
         let len_a = a.chars().count();
         let len_b = b.chars().count();
@@ -1560,6 +1564,19 @@ impl InlineDiffer {
             });
         }
 
+        // A single coarse token (for example a long digit run with periodic
+        // substitutions) would highlight almost the whole line.  Refine with
+        // the character-level diff so only the changed characters stay marked.
+        let changed: usize = ranges
+            .iter()
+            .filter(|r| r.op != DiffOp::Equal)
+            .map(|r| (r.end_a - r.start_a).max(r.end_b - r.start_b))
+            .sum();
+        let max_len = len_a.max(len_b);
+        if max_len > 0 && changed * 2 > max_len {
+            return Self::highlight_ranges(a, b);
+        }
+
         ranges
     }
 
@@ -1576,6 +1593,10 @@ impl InlineDiffer {
     /// False negatives are avoided by using conservative thresholds so that
     /// genuinely similar lines (small edits, renames) always pass.
     fn are_lines_similar_enough(a: &str, b: &str, threshold: f64) -> bool {
+        /// Above this length, skip the positional heuristic so a long line with
+        /// scattered edits cannot trigger an expensive character diff.
+        const POSITIONAL_MAX_CHARS: usize = 512;
+
         let len_a = a.len();
         let len_b = b.len();
 
@@ -1607,7 +1628,17 @@ impl InlineDiffer {
             .count();
 
         let max_chars = a.chars().count().max(b.chars().count());
-        let common = (prefix_count + suffix_count).min(max_chars);
+        // Interspersed edits (e.g. every tenth character) leave only a short
+        // common prefix/suffix while the lines are still mostly equal.  Also
+        // count character-by-character matches at the same position; it is
+        // O(L) and allocation-free.  Cap it to medium lines so very long lines
+        // with scattered edits do not trigger an expensive character diff.
+        let positional = if max_chars <= POSITIONAL_MAX_CHARS {
+            a.chars().zip(b.chars()).filter(|(x, y)| x == y).count()
+        } else {
+            0
+        };
+        let common = (prefix_count + suffix_count).max(positional).min(max_chars);
 
         common as f64 / max_chars as f64 >= threshold
     }
@@ -1626,16 +1657,14 @@ impl InlineDiffer {
             return Vec::new();
         }
 
-        let (tokens_a, offsets_a) = tokenize_with_offsets(line_a);
-        let (tokens_b, offsets_b) = tokenize_with_offsets(line_b);
-
-        // Fast guard: skip expensive token-level diff for clearly unrelated lines.
-        // Uses the same heuristic as `compare_line` to avoid O(L²) worst case.
-        let joined_a = tokens_a.join("\n");
-        let joined_b = tokens_b.join("\n");
-        if !Self::are_lines_similar_enough(&joined_a, &joined_b, 0.15) {
+        // Guard on the original lines: token joining would distort the
+        // prefix/suffix ratio for lines with many small token changes.
+        if !Self::are_lines_similar_enough(line_a, line_b, 0.15) {
             return Vec::new();
         }
+
+        let (tokens_a, offsets_a) = tokenize_with_offsets(line_a);
+        let (tokens_b, offsets_b) = tokenize_with_offsets(line_b);
 
         let token_strs_a: Vec<&str> = tokens_a.iter().map(|t| t.as_str()).collect();
         let token_strs_b: Vec<&str> = tokens_b.iter().map(|t| t.as_str()).collect();
@@ -1686,6 +1715,17 @@ impl InlineDiffer {
                     }
                 }
             }
+        }
+
+        // Token-level diffs treat each identifier/punctuation group as an
+        // atomic unit.  If that granularity is too coarse (one token covers
+        // most of the line), fall back to a character-level diff so periodic
+        // edits such as every `5` -> `x` are highlighted precisely instead of
+        // turning the whole token blue.
+        let changed: usize = changes.iter().map(|c| c.end.saturating_sub(c.start)).sum();
+        let max_len = line_a.chars().count().max(line_b.chars().count());
+        if max_len > 0 && changed * 2 > max_len {
+            return Self::compare_line(line_a, line_b);
         }
 
         // Token-level diffs treat each identifier/punctuation group as an
@@ -2993,6 +3033,37 @@ mod tests {
         let changes = InlineDiffer::compare_line("abcdef", "ghijkl");
         // Should still produce changes, even if everything is different
         assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_inline_periodic_substitutions_are_highlighted() {
+        // "every other line" case from issue #44: a long digit run with every
+        // fifth character replaced by `x`.  Prefix/suffix similarity is low,
+        // but the lines are still 90% equal, so inline diffing must run.
+        let base = "1234567890".repeat(10);
+        let changed: String = base
+            .chars()
+            .map(|c| if c == '5' { 'x' } else { c })
+            .collect();
+        let a = format!("2-{base}");
+        let b = format!("2-{changed}");
+
+        let ranges = InlineDiffer::highlight_ranges(&a, &b);
+        assert_eq!(ranges.len(), 10, "ranges: {ranges:?}");
+        for (i, range) in ranges.iter().enumerate() {
+            let at = 6 + i * 10;
+            assert_eq!((range.start_a, range.end_a), (at, at + 1));
+            assert_eq!((range.start_b, range.end_b), (at, at + 1));
+            assert_eq!(range.op, DiffOp::Replace);
+        }
+
+        // The default token mode must refine a coarse token instead of
+        // painting the entire digit run.
+        assert_eq!(InlineDiffer::highlight_ranges_tokens(&a, &b), ranges);
+
+        let changes = InlineDiffer::compare_line_tokens(&a, &b);
+        assert_eq!(changes.len(), 20, "changes: {changes:?}");
+        assert!(changes.iter().all(|c| c.end - c.start == 1));
     }
 
     #[test]
