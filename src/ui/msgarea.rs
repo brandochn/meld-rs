@@ -6,7 +6,7 @@
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::tr;
@@ -17,6 +17,10 @@ type ActionCallback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 pub struct MsgArea {
     banner: adw::Banner,
     action: ActionCallback,
+    /// Incremented every time the displayed message changes.  Lets a caller
+    /// that showed a transient notice hide it later *only* if no other message
+    /// replaced it in the meantime (the banner is a single slot).
+    generation: Cell<u64>,
 }
 
 impl MsgArea {
@@ -39,7 +43,11 @@ impl MsgArea {
             });
         }
 
-        Self { banner, action }
+        Self {
+            banner,
+            action,
+            generation: Cell::new(0),
+        }
     }
 
     pub fn widget(&self) -> &gtk::Widget {
@@ -76,15 +84,49 @@ impl MsgArea {
     }
 
     pub fn hide(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
         *self.action.borrow_mut() = None;
         self.banner.set_button_label(None);
         self.banner.set_revealed(false);
+    }
+
+    /// Opaque token describing the message currently displayed.
+    ///
+    /// Pair with [`Self::hide_if_current`] so that a transient notice is only
+    /// hidden by the code that showed it: take a token immediately after
+    /// showing the notice, and pass it to `hide_if_current` when the work
+    /// finishes.
+    pub fn notice_token(&self) -> u64 {
+        self.generation.get()
+    }
+
+    /// Hide the current message only if `token` is still the active one.
+    ///
+    /// Returns `true` when the message was hidden.  When another message was
+    /// shown (or the banner was already hidden) nothing changes, so encoding
+    /// warnings, "Files are identical" and similar notices are preserved.
+    pub fn hide_if_current(&self, token: u64) -> bool {
+        if self.generation.get() == token {
+            self.hide();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether a message is currently displayed.
+    ///
+    /// Used to avoid replacing an existing message (encoding warnings, "Files
+    /// are identical", …) with a transient notice.
+    pub fn is_revealed(&self) -> bool {
+        self.banner.is_revealed()
     }
 
     /// `msg` and `action_label` must already be translated: callers own the text
     /// and pass `tr!`-wrapped literals or formatted templates. Translating here
     /// as well would perform a second lookup on the already-translated string.
     fn show_msg(&self, msg: &str, action_label: Option<&str>) {
+        self.generation.set(self.generation.get().wrapping_add(1));
         self.banner.set_title(msg);
         match action_label {
             Some(label) => self.banner.set_button_label(Some(label)),

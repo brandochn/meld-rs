@@ -56,8 +56,14 @@ impl DiffMap {
 
             cr.set_line_width(1.0);
 
+            // Aggregate the chunk list into one op per pixel row. Drawing one
+            // rectangle per chunk is O(chunks) per redraw, which is far too
+            // expensive for large diffs (issue #44); the map is only `height`
+            // pixels tall, so at most `height` runs need to be drawn.
+            let rows = h.ceil().max(1.0) as usize;
+            let mut row_ops: Vec<Option<DiffOp>> = vec![None; rows];
             for chunk in draw_chunks.borrow().iter() {
-                if chunk.op == DiffOp::Equal {
+                if chunk.op == DiffOp::Equal || style::fill_color(chunk.op).is_none() {
                     continue;
                 }
                 let (cs, ce) = if pane == 0 {
@@ -66,23 +72,40 @@ impl DiffMap {
                     (chunk.start_b, chunk.end_b)
                 };
 
-                let fill = match style::fill_color(chunk.op) {
-                    Some(c) => c,
-                    None => continue,
-                };
-                let line = style::line_color(chunk.op).unwrap_or(fill);
-
-                let mut y0 = (cs as f64 / total) * h;
+                let y0 = (cs as f64 / total) * h;
                 // A zero-span chunk (an insertion/deletion that has no lines
                 // on this side) still gets a thin visible marker.
-                let mut y1 = if ce > cs {
+                let y1 = if ce > cs {
                     (ce as f64 / total) * h
                 } else {
                     y0 + 2.0
                 };
-                y0 = y0.round() + 0.5;
-                y1 = (y1.round() - 0.5).max(y0 + 1.0);
 
+                let first = y0.floor().max(0.0) as usize;
+                let last = (y1.ceil().max(0.0) as usize).min(rows);
+                for row in row_ops.iter_mut().take(last).skip(first) {
+                    *row = Some(chunk.op);
+                }
+            }
+
+            // Draw one rectangle per run of identical rows.
+            let mut row = 0usize;
+            while row < rows {
+                let Some(op) = row_ops[row] else {
+                    row += 1;
+                    continue;
+                };
+                let start = row;
+                while row < rows && row_ops[row] == Some(op) {
+                    row += 1;
+                }
+                let (fill, line) = match (style::fill_color(op), style::line_color(op)) {
+                    (Some(fill), line) => (fill, line.unwrap_or(fill)),
+                    (None, _) => continue,
+                };
+
+                let y0 = start as f64 + 0.5;
+                let y1 = (row as f64 - 0.5).max(y0 + 1.0);
                 cr.rectangle(x0, y0, x1, y1 - y0);
                 cr.set_source_rgb(fill.0, fill.1, fill.2);
                 cr.fill_preserve().ok();

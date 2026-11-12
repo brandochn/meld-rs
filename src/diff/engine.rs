@@ -7,7 +7,7 @@
 //!
 //! Replaces the Python `difflib`/matchers module from the original Meld.
 
-use similar::{ChangeTag, DiffTag, TextDiff};
+use similar::{Algorithm, ChangeTag, DiffTag, TextDiff};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Operation type for a diff chunk.
@@ -156,6 +156,13 @@ impl Differ {
         self.compare_single(&self.text_a, &self.text_b)
     }
 
+    /// Compute the diff, returning `None` if `cancel` was already set.
+    ///
+    /// Cancellation is only checked **before** the work starts: `similar` has
+    /// no cancellation hook, so an in-flight diff always runs to completion.
+    /// Callers must therefore treat a set flag as "discard the result" (see
+    /// `diff_state::schedule_diff`), not as an interruption. This matters for
+    /// very large inputs, whose comparison can take tens of seconds.
     pub fn compare_with_cancel(&self, cancel: &AtomicBool) -> Option<LineDiff> {
         if cancel.load(Ordering::SeqCst) {
             return None;
@@ -184,45 +191,29 @@ impl Differ {
             pre.filtered_b.join("\n") + "\n"
         };
 
-        let diff = TextDiff::from_lines(&a_joined, &b_joined);
-        let mut chunks = build_chunks_from_gaps(&diff);
+        // When the unique-line filter discarded lines, the remaining sequence
+        // is often highly repetitive (e.g. Firefox session entries) and many
+        // alignments are equally optimal.  Myers picks one arbitrarily and can
+        // split an entry in the middle; Patience anchors on the lines that are
+        // unique in both sequences and produces the Meld-like alignment.
+        // Without discarded lines the two algorithms behave the same, so keep
+        // the cheaper Myers path for ordinary inputs.
+        let algorithm = if pre.discarded_lines {
+            Algorithm::Patience
+        } else {
+            Algorithm::Myers
+        };
 
-        unprocess_chunks(&mut chunks, &pre);
-
-        if pre.prefix_len > 0 {
-            chunks.insert(
-                0,
-                Chunk {
-                    start_a: 0,
-                    end_a: pre.prefix_len,
-                    start_b: 0,
-                    end_b: pre.prefix_len,
-                    op: DiffOp::Equal,
-                },
-            );
-        }
-        if pre.suffix_len > 0 {
-            chunks.push(Chunk {
-                start_a: text_a.len() - pre.suffix_len,
-                end_a: text_a.len(),
-                start_b: text_b.len() - pre.suffix_len,
-                end_b: text_b.len(),
-                op: DiffOp::Equal,
-            });
-        }
-
-        insert_unique_line_chunks(
-            &mut chunks,
-            text_a,
-            text_b,
-            &pre.index_map_a,
-            &pre.index_map_b,
-            pre.prefix_len,
-            pre.suffix_len,
-        );
+        let diff = TextDiff::configure()
+            .algorithm(algorithm)
+            .diff_lines(&a_joined, &b_joined);
+        let filtered = build_chunks_from_gaps(&diff);
+        let mut chunks = rebuild_chunks(&filtered, &pre, text_a.len(), text_b.len());
 
         chunks = merge_adjacent_replace_chunks(&chunks);
         chunks.sort_by_key(|c| (c.start_a, c.start_b));
+        chunks = split_unbalanced_replace_chunks(&chunks, text_a, text_b);
+        chunks = coalesce_adjacent_chunks(&chunks);
 
         LineDiff {
             chunks,
@@ -273,6 +264,8 @@ impl Differ {
 
         let mut all_chunks = merge_adjacent_replace_chunks(&all_chunks);
         all_chunks.sort_by_key(|c| (c.start_a, c.start_b));
+        all_chunks = split_unbalanced_replace_chunks(&all_chunks, &self.text_a, &self.text_b);
+        all_chunks = coalesce_adjacent_chunks(&all_chunks);
 
         LineDiff {
             chunks: all_chunks,
@@ -282,453 +275,139 @@ impl Differ {
     }
 }
 
-/// that may include both kept and non-kept lines.  This function walks
-/// through each chunk, detects runs of non-kept positions, and emits
-/// Delete / Insert chunks for them, using the chunk's internal A->B offset
-/// to derive correct cross-side indices.
-fn insert_unique_line_chunks(
-    chunks: &mut Vec<Chunk>,
-    text_a: &[String],
-    text_b: &[String],
-    index_map_a: &[usize],
-    index_map_b: &[usize],
-    prefix_len: usize,
-    suffix_len: usize,
-) {
-    if index_map_a.is_empty() && index_map_b.is_empty() {
-        return;
+/// Map chunks computed over the *filtered* sequences back onto the original
+/// line numbers, filling the gaps left by the unique-line filter.
+///
+/// Only the *matched pairs* of the filtered diff are used: every `Equal`
+/// chunk is translated pair by pair through `index_map_a` / `index_map_b`.
+/// A matching run ends whenever the original coordinates stop being
+/// contiguous on either side, i.e. when a discarded (unique) line sits
+/// between two kept lines.  That is the same split that Python Meld's
+/// `MyersSequenceMatcher.build_matching_blocks` performs.
+///
+/// The discarded ranges between matching runs become `Delete`, `Insert` or
+/// `Replace` chunks, so the result is always an ordered partition of
+/// `text_a` / `text_b` and no discarded line is ever reported as `Equal`.
+fn rebuild_chunks(
+    filtered: &[Chunk],
+    pre: &PreprocessResult,
+    len_a: usize,
+    len_b: usize,
+) -> Vec<Chunk> {
+    let mid_end_a = len_a - pre.suffix_len;
+    let mid_end_b = len_b - pre.suffix_len;
+
+    // Matching runs in original coordinates.
+    let mut runs: Vec<Chunk> = Vec::with_capacity(filtered.len() / 2 + 3);
+    let push_pair = |pa: usize, pb: usize, runs: &mut Vec<Chunk>| {
+        if let Some(last) = runs.last_mut() {
+            if last.op == DiffOp::Equal && last.end_a == pa && last.end_b == pb {
+                last.end_a += 1;
+                last.end_b += 1;
+                return;
+            }
+        }
+        runs.push(Chunk {
+            start_a: pa,
+            end_a: pa + 1,
+            start_b: pb,
+            end_b: pb + 1,
+            op: DiffOp::Equal,
+        });
+    };
+
+    if pre.prefix_len > 0 {
+        runs.push(Chunk {
+            start_a: 0,
+            end_a: pre.prefix_len,
+            start_b: 0,
+            end_b: pre.prefix_len,
+            op: DiffOp::Equal,
+        });
     }
-    use std::collections::HashSet;
-    let kept_a: HashSet<usize> = index_map_a.iter().copied().collect();
-    let kept_b: HashSet<usize> = index_map_b.iter().copied().collect();
 
-    // Sort by A position so we walk the original text left-to-right
-    chunks.sort_by_key(|c| (c.start_a, c.start_b));
-
-    let mut new_chunks = Vec::with_capacity(chunks.len());
-
-    let mid_start = prefix_len;
-    let mid_end_a = text_a.len().saturating_sub(suffix_len);
-    let mid_end_b = text_b.len().saturating_sub(suffix_len);
-
-    for chunk in chunks.drain(..) {
-        // Pass prefix and suffix chunks through unchanged they were
-        // inserted by `compare()` and represent the stripped common
-        // prefix / suffix, not part of the filtered diff.
-        if chunk.end_a <= mid_start && chunk.end_b <= mid_start {
-            new_chunks.push(chunk);
+    for chunk in filtered {
+        if chunk.op != DiffOp::Equal || chunk.start_a == chunk.end_a {
             continue;
         }
-        if chunk.start_a >= mid_end_a && chunk.start_b >= mid_end_b {
-            new_chunks.push(chunk);
+        for k in 0..(chunk.end_a - chunk.start_a) {
+            let pa = pre.index_map_a[chunk.start_a + k];
+            let pb = pre.index_map_b[chunk.start_b + k];
+            push_pair(pa, pb, &mut runs);
+        }
+    }
+
+    if pre.suffix_len > 0 {
+        let extends_last = runs
+            .last()
+            .is_some_and(|r| r.end_a == mid_end_a && r.end_b == mid_end_b);
+        if extends_last {
+            if let Some(last) = runs.last_mut() {
+                last.end_a = len_a;
+                last.end_b = len_b;
+            }
+        } else {
+            runs.push(Chunk {
+                start_a: mid_end_a,
+                end_a: len_a,
+                start_b: mid_end_b,
+                end_b: len_b,
+                op: DiffOp::Equal,
+            });
+        }
+    }
+
+    // Turn the gaps between matching runs into change chunks.
+    let mut out: Vec<Chunk> = Vec::with_capacity(runs.len() * 2 + 1);
+    let mut cur_a = 0usize;
+    let mut cur_b = 0usize;
+    for run in runs {
+        debug_assert!(
+            run.start_a >= cur_a && run.start_b >= cur_b,
+            "matched runs must be monotonic"
+        );
+        if run.start_a < cur_a || run.start_b < cur_b {
+            // Defensive: never emit overlapping chunks.  A non-monotonic run
+            // would be a bug in the diff/index maps; degrade by skipping it.
             continue;
         }
-
-        match chunk.op {
-            DiffOp::Equal => {
-                split_equal(&mut new_chunks, &chunk, &kept_a, &kept_b);
-            }
-            DiffOp::Delete => {
-                // Delete from the filtered diff -- already correct,
-                // but may still span non-kept A positions.
-                split_delete(&mut new_chunks, &chunk, &kept_a);
-            }
-            DiffOp::Insert => {
-                split_insert(&mut new_chunks, &chunk, &kept_b);
-            }
-            DiffOp::Replace => {
-                split_replace(&mut new_chunks, &chunk, &kept_a, &kept_b);
-            }
-        }
-    }
-
-    *chunks = new_chunks;
-
-    // Now walk through the clean partition and insert any remaining
-    // unique-line runs that fall between chunks (i.e. where a gap spans
-    // the boundary between two filtered chunks).  Because the filtered
-    // diff covers all kept lines, gaps between chunks only exist in the
-    // original text when contiguous non-kept runs cross chunk boundaries.
-
-    // Sort by A position again (newly pushed chunks preserve order)
-    chunks.sort_by_key(|c| (c.start_a, c.start_b));
-
-    fill_between_gaps(
-        chunks,
-        &kept_a,
-        &kept_b,
-        text_a.len(),
-        text_b.len(),
-        prefix_len,
-        suffix_len,
-    );
-}
-
-// --- Chunk-splitting helpers ---
-
-/// Internal offset between A and B positions within a chunk: `sb - sa`.
-fn ab_offset(chunk: &Chunk) -> isize {
-    chunk.start_b as isize - chunk.start_a as isize
-}
-
-/// Split an Equal chunk at A-side and B-side non-kept positions.
-fn split_equal(
-    out: &mut Vec<Chunk>,
-    chunk: &Chunk,
-    kept_a: &std::collections::HashSet<usize>,
-    kept_b: &std::collections::HashSet<usize>,
-) {
-    let offset = ab_offset(chunk);
-
-    // Walk A positions within the chunk, emitting Equal blocks for kept
-    // positions and Delete blocks for non-kept positions.  The B side
-    // position of each delete is `a_pos + offset`.
-    let mut a = chunk.start_a;
-    while a < chunk.end_a {
-        if kept_a.contains(&a) {
-            // Start of a kept (Equal) sub-range
-            let b = (a as isize + offset) as usize;
-            let eq_start_a = a;
-            let eq_start_b = b;
-            while a < chunk.end_a && kept_a.contains(&a) {
-                a += 1;
-            }
-            let eq_end_a = a;
-            let eq_end_b = (eq_end_a as isize + offset) as usize;
-            if eq_end_a > eq_start_a && eq_end_b <= chunk.end_b {
-                out.push(Chunk {
-                    start_a: eq_start_a,
-                    end_a: eq_end_a,
-                    start_b: eq_start_b,
-                    end_b: eq_end_b,
-                    op: DiffOp::Equal,
-                });
-            }
-        } else {
-            // Non-kept A run Delete
-            let del_start = a;
-            while a < chunk.end_a && !kept_a.contains(&a) {
-                a += 1;
-            }
-            let del_b = (del_start as isize + offset) as usize;
+        if cur_a < run.start_a || cur_b < run.start_b {
+            let op = match (cur_a < run.start_a, cur_b < run.start_b) {
+                (true, true) => DiffOp::Replace,
+                (true, false) => DiffOp::Delete,
+                (false, true) => DiffOp::Insert,
+                (false, false) => unreachable!(),
+            };
             out.push(Chunk {
-                start_a: del_start,
-                end_a: a,
-                start_b: del_b,
-                end_b: del_b,
-                op: DiffOp::Delete,
+                start_a: cur_a,
+                end_a: run.start_a,
+                start_b: cur_b,
+                end_b: run.start_b,
+                op,
             });
         }
+        cur_a = run.end_a;
+        cur_b = run.end_b;
+        out.push(run);
     }
 
-    // Now handle B-side non-kept positions that were NOT covered by the
-    // A walk (this handles the case where B has unique lines but A does
-    // not at the same offset).
-    let mut b = chunk.start_b;
-    while b < chunk.end_b {
-        if !kept_b.contains(&b) {
-            let ins_start = b;
-            while b < chunk.end_b && !kept_b.contains(&b) {
-                b += 1;
-            }
-            let ins_a = (ins_start as isize - offset) as usize;
-            out.push(Chunk {
-                start_a: ins_a,
-                end_a: ins_a,
-                start_b: ins_start,
-                end_b: b,
-                op: DiffOp::Insert,
-            });
-        } else {
-            b += 1;
-        }
-    }
-
-    // Re-sort the newly appended portion of `out` by A position.
-    // We know the indices of the chunks we just pushed: they are the
-    // suffix of `out` whose length is at most the original chunk span.
-    let old_len = out.len().saturating_sub(
-        (chunk.end_a - chunk.start_a)
-            .saturating_add(chunk.end_b - chunk.start_b)
-            .saturating_add(4),
-    );
-    let old_len = old_len.min(out.len());
-    out[old_len..].sort_by_key(|c| (c.start_a, c.start_b));
-}
-
-/// Split a Delete chunk from the filtered diff.
-///
-/// Emits the original deletion for kept-A positions (these are the diff's
-/// legitimate content) *and* extracts any non-kept A positions that were
-/// folded into the chunk's range by `unprocess_chunks` into separate
-/// Delete chunks with correct cross-side positions.
-fn split_delete(out: &mut Vec<Chunk>, chunk: &Chunk, kept_a: &std::collections::HashSet<usize>) {
-    let offset = ab_offset(chunk);
-    // Emit the kept-position deletions these ARE the filtered diff's output
-    let mut a = chunk.start_a;
-    while a < chunk.end_a {
-        if kept_a.contains(&a) {
-            let del_start = a;
-            while a < chunk.end_a && kept_a.contains(&a) {
-                a += 1;
-            }
-            let del_b = (del_start as isize + offset) as usize;
-            out.push(Chunk {
-                start_a: del_start,
-                end_a: a,
-                start_b: del_b,
-                end_b: del_b,
-                op: DiffOp::Delete,
-            });
-        } else {
-            a += 1;
-        }
-    }
-    // Emit non-kept positions as unique-line Deletes
-    a = chunk.start_a;
-    while a < chunk.end_a {
-        if !kept_a.contains(&a) {
-            let del_start = a;
-            while a < chunk.end_a && !kept_a.contains(&a) {
-                a += 1;
-            }
-            let del_b = (del_start as isize + offset) as usize;
-            out.push(Chunk {
-                start_a: del_start,
-                end_a: a,
-                start_b: del_b,
-                end_b: del_b,
-                op: DiffOp::Delete,
-            });
-        } else {
-            a += 1;
-        }
-    }
-}
-
-/// Split an Insert chunk from the filtered diff.
-///
-/// Like `split_delete` but for B-side non-kept positions.
-fn split_insert(out: &mut Vec<Chunk>, chunk: &Chunk, kept_b: &std::collections::HashSet<usize>) {
-    let offset = ab_offset(chunk);
-    // Emit kept-position insertions
-    let mut b = chunk.start_b;
-    while b < chunk.end_b {
-        if kept_b.contains(&b) {
-            let ins_start = b;
-            while b < chunk.end_b && kept_b.contains(&b) {
-                b += 1;
-            }
-            let ins_a = (ins_start as isize - offset) as usize;
-            out.push(Chunk {
-                start_a: ins_a,
-                end_a: ins_a,
-                start_b: ins_start,
-                end_b: b,
-                op: DiffOp::Insert,
-            });
-        } else {
-            b += 1;
-        }
-    }
-    // Emit non-kept positions as unique-line Inserts
-    b = chunk.start_b;
-    while b < chunk.end_b {
-        if !kept_b.contains(&b) {
-            let ins_start = b;
-            while b < chunk.end_b && !kept_b.contains(&b) {
-                b += 1;
-            }
-            let ins_a = (ins_start as isize - offset) as usize;
-            out.push(Chunk {
-                start_a: ins_a,
-                end_a: ins_a,
-                start_b: ins_start,
-                end_b: b,
-                op: DiffOp::Insert,
-            });
-        } else {
-            b += 1;
-        }
-    }
-}
-
-/// Split a Replace chunk from the filtered diff.
-///
-/// Emits kept-position blocks as the original Replace (plus any contained
-/// unique-line Deletes/Inserts) after `merge_adjacent_replace_chunks`
-/// reassembles them downstream.
-fn split_replace(
-    out: &mut Vec<Chunk>,
-    chunk: &Chunk,
-    kept_a: &std::collections::HashSet<usize>,
-    kept_b: &std::collections::HashSet<usize>,
-) {
-    let offset = ab_offset(chunk);
-
-    // Kept A-positions Delete (will merge into Replace downstream)
-    let mut a = chunk.start_a;
-    while a < chunk.end_a {
-        if kept_a.contains(&a) {
-            let del_start = a;
-            while a < chunk.end_a && kept_a.contains(&a) {
-                a += 1;
-            }
-            let del_b = (del_start as isize + offset) as usize;
-            out.push(Chunk {
-                start_a: del_start,
-                end_a: a,
-                start_b: del_b,
-                end_b: del_b,
-                op: DiffOp::Delete,
-            });
-        } else {
-            a += 1;
-        }
-    }
-
-    // Non-kept A-positions extra unique-line Deletes
-    a = chunk.start_a;
-    while a < chunk.end_a {
-        if !kept_a.contains(&a) {
-            let del_start = a;
-            while a < chunk.end_a && !kept_a.contains(&a) {
-                a += 1;
-            }
-            let del_b = (del_start as isize + offset) as usize;
-            out.push(Chunk {
-                start_a: del_start,
-                end_a: a,
-                start_b: del_b,
-                end_b: del_b,
-                op: DiffOp::Delete,
-            });
-        } else {
-            a += 1;
-        }
-    }
-
-    // Kept B-positions Insert (will merge into Replace downstream)
-    let mut b = chunk.start_b;
-    while b < chunk.end_b {
-        if kept_b.contains(&b) {
-            let ins_start = b;
-            while b < chunk.end_b && kept_b.contains(&b) {
-                b += 1;
-            }
-            let ins_a = (ins_start as isize - offset) as usize;
-            out.push(Chunk {
-                start_a: ins_a,
-                end_a: ins_a,
-                start_b: ins_start,
-                end_b: b,
-                op: DiffOp::Insert,
-            });
-        } else {
-            b += 1;
-        }
-    }
-
-    // Non-kept B-positions extra unique-line Inserts
-    b = chunk.start_b;
-    while b < chunk.end_b {
-        if !kept_b.contains(&b) {
-            let ins_start = b;
-            while b < chunk.end_b && !kept_b.contains(&b) {
-                b += 1;
-            }
-            let ins_a = (ins_start as isize - offset) as usize;
-            out.push(Chunk {
-                start_a: ins_a,
-                end_a: ins_a,
-                start_b: ins_start,
-                end_b: b,
-                op: DiffOp::Insert,
-            });
-        } else {
-            b += 1;
-        }
-    }
-}
-
-/// After splitting all chunks at internal gaps, scan the resulting chunk
-/// list for gaps that remain between consecutive chunks and insert
-/// Delete / Insert for any remaining non-kept lines that cross chunk
-/// boundaries.
-fn fill_between_gaps(
-    chunks: &mut Vec<Chunk>,
-    kept_a: &std::collections::HashSet<usize>,
-    kept_b: &std::collections::HashSet<usize>,
-    text_a_len: usize,
-    text_b_len: usize,
-    prefix_len: usize,
-    suffix_len: usize,
-) {
-    let a_end = text_a_len - suffix_len;
-    let b_end = text_b_len - suffix_len;
-
-    // Insert a sentinel chunk at the end to simplify the loop
-    let n = chunks.len();
-
-    let mut extra = Vec::new();
-
-    for idx in 0..=n {
-        let prev_end_a = if idx == 0 {
-            prefix_len
-        } else {
-            chunks[idx - 1].end_a
+    if cur_a < len_a || cur_b < len_b {
+        let op = match (cur_a < len_a, cur_b < len_b) {
+            (true, true) => DiffOp::Replace,
+            (true, false) => DiffOp::Delete,
+            (false, true) => DiffOp::Insert,
+            (false, false) => unreachable!(),
         };
-        let prev_end_b = if idx == 0 {
-            prefix_len
-        } else {
-            chunks[idx - 1].end_b
-        };
-        let next_start_a = if idx < n { chunks[idx].start_a } else { a_end };
-        let next_start_b = if idx < n { chunks[idx].start_b } else { b_end };
-
-        // A-side gap
-        let mut a_pos = prev_end_a;
-        while a_pos < next_start_a && a_pos < a_end {
-            if !kept_a.contains(&a_pos) {
-                let start = a_pos;
-                while a_pos < next_start_a && a_pos < a_end && !kept_a.contains(&a_pos) {
-                    a_pos += 1;
-                }
-                extra.push(Chunk {
-                    start_a: start,
-                    end_a: a_pos,
-                    start_b: prev_end_b,
-                    end_b: prev_end_b,
-                    op: DiffOp::Delete,
-                });
-            } else {
-                a_pos += 1;
-            }
-        }
-
-        // B-side gap
-        let mut b_pos = prev_end_b;
-        while b_pos < next_start_b && b_pos < b_end {
-            if !kept_b.contains(&b_pos) {
-                let start = b_pos;
-                while b_pos < next_start_b && b_pos < b_end && !kept_b.contains(&b_pos) {
-                    b_pos += 1;
-                }
-                extra.push(Chunk {
-                    start_a: prev_end_a,
-                    end_a: prev_end_a,
-                    start_b: start,
-                    end_b: b_pos,
-                    op: DiffOp::Insert,
-                });
-            } else {
-                b_pos += 1;
-            }
-        }
+        out.push(Chunk {
+            start_a: cur_a,
+            end_a: len_a,
+            start_b: cur_b,
+            end_b: len_b,
+            op,
+        });
     }
 
-    chunks.extend(extra);
-    chunks.sort_by_key(|c| (c.start_a, c.start_b));
+    out
 }
 
 // --- Gap-based chunk construction ---
@@ -1178,6 +857,252 @@ pub fn merge_adjacent_replace_chunks(chunks: &[Chunk]) -> Vec<Chunk> {
     result
 }
 
+/// Merge consecutive chunks that share the same operation and are contiguous on
+/// both sides.
+///
+/// `build_chunks_from_gaps` emits one chunk per `similar` change, and `similar`
+/// emits one change per line, so an equal run of *n* lines becomes *n* one-line
+/// `Equal` chunks. Both the renderer and the chunk map iterate the whole chunk
+/// list, so this coalescing keeps the number of chunks proportional to the
+/// number of *runs* rather than to the number of lines (issue #44).
+///
+/// `Replace` chunks are never merged: their two sides have independent spans.
+fn coalesce_adjacent_chunks(chunks: &[Chunk]) -> Vec<Chunk> {
+    let mut out: Vec<Chunk> = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        if let Some(last) = out.last_mut() {
+            if last.op == chunk.op
+                && last.op != DiffOp::Replace
+                && last.end_a == chunk.start_a
+                && last.end_b == chunk.start_b
+            {
+                last.end_a = chunk.end_a;
+                last.end_b = chunk.end_b;
+                continue;
+            }
+        }
+        out.push(chunk.clone());
+    }
+    out
+}
+
+/// Split *very unbalanced* `Replace` chunks into a small `Replace` plus a
+/// `Delete` / `Insert`.
+///
+/// On repetitive inputs the alignment can pair a whole deleted record with a
+/// few changed header lines, producing one large blue block on one side and a
+/// tiny one on the other.  The edit is correctly described by the chunk, but
+/// rendering it as a single `Replace` hides the fact that most of the larger
+/// side is a plain deletion (and the inline diff cannot highlight anything in
+/// the identical record bodies).
+///
+/// For a chunk whose sides differ by at least a factor of two (and whose larger
+/// side has at least [`SPLIT_MIN_LINES`] lines), the smaller side is slid over
+/// the larger one and the best matching window is kept as a small `Replace`;
+/// the remaining lines become a `Delete` / `Insert`.  Candidates are scored by
+/// exact line matches, then by "shape" matches (digits replaced by `#`, which
+/// recognises `"id": 3605` vs `"id": 3618`), then by how long the following
+/// lines keep matching.  Ties prefer the end of the larger side because the
+/// chunk is normally followed by an `Equal` run that continues the matched
+/// record.
+///
+/// The pass is conservative: it only runs on `Replace` chunks, never moves
+/// coordinates outside the chunk, and is skipped for chunks larger than
+/// [`SPLIT_MAX_LINES`] (to bound the quadratic scan).  It preserves the ordered
+/// partition and never changes the set of lines reported as changed.
+fn split_unbalanced_replace_chunks(
+    chunks: &[Chunk],
+    text_a: &[String],
+    text_b: &[String],
+) -> Vec<Chunk> {
+    /// Larger side must have at least this many lines.
+    const SPLIT_MIN_LINES: usize = 8;
+    /// Larger side must be at least twice the smaller side.
+    const SPLIT_RATIO: usize = 2;
+    /// Do not scan chunks larger than this (bounds the quadratic work).
+    const SPLIT_MAX_LINES: usize = 4096;
+    /// Maximum number of lines used to score the continuation context.
+    const SPLIT_CONTEXT: usize = 64;
+
+    fn normalize(line: &str) -> String {
+        let mut out = String::with_capacity(line.len());
+        let mut in_digits = false;
+        for ch in line.chars() {
+            if ch.is_ascii_digit() {
+                if !in_digits {
+                    out.push('#');
+                }
+                in_digits = true;
+            } else {
+                out.push(ch);
+                in_digits = false;
+            }
+        }
+        out
+    }
+
+    fn push_gap(out: &mut Vec<Chunk>, start_a: usize, end_a: usize, start_b: usize, end_b: usize) {
+        if start_a < end_a || start_b < end_b {
+            let op = match (start_a < end_a, start_b < end_b) {
+                (true, true) => DiffOp::Replace,
+                (true, false) => DiffOp::Delete,
+                (false, true) => DiffOp::Insert,
+                (false, false) => unreachable!(),
+            };
+            out.push(Chunk {
+                start_a,
+                end_a,
+                start_b,
+                end_b,
+                op,
+            });
+        }
+    }
+
+    let mut out: Vec<Chunk> = Vec::with_capacity(chunks.len() + 4);
+    for chunk in chunks {
+        if chunk.op != DiffOp::Replace {
+            out.push(chunk.clone());
+            continue;
+        }
+
+        let len_a = chunk.end_a - chunk.start_a;
+        let len_b = chunk.end_b - chunk.start_b;
+        let big = len_a.max(len_b);
+        let small = len_a.min(len_b);
+        if small == 0
+            || !(SPLIT_MIN_LINES..=SPLIT_MAX_LINES).contains(&big)
+            || small.saturating_mul(SPLIT_RATIO) >= big
+        {
+            out.push(chunk.clone());
+            continue;
+        }
+
+        let big_is_a = len_a >= len_b;
+        let norm_a: Vec<String> = text_a[chunk.start_a..chunk.end_a]
+            .iter()
+            .map(|line| normalize(line))
+            .collect();
+        let norm_b: Vec<String> = text_b[chunk.start_b..chunk.end_b]
+            .iter()
+            .map(|line| normalize(line))
+            .collect();
+
+        let last_offset = big - small;
+        let mut best: Option<((usize, usize, usize), usize)> = None;
+        for offset in 0..=last_offset {
+            let mut exact = 0usize;
+            let mut shape = 0usize;
+            for i in 0..small {
+                let (line_a, line_b) = if big_is_a {
+                    (chunk.start_a + offset + i, chunk.start_b + i)
+                } else {
+                    (chunk.start_a + i, chunk.start_b + offset + i)
+                };
+                if text_a[line_a] == text_b[line_b] {
+                    exact += 1;
+                } else {
+                    let (na, nb) = if big_is_a {
+                        (&norm_a[offset + i], &norm_b[i])
+                    } else {
+                        (&norm_a[i], &norm_b[offset + i])
+                    };
+                    if na == nb {
+                        shape += 1;
+                    }
+                }
+            }
+
+            // Prefer the candidate whose following context keeps matching.
+            let after_a = if big_is_a {
+                chunk.start_a + offset + small
+            } else {
+                chunk.start_a + small
+            };
+            let after_b = if big_is_a {
+                chunk.end_b
+            } else {
+                chunk.start_b + offset + small
+            };
+            let mut run = 0usize;
+            while run < SPLIT_CONTEXT
+                && after_a + run < text_a.len()
+                && after_b + run < text_b.len()
+                && text_a[after_a + run] == text_b[after_b + run]
+            {
+                run += 1;
+            }
+
+            // Lexicographic: exact matches, then shape matches, then the
+            // continuation.  Ties prefer the end of the larger side because
+            // the chunk is usually followed by an Equal run that continues the
+            // matched record.
+            let key = (exact, shape, run);
+            let better = match best {
+                None => true,
+                Some((best_key, _)) => key > best_key || (key == best_key && offset == last_offset),
+            };
+            if better {
+                best = Some((key, offset));
+            }
+        }
+
+        let offset = best.map_or(0, |(_, offset)| offset);
+        if big_is_a {
+            // The B side is kept whole and matched against a window of A.
+            let matched_a = chunk.start_a + offset;
+            let matched_end_a = matched_a + small;
+            push_gap(
+                &mut out,
+                chunk.start_a,
+                matched_a,
+                chunk.start_b,
+                chunk.start_b,
+            );
+            out.push(Chunk {
+                start_a: matched_a,
+                end_a: matched_end_a,
+                start_b: chunk.start_b,
+                end_b: chunk.end_b,
+                op: DiffOp::Replace,
+            });
+            push_gap(
+                &mut out,
+                matched_end_a,
+                chunk.end_a,
+                chunk.end_b,
+                chunk.end_b,
+            );
+        } else {
+            // The A side is kept whole and matched against a window of B.
+            let matched_b = chunk.start_b + offset;
+            let matched_end_b = matched_b + small;
+            push_gap(
+                &mut out,
+                chunk.start_a,
+                chunk.start_a,
+                chunk.start_b,
+                matched_b,
+            );
+            out.push(Chunk {
+                start_a: chunk.start_a,
+                end_a: chunk.end_a,
+                start_b: matched_b,
+                end_b: matched_end_b,
+                op: DiffOp::Replace,
+            });
+            push_gap(
+                &mut out,
+                chunk.end_a,
+                chunk.end_a,
+                matched_end_b,
+                chunk.end_b,
+            );
+        }
+    }
+    out
+}
+
 /// Adjust chunk boundaries and tags when `ignore_blank_lines` is active.
 ///
 /// Mirrors the original Meld's `consume_blank_lines()` in `diffutil.py`.
@@ -1587,13 +1512,17 @@ impl InlineDiffer {
             return Vec::new();
         }
 
+        // The similarity guard must look at the original lines: tokenisation
+        // inserts separators and changes lengths, which makes the joined token
+        // strings look unrelated even when the lines differ in a few chars.
+        if !Self::are_lines_similar_enough(a, b, 0.15) {
+            return Vec::new();
+        }
+
         let (tokens_a, offsets_a) = tokenize_with_offsets(a);
         let (tokens_b, offsets_b) = tokenize_with_offsets(b);
         let joined_a = tokens_a.join("\n");
         let joined_b = tokens_b.join("\n");
-        if !Self::are_lines_similar_enough(&joined_a, &joined_b, 0.15) {
-            return Vec::new();
-        }
 
         let len_a = a.chars().count();
         let len_b = b.chars().count();
@@ -1635,6 +1564,19 @@ impl InlineDiffer {
             });
         }
 
+        // A single coarse token (for example a long digit run with periodic
+        // substitutions) would highlight almost the whole line.  Refine with
+        // the character-level diff so only the changed characters stay marked.
+        let changed: usize = ranges
+            .iter()
+            .filter(|r| r.op != DiffOp::Equal)
+            .map(|r| (r.end_a - r.start_a).max(r.end_b - r.start_b))
+            .sum();
+        let max_len = len_a.max(len_b);
+        if max_len > 0 && changed * 2 > max_len {
+            return Self::highlight_ranges(a, b);
+        }
+
         ranges
     }
 
@@ -1651,6 +1593,10 @@ impl InlineDiffer {
     /// False negatives are avoided by using conservative thresholds so that
     /// genuinely similar lines (small edits, renames) always pass.
     fn are_lines_similar_enough(a: &str, b: &str, threshold: f64) -> bool {
+        /// Above this length, skip the positional heuristic so a long line with
+        /// scattered edits cannot trigger an expensive character diff.
+        const POSITIONAL_MAX_CHARS: usize = 512;
+
         let len_a = a.len();
         let len_b = b.len();
 
@@ -1682,7 +1628,17 @@ impl InlineDiffer {
             .count();
 
         let max_chars = a.chars().count().max(b.chars().count());
-        let common = (prefix_count + suffix_count).min(max_chars);
+        // Interspersed edits (e.g. every tenth character) leave only a short
+        // common prefix/suffix while the lines are still mostly equal.  Also
+        // count character-by-character matches at the same position; it is
+        // O(L) and allocation-free.  Cap it to medium lines so very long lines
+        // with scattered edits do not trigger an expensive character diff.
+        let positional = if max_chars <= POSITIONAL_MAX_CHARS {
+            a.chars().zip(b.chars()).filter(|(x, y)| x == y).count()
+        } else {
+            0
+        };
+        let common = (prefix_count + suffix_count).max(positional).min(max_chars);
 
         common as f64 / max_chars as f64 >= threshold
     }
@@ -1701,16 +1657,14 @@ impl InlineDiffer {
             return Vec::new();
         }
 
-        let (tokens_a, offsets_a) = tokenize_with_offsets(line_a);
-        let (tokens_b, offsets_b) = tokenize_with_offsets(line_b);
-
-        // Fast guard: skip expensive token-level diff for clearly unrelated lines.
-        // Uses the same heuristic as `compare_line` to avoid O(L²) worst case.
-        let joined_a = tokens_a.join("\n");
-        let joined_b = tokens_b.join("\n");
-        if !Self::are_lines_similar_enough(&joined_a, &joined_b, 0.15) {
+        // Guard on the original lines: token joining would distort the
+        // prefix/suffix ratio for lines with many small token changes.
+        if !Self::are_lines_similar_enough(line_a, line_b, 0.15) {
             return Vec::new();
         }
+
+        let (tokens_a, offsets_a) = tokenize_with_offsets(line_a);
+        let (tokens_b, offsets_b) = tokenize_with_offsets(line_b);
 
         let token_strs_a: Vec<&str> = tokens_a.iter().map(|t| t.as_str()).collect();
         let token_strs_b: Vec<&str> = tokens_b.iter().map(|t| t.as_str()).collect();
@@ -1761,6 +1715,17 @@ impl InlineDiffer {
                     }
                 }
             }
+        }
+
+        // Token-level diffs treat each identifier/punctuation group as an
+        // atomic unit.  If that granularity is too coarse (one token covers
+        // most of the line), fall back to a character-level diff so periodic
+        // edits such as every `5` -> `x` are highlighted precisely instead of
+        // turning the whole token blue.
+        let changed: usize = changes.iter().map(|c| c.end.saturating_sub(c.start)).sum();
+        let max_len = line_a.chars().count().max(line_b.chars().count());
+        if max_len > 0 && changed * 2 > max_len {
+            return Self::compare_line(line_a, line_b);
         }
 
         // Token-level diffs treat each identifier/punctuation group as an
@@ -2084,6 +2049,10 @@ pub struct PreprocessResult {
     pub prefix_len: usize,
     /// Number of common suffix lines stripped.
     pub suffix_len: usize,
+    /// Whether the unique-line filter discarded more than 10 lines on either
+    /// side.  When `false`, `filtered_a` / `filtered_b` contain the complete
+    /// middle section and the index maps are consecutive.
+    pub discarded_lines: bool,
 }
 
 /// Preprocesses two line sequences to reduce the input size for the diff
@@ -2167,6 +2136,7 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
             index_map_b: map_b,
             prefix_len,
             suffix_len,
+            discarded_lines: false,
         };
     }
 
@@ -2188,6 +2158,7 @@ pub fn preprocess_diff(text_a: &[String], text_b: &[String]) -> PreprocessResult
         },
         prefix_len,
         suffix_len,
+        discarded_lines: true,
     }
 }
 
@@ -2697,11 +2668,20 @@ mod tests {
 
         // Also verify that the delete of the two remaining left-only lines
         // (recoil at L11, uuid at L12) are at the correct B-side position.
+        // The two lines are adjacent, so issue #44's coalescing represents them
+        // as a single Delete chunk.
         let deletes: Vec<&Chunk> = merged.iter().filter(|c| c.op == DiffOp::Delete).collect();
         assert_eq!(
             deletes.len(),
-            2,
-            "Expected 2 Delete chunks for recoil and uuid lines"
+            1,
+            "Expected one coalesced Delete chunk for the recoil and uuid lines"
+        );
+        assert_eq!(
+            (deletes[0].start_a, deletes[0].end_a),
+            (11, 13),
+            "Coalesced Delete should cover the recoil and uuid lines, got A[{}..{})",
+            deletes[0].start_a,
+            deletes[0].end_a
         );
         // Both deletes should be at the end of B (position 13, after all 13 B lines)
         for del in &deletes {
@@ -3053,6 +3033,37 @@ mod tests {
         let changes = InlineDiffer::compare_line("abcdef", "ghijkl");
         // Should still produce changes, even if everything is different
         assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn test_inline_periodic_substitutions_are_highlighted() {
+        // "every other line" case from issue #44: a long digit run with every
+        // fifth character replaced by `x`.  Prefix/suffix similarity is low,
+        // but the lines are still 90% equal, so inline diffing must run.
+        let base = "1234567890".repeat(10);
+        let changed: String = base
+            .chars()
+            .map(|c| if c == '5' { 'x' } else { c })
+            .collect();
+        let a = format!("2-{base}");
+        let b = format!("2-{changed}");
+
+        let ranges = InlineDiffer::highlight_ranges(&a, &b);
+        assert_eq!(ranges.len(), 10, "ranges: {ranges:?}");
+        for (i, range) in ranges.iter().enumerate() {
+            let at = 6 + i * 10;
+            assert_eq!((range.start_a, range.end_a), (at, at + 1));
+            assert_eq!((range.start_b, range.end_b), (at, at + 1));
+            assert_eq!(range.op, DiffOp::Replace);
+        }
+
+        // The default token mode must refine a coarse token instead of
+        // painting the entire digit run.
+        assert_eq!(InlineDiffer::highlight_ranges_tokens(&a, &b), ranges);
+
+        let changes = InlineDiffer::compare_line_tokens(&a, &b);
+        assert_eq!(changes.len(), 20, "changes: {changes:?}");
+        assert!(changes.iter().all(|c| c.end - c.start == 1));
     }
 
     #[test]
@@ -3533,6 +3544,60 @@ mod tests {
         assert!(!result.merged.is_empty());
         assert!(result.conflicts.is_empty());
         assert_eq!(result.merged[1], "b_local");
+    }
+
+    /// Three-way merge on repetitive input (issue #44): the diff sees many
+    /// identical blocks, and coalescing must not merge changes across blocks.
+    #[test]
+    fn test_three_way_merge_repetitive_input() {
+        let mut base: Vec<String> = Vec::new();
+        for i in 0..20 {
+            base.push(format!("entry-{i} {{"));
+            base.push("  value: 0".into());
+            base.push("}".into());
+        }
+        let mut local = base.clone();
+        local[3 * 3 + 1] = "  value: LOCAL".into();
+        let mut remote = base.clone();
+        remote[3 * 15 + 1] = "  value: REMOTE".into();
+
+        let result = ThreeWayDiffer::new(base, local, remote).merge();
+        assert!(
+            result.merged.iter().any(|l| l.contains("LOCAL")),
+            "local change lost: {:?}",
+            result.merged
+        );
+        assert!(
+            result.merged.iter().any(|l| l.contains("REMOTE")),
+            "remote change lost: {:?}",
+            result.merged
+        );
+        assert!(result.conflicts.is_empty());
+    }
+
+    /// Two independent changes, the first one changing the line count: both must
+    /// survive the merge (guards the sequential application in
+    /// `apply_single_chunk`).
+    #[test]
+    fn test_three_way_merge_two_changes_with_insert() {
+        let base: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
+        let mut local = base.clone();
+        local.insert(1, "inserted".into());
+        local[8] = "line 7 local".into();
+        let remote = base.clone();
+
+        let result = ThreeWayDiffer::new(base, local, remote).merge();
+        assert!(result.conflicts.is_empty());
+        assert!(
+            result.merged.iter().any(|l| l == "inserted"),
+            "insertion lost: {:?}",
+            result.merged
+        );
+        assert!(
+            result.merged.iter().any(|l| l == "line 7 local"),
+            "second change lost or misplaced: {:?}",
+            result.merged
+        );
     }
     // --- Sync-point tests ---
 

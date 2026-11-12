@@ -13,6 +13,35 @@ use std::rc::Rc;
 use crate::diff::engine::{Chunk, DiffOp};
 use crate::ui::style;
 
+/// Visible line range `(first, end_exclusive)` of a text view, in buffer
+/// coordinates.
+fn visible_line_range(view: &gsv::View) -> Option<(usize, usize)> {
+    let buffer = view.buffer();
+    if buffer.line_count() <= 0 {
+        return None;
+    }
+    let rect = view.visible_rect();
+    let first = view.line_at_y(rect.y()).0.line().max(0) as usize;
+    let last = view.line_at_y(rect.y() + rect.height()).0.line().max(0) as usize;
+    Some((first, last + 1))
+}
+
+/// True when the chunk has at least one line inside one of the visible ranges.
+///
+/// Zero-width chunks (insertions/deletions) are treated as one line wide so an
+/// insertion at the viewport boundary is still drawn.
+fn chunk_overlaps_visible(
+    chunk: &Chunk,
+    left: Option<(usize, usize)>,
+    right: Option<(usize, usize)>,
+) -> bool {
+    let overlaps = |range: Option<(usize, usize)>, start: usize, end: usize| match range {
+        Some((lo, hi)) => start < hi && lo < end.max(start + 1),
+        None => true,
+    };
+    overlaps(left, chunk.start_a, chunk.end_a) || overlaps(right, chunk.start_b, chunk.end_b)
+}
+
 /// Information about which connector the pointer is hovering over.
 #[derive(Debug, Clone)]
 pub enum HoverInfo {
@@ -207,9 +236,18 @@ impl LinkMap {
 
             let mut zones: Vec<HoverZone> = Vec::new();
 
+            // Visible line range of each pane: chunks outside both ranges
+            // cannot be drawn, so skip them instead of walking the whole chunk
+            // list on every redraw (issue #44).
+            let left_visible = left_view_opt.as_ref().and_then(visible_line_range);
+            let right_visible = right_view_opt.as_ref().and_then(visible_line_range);
+
             // ---- Chunk bezier curves (matching Meld's do_draw exactly) ----
             for (i, chunk) in chunks.iter().enumerate() {
                 if chunk.op == DiffOp::Equal {
+                    continue;
+                }
+                if !chunk_overlaps_visible(chunk, left_visible, right_visible) {
                     continue;
                 }
                 // f0, f1 = view_offset_line(0, ...) for start_a, end_a

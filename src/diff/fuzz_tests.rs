@@ -41,6 +41,58 @@ fn random_text(rng: &mut impl Rng, max_lines: usize, max_line_len: usize) -> Vec
     (0..n).map(|_| random_line(rng, max_line_len)).collect()
 }
 
+/// Generate text drawn from a small alphabet, sprinkled with unique lines.
+///
+/// Unlike [`random_text`], most lines repeat, so the unique-line filter in
+/// `preprocess_diff` stays active and the filtered sequences are repetitive —
+/// the shape that exposed the reconstruction bug of issue #44.
+fn random_repetitive_text(
+    rng: &mut impl Rng,
+    alphabet: &[&str],
+    blocks: usize,
+    unique_percent: u64,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for block in 0..blocks {
+        let n = 1 + rng.gen_range(0..5usize);
+        for _ in 0..n {
+            let roll: u64 = rng.gen_range(0..100);
+            if roll < unique_percent {
+                out.push(format!("uniq-{}-{}", block, rng.gen_range(0..1_000_000u32)));
+            } else {
+                let idx = rng.gen_range(0..alphabet.len());
+                out.push(alphabet[idx].to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Verify that every `Equal` chunk pairs identical lines on both sides.
+fn verify_equal_pairing(chunks: &[Chunk], text_a: &[String], text_b: &[String]) {
+    for chunk in chunks {
+        if chunk.op != DiffOp::Equal {
+            continue;
+        }
+        let len_a = chunk.end_a - chunk.start_a;
+        let len_b = chunk.end_b - chunk.start_b;
+        assert_eq!(
+            len_a, len_b,
+            "Equal chunk with unequal side lengths: {:?}",
+            chunk
+        );
+        for k in 0..len_a {
+            assert_eq!(
+                text_a[chunk.start_a + k],
+                text_b[chunk.start_b + k],
+                "Equal chunk pairs different lines at offset {}: {:?}",
+                k,
+                chunk
+            );
+        }
+    }
+}
+
 /// Verify that chunks form a valid partition of both sequences.
 fn verify_partition(chunks: &[Chunk], text_a: &[String], text_b: &[String]) {
     let mut a_covered = 0usize;
@@ -346,6 +398,39 @@ fn fuzz_single_line_texts() {
 
         if i % 100 == 0 {
             eprintln!("  fuzz_single_line: {i}/{iterations} ok");
+        }
+    }
+}
+
+/// Repetitive input (small alphabet plus unique lines) with the unique-line
+/// filter active. Regression test for issue #44: the reconstruction used to
+/// emit out-of-range and duplicated chunks here. Seeded so the test is
+/// deterministic.
+#[test]
+fn fuzz_repetitive_alphabet() {
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    let mut rng = StdRng::seed_from_u64(0x144_c0ffee);
+    let alphabet = ["A", "B", "C", "D"];
+    let iterations = 1000;
+
+    for i in 0..iterations {
+        let blocks_a = 1 + rng.gen_range(0..50usize);
+        let blocks_b = 1 + rng.gen_range(0..50usize);
+        let unique_percent = rng.gen_range(0..60u64);
+
+        let text_a = random_repetitive_text(&mut rng, &alphabet, blocks_a, unique_percent);
+        let text_b = random_repetitive_text(&mut rng, &alphabet, blocks_b, unique_percent);
+
+        let differ = Differ::new(text_a.clone(), text_b.clone());
+        let result = differ.compare();
+
+        verify_partition(&result.chunks, &text_a, &text_b);
+        verify_equal_pairing(&result.chunks, &text_a, &text_b);
+
+        if i % 200 == 0 {
+            eprintln!("  fuzz_repetitive_alphabet: {i}/{iterations} ok");
         }
     }
 }

@@ -32,7 +32,7 @@ pub struct MeldWindow {
     /// Action group behind the gear menu's `view.*` entries.
     view_group: gio::SimpleActionGroup,
     view_toolbar: gtk::Box,
-    _spinner: gtk::Spinner,
+    spinner: gtk::Spinner,
     prev_change_btn: gtk::Button,
     next_change_btn: gtk::Button,
     vc_filter_btn: gtk::MenuButton,
@@ -177,6 +177,14 @@ pub trait MeldPage {
     /// Install a callback invoked whenever change-action sensitivity may have
     /// changed (cursor/focus movement, chunk edits).
     fn set_change_action_watch(&self, _cb: Box<dyn Fn() + 'static>) {}
+
+    /// Whether this page has background work (diff, inline tagging) pending.
+    fn is_busy(&self) -> bool {
+        false
+    }
+
+    /// Install a callback invoked whenever the page's busy state changes.
+    fn set_busy_watch(&self, _cb: Box<dyn Fn() + 'static>) {}
 }
 
 /// Payload sent from `NewDiffTab` when the user requests a comparison.
@@ -465,6 +473,33 @@ fn refresh_change_action_sensitivity(
     }
 }
 
+/// Apply the active page's busy state to the header spinner and window cursor.
+///
+/// Only immutable borrows of `pages` are taken: this can run from
+/// `connect_switch_page` or from inside the nested dialog loops used by page
+/// `close()` / `action_revert()`.
+fn refresh_busy_indicator(
+    spinner: &gtk::Spinner,
+    window: &gtk::ApplicationWindow,
+    pages: &Weak<RefCell<Vec<Box<dyn MeldPage>>>>,
+    notebook: &gtk::Notebook,
+    page_idx: Option<u32>,
+) {
+    let idx = page_idx.or_else(|| notebook.current_page());
+    let busy = match (idx, pages.upgrade()) {
+        (Some(idx), Some(pages)) => pages
+            .borrow()
+            .get(idx as usize)
+            .map(|page| page.is_busy())
+            .unwrap_or(false),
+        _ => false,
+    };
+
+    spinner.set_spinning(busy);
+    spinner.set_visible(busy);
+    window.set_cursor_from_name(if busy { Some("wait") } else { None });
+}
+
 impl MeldWindow {
     pub fn new(app: &gtk::Application) -> Self {
         let window = gtk::ApplicationWindow::new(app);
@@ -638,7 +673,7 @@ impl MeldWindow {
             pages,
             view_group,
             view_toolbar,
-            _spinner: spinner,
+            spinner,
             prev_change_btn: prev_change_btn.clone(),
             next_change_btn: next_change_btn.clone(),
             vc_filter_btn,
@@ -675,8 +710,7 @@ impl MeldWindow {
             &self.settings,
             &self.window,
         );
-        self.notebook.append_page(tab.widget(), Some(&label.widget));
-        self.pages.borrow_mut().push(Box::new(tab));
+        append_registered_page(&self.notebook, &self.pages, Box::new(tab), &label.widget);
     }
 
     /// Open one or more file paths for comparison.
@@ -709,9 +743,12 @@ impl MeldWindow {
             filediff.connect_gutter_key_modes(&self.window);
             filediff.set_files(gfiles);
             let label = create_closeable_tab_label("File Comparison", &self.notebook, &self.pages);
-            self.notebook
-                .append_page(filediff.widget(), Some(&label.widget));
-            self.pages.borrow_mut().push(Box::new(filediff));
+            append_registered_page(
+                &self.notebook,
+                &self.pages,
+                Box::new(filediff),
+                &label.widget,
+            );
         }
     }
 
@@ -730,17 +767,19 @@ impl MeldWindow {
             filediff.set_merge_output_file(out);
         }
         let label = create_closeable_tab_label("File Merge", &self.notebook, &self.pages);
-        self.notebook
-            .append_page(filediff.widget(), Some(&label.widget));
-        self.pages.borrow_mut().push(Box::new(filediff));
+        append_registered_page(
+            &self.notebook,
+            &self.pages,
+            Box::new(filediff),
+            &label.widget,
+        );
     }
 
     pub fn open_vc_view(&self, location: &str, auto_compare: bool) {
         let vc = VcView::new();
         vc.set_location(location);
         let label = create_closeable_tab_label("Version Control", &self.notebook, &self.pages);
-        self.notebook.append_page(vc.widget(), Some(&label.widget));
-        self.pages.borrow_mut().push(Box::new(vc));
+        append_registered_page(&self.notebook, &self.pages, Box::new(vc), &label.widget);
         let _ = auto_compare;
     }
 
@@ -816,8 +855,7 @@ impl MeldWindow {
             let tab = crate::ui::new_diff_tab();
             let label = create_closeable_tab_label("New comparison", &nb, &pages);
             wire_new_diff_tab_standalone(&tab, &nb, &pages, &settings, &w);
-            nb.append_page(tab.widget(), Some(&label.widget));
-            pages.borrow_mut().push(Box::new(tab));
+            append_registered_page(&nb, &pages, Box::new(tab), &label.widget);
         });
 
         let popover = gtk::Popover::new();
@@ -896,8 +934,17 @@ impl MeldWindow {
         let view_group_sw = self.view_group.clone();
         let nb_switch = self.notebook.clone();
         let pages_weak = Rc::downgrade(&pages_switch);
+        let spinner_busy = self.spinner.clone();
+        let window_busy = self.window.downgrade();
+        let nb_busy = self.notebook.downgrade();
 
         self.notebook.connect_switch_page(move |_, _, idx| {
+            // Reflect the newly active page's busy state before anything else
+            // can re-enter this handler.
+            if let (Some(win), Some(nb)) = (window_busy.upgrade(), nb_busy.upgrade()) {
+                refresh_busy_indicator(&spinner_busy, &win, &pages_weak, &nb, Some(idx));
+            }
+
             let pages = pages_switch.borrow();
             if let Some(page) = pages.get(idx as usize) {
                 let (vc, folder, text) = page.show_filters();
@@ -919,6 +966,19 @@ impl MeldWindow {
                 let nb_w = nb_switch.clone();
                 page.set_change_action_watch(Box::new(move || {
                     refresh_change_action_sensitivity(&group_w, &pages_w, &nb_w);
+                }));
+
+                // Install a watch so a busy transition can refresh the header
+                // spinner, even when the final transition happens inside a
+                // nested dialog loop. WeakRefs avoid a window/notebook cycle.
+                let spinner_page = spinner_busy.clone();
+                let window_page = window_busy.clone();
+                let nb_page = nb_busy.clone();
+                let pages_page = pages_weak.clone();
+                page.set_busy_watch(Box::new(move || {
+                    if let (Some(win), Some(nb)) = (window_page.upgrade(), nb_page.upgrade()) {
+                        refresh_busy_indicator(&spinner_page, &win, &pages_page, &nb, None);
+                    }
                 }));
 
                 // Enable only the `view.*` actions the active page handles,
@@ -949,8 +1009,7 @@ impl MeldWindow {
             let tab = crate::ui::new_diff_tab();
             let label = create_closeable_tab_label("New comparison", &nb, &pages);
             wire_new_diff_tab_standalone(&tab, &nb, &pages, &settings, &w);
-            nb.append_page(tab.widget(), Some(&label.widget));
-            pages.borrow_mut().push(Box::new(tab));
+            append_registered_page(&nb, &pages, Box::new(tab), &label.widget);
         });
         self.window.add_action(&new_action);
 
@@ -1569,8 +1628,7 @@ fn open_comparison_in_notebook(
             dirdiff.auto_compare();
         }
         let label = create_closeable_tab_label("Directory Comparison", notebook, pages);
-        notebook.append_page(dirdiff.widget(), Some(&label.widget));
-        pages.borrow_mut().push(Box::new(dirdiff));
+        append_registered_page(notebook, pages, Box::new(dirdiff), &label.widget);
 
         // Save to recent history
         let paths: Vec<String> = gfiles
@@ -1591,8 +1649,7 @@ fn open_comparison_in_notebook(
         filediff.connect_gutter_key_modes(window);
         filediff.set_files(gfiles);
         let label = create_closeable_tab_label("File Comparison", notebook, pages);
-        notebook.append_page(filediff.widget(), Some(&label.widget));
-        pages.borrow_mut().push(Box::new(filediff));
+        append_registered_page(notebook, pages, Box::new(filediff), &label.widget);
 
         // Save to recent history
         let paths: Vec<String> = gfiles
@@ -1666,8 +1723,7 @@ fn open_vc_file_comparison(
                         notebook,
                         pages,
                     );
-                    notebook.append_page(filediff.widget(), Some(&label.widget));
-                    pages.borrow_mut().push(Box::new(filediff));
+                    append_registered_page(notebook, pages, Box::new(filediff), &label.widget);
                     return;
                 }
             };
@@ -1725,8 +1781,7 @@ fn open_vc_file_comparison(
         filediff.set_labels(&labels);
         filediff.set_merge_output_file(&working_path.to_string_lossy().into_owned());
         let lbl = create_closeable_tab_label(&tab_label, notebook, pages);
-        notebook.append_page(filediff.widget(), Some(&lbl.widget));
-        pages.borrow_mut().push(Box::new(filediff));
+        append_registered_page(notebook, pages, Box::new(filediff), &lbl.widget);
     } else {
         let repo_content = match vc.get_repo_file(relative_path, repo_root) {
             Ok(c) => c,
@@ -1780,8 +1835,7 @@ fn open_vc_file_comparison(
         filediff.set_files(&files);
         filediff.set_labels(&labels);
         let lbl = create_closeable_tab_label(&tab_label, notebook, pages);
-        notebook.append_page(filediff.widget(), Some(&lbl.widget));
-        pages.borrow_mut().push(Box::new(filediff));
+        append_registered_page(notebook, pages, Box::new(filediff), &lbl.widget);
     }
 }
 
@@ -1871,8 +1925,7 @@ fn handle_diff_request(
                 }
             };
             let lbl = create_closeable_tab_label(&label, notebook, pages);
-            notebook.append_page(fd.widget(), Some(&lbl.widget));
-            pages.borrow_mut().push(Box::new(fd));
+            append_registered_page(notebook, pages, Box::new(fd), &lbl.widget);
             let paths: Vec<String> = gfiles
                 .iter()
                 .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
@@ -1912,8 +1965,7 @@ fn handle_diff_request(
                 }
             };
             let lbl = create_closeable_tab_label(&label, notebook, pages);
-            notebook.append_page(dd.widget(), Some(&lbl.widget));
-            pages.borrow_mut().push(Box::new(dd));
+            append_registered_page(notebook, pages, Box::new(dd), &lbl.widget);
             let paths: Vec<String> = gfiles
                 .iter()
                 .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
@@ -1926,8 +1978,7 @@ fn handle_diff_request(
                 let vc = VcView::new();
                 vc.set_location(&path.to_string_lossy().to_string());
                 let lbl = create_closeable_tab_label("Version Control", notebook, pages);
-                notebook.append_page(vc.widget(), Some(&lbl.widget));
-                pages.borrow_mut().push(Box::new(vc));
+                append_registered_page(notebook, pages, Box::new(vc), &lbl.widget);
                 save_recent_comparison(
                     RecentType::VersionControl,
                     &[path.to_string_lossy().to_string()],
@@ -1982,6 +2033,35 @@ fn wire_new_diff_tab_standalone(
             glib::ControlFlow::Break
         });
     }));
+}
+
+/// Append a page to the notebook and register it in `pages`.
+///
+/// The page is registered before `append_page` so the synchronous
+/// `switch-page` emitted for the first page can resolve it. The appended page
+/// is then made current, which also refreshes the header-bar filter buttons
+/// for pages added while another tab is active.
+fn append_registered_page(
+    notebook: &gtk::Notebook,
+    pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    page: Box<dyn MeldPage>,
+    tab_label: &impl IsA<gtk::Widget>,
+) {
+    let widget = page.widget().clone();
+    pages.borrow_mut().push(page);
+
+    let idx = notebook.append_page(&widget, Some(tab_label));
+    if idx == u32::MAX {
+        pages.borrow_mut().pop();
+        return;
+    }
+
+    notebook.set_current_page(Some(idx));
+    debug_assert_eq!(
+        pages.borrow().len(),
+        notebook.n_pages() as usize,
+        "registered page count must match notebook page count"
+    );
 }
 
 /// Create a tab label whose close button actually closes the tab.

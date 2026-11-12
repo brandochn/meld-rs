@@ -44,6 +44,9 @@ use crate::ui::style;
 use crate::undo::UndoSequence;
 use crate::window::{ChangeActionSensitivity, MeldPage};
 
+/// Callback invoked when a page's busy state changes.
+type BusyWatch = Rc<RefCell<Option<Box<dyn Fn() + 'static>>>>;
+
 /// The main file-comparison view supporting 2 or 3 panes.
 pub struct FileDiff {
     /// Top-level vertical container.
@@ -108,6 +111,12 @@ pub struct FileDiff {
     suppress_undo: Rc<Cell<bool>>,
     /// Callback fired when change-action sensitivity may have changed.
     change_action_watch: Rc<RefCell<Option<Box<dyn Fn() + 'static>>>>,
+    /// True while a diff / inline-tagging pipeline is pending for this page.
+    busy: Rc<Cell<bool>>,
+    /// Callback fired whenever `busy` changes.
+    busy_watch: BusyWatch,
+    /// Cursors captured from each pane view before entering the busy state.
+    saved_cursors: Rc<RefCell<Vec<Option<gdk::Cursor>>>>,
 }
 
 /// Per-pane data bundles the widgets that make up one column.
@@ -397,6 +406,9 @@ impl FileDiff {
         let undo_sequence = Rc::new(UndoSequence::new(&(0..num_panes).collect::<Vec<usize>>()));
         let suppress_undo = Rc::new(Cell::new(false));
         let change_action_watch = Rc::new(RefCell::new(None::<Box<dyn Fn() + 'static>>));
+        let busy = Rc::new(Cell::new(false));
+        let busy_watch = Rc::new(RefCell::new(None::<Box<dyn Fn() + 'static>>));
+        let saved_cursors = Rc::new(RefCell::new(Vec::new()));
 
         let fd = Self {
             container,
@@ -429,6 +441,9 @@ impl FileDiff {
             undo_sequence,
             suppress_undo,
             change_action_watch,
+            busy,
+            busy_watch,
+            saved_cursors,
         };
 
         // Wire up everything
@@ -1220,6 +1235,7 @@ impl FileDiff {
         let inline_cache = Rc::clone(&self.inline_cache);
         let ignore_blank_lines = Rc::clone(&self.ignore_blank_lines);
         let inline_diff_mode = Rc::clone(&self.inline_diff_mode);
+        let large_file_notice: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
         let overlays: Vec<gtk::DrawingArea> = self
             .panes
             .iter()
@@ -1236,6 +1252,32 @@ impl FileDiff {
                 )
             })
             .collect();
+
+        // Large comparisons run on the background thread but can take a long
+        // time; show a notice so the window does not look hung.  The banner is
+        // a single slot, so only reveal it when nothing else is displayed; the
+        // completion handler below replaces or hides it.
+        let msg_token_at_start = self.shared_msgarea.notice_token();
+        let had_message_at_start = self.shared_msgarea.is_revealed();
+        if text_a.len().max(text_b.len()) > crate::diff::diff_state::LARGE_FILE_LINES
+            && !had_message_at_start
+        {
+            self.shared_msgarea
+                .show_info_dismissable(&tr!("Comparing a very large file, this may take a while."));
+            large_file_notice.set(Some(self.shared_msgarea.notice_token()));
+        }
+
+        let large_file_notice = Rc::clone(&large_file_notice);
+
+        // No callback fires when both sides are empty (schedule_diff returns
+        // early), so a pending busy state must be cleared explicitly.
+        self.set_busy(!(text_a.is_empty() && text_b.is_empty()));
+
+        let busy = Rc::clone(&self.busy);
+        let busy_watch = Rc::clone(&self.busy_watch);
+        let saved_cursors = Rc::clone(&self.saved_cursors);
+        let busy_views: Vec<gsv::View> = self.panes.iter().map(|p| p.view.clone()).collect();
+        let busy_container = self.container.clone();
 
         self.diff_state.borrow_mut().schedule_diff(
             text_a.clone(),
@@ -1309,9 +1351,28 @@ impl FileDiff {
                     shared_msgarea.show_info(&tr!("Enter text to compare files"));
                 } else if is_identical {
                     shared_msgarea.show_info_dismissable(&tr!("Files are identical"));
-                } else {
+                } else if let Some(token) = large_file_notice.get() {
+                    // Only clear the notice this diff put up; another message
+                    // (encoding warning, saved, …) may have replaced it.
+                    shared_msgarea.hide_if_current(token);
+                } else if !had_message_at_start
+                    && shared_msgarea.notice_token() == msg_token_at_start
+                {
+                    // Nothing was displayed when the diff started and nothing
+                    // replaced it while it ran: safe to clear a stale banner
+                    // (matches the previous behaviour).  If a message already
+                    // existed or appeared meanwhile, leave it alone.
                     shared_msgarea.hide();
                 }
+
+                set_busy_state(
+                    &busy,
+                    &busy_watch,
+                    &busy_views,
+                    &busy_container,
+                    &saved_cursors,
+                    false,
+                );
             }),
         );
 
@@ -1357,6 +1418,19 @@ impl FileDiff {
         if let Some(cb) = self.change_action_watch.borrow().as_ref() {
             cb();
         }
+    }
+
+    /// Update the page busy state, its pane cursors, and the busy watch.
+    fn set_busy(&self, value: bool) {
+        let views: Vec<gsv::View> = self.panes.iter().map(|p| p.view.clone()).collect();
+        set_busy_state(
+            &self.busy,
+            &self.busy_watch,
+            &views,
+            &self.container,
+            &self.saved_cursors,
+            value,
+        );
     }
 
     /// Compute per-change action sensitivity for the focused pane/chunk.
@@ -2052,6 +2126,11 @@ impl FileDiff {
         let buffers: Vec<gsv::Buffer> = self.panes.iter().map(|p| p.buffer.clone()).collect();
         let tag_tables: Vec<gtk::TextTagTable> =
             self.panes.iter().map(|p| p.buffer.tag_table()).collect();
+        let busy = Rc::clone(&self.busy);
+        let busy_watch = Rc::clone(&self.busy_watch);
+        let saved_cursors = Rc::clone(&self.saved_cursors);
+        let busy_views: Vec<gsv::View> = self.panes.iter().map(|p| p.view.clone()).collect();
+        let busy_container = self.container.clone();
 
         for pi in 0..self.num_panes {
             let buffers = buffers.clone();
@@ -2070,6 +2149,11 @@ impl FileDiff {
             let overlays_f = overlays.clone();
             let diff_maps_f = diff_maps.clone();
             let line_gutters_f = line_gutters.clone();
+            let busy_f = Rc::clone(&busy);
+            let busy_watch_f = Rc::clone(&busy_watch);
+            let saved_cursors_f = Rc::clone(&saved_cursors);
+            let busy_views_f = busy_views.clone();
+            let busy_container_f = busy_container.clone();
 
             self.panes[pi].buffer.connect_changed(move |_| {
                 if loading.get() || buffers.len() < 2 {
@@ -2099,6 +2183,22 @@ impl FileDiff {
                 let overlays_inner = overlays_f.clone();
                 let diff_maps_inner = diff_maps_f.clone();
                 let line_gutters_inner = line_gutters_f.clone();
+                let busy_inner = Rc::clone(&busy_f);
+                let busy_watch_inner = Rc::clone(&busy_watch_f);
+                let saved_cursors_inner = Rc::clone(&saved_cursors_f);
+                let busy_views_inner = busy_views_f.clone();
+                let busy_container_inner = busy_container_f.clone();
+
+                // No callback fires when both sides are empty
+                // (schedule_diff returns early), so clear a pending state.
+                set_busy_state(
+                    &busy_f,
+                    &busy_watch_f,
+                    &busy_views_f,
+                    &busy_container_f,
+                    &saved_cursors_f,
+                    !(text_a.is_empty() && text_b.is_empty()),
+                );
 
                 diff_state.borrow_mut().schedule_diff(
                     text_a.clone(),
@@ -2179,6 +2279,15 @@ impl FileDiff {
                         } else {
                             shared_msgarea.hide();
                         }
+
+                        set_busy_state(
+                            &busy_inner,
+                            &busy_watch_inner,
+                            &busy_views_inner,
+                            &busy_container_inner,
+                            &saved_cursors_inner,
+                            false,
+                        );
                     }),
                 );
             });
@@ -2620,6 +2729,7 @@ impl MeldPage for FileDiff {
 
     fn close(&self) -> gtk::ResponseType {
         self.diff_state.borrow_mut().cancel_all();
+        self.set_busy(false);
 
         // Check for unsaved changes before closing.
         let modified: Vec<(usize, &PaneData)> = self
@@ -2842,6 +2952,14 @@ impl MeldPage for FileDiff {
 
     fn set_change_action_watch(&self, cb: Box<dyn Fn() + 'static>) {
         *self.change_action_watch.borrow_mut() = Some(cb);
+    }
+
+    fn is_busy(&self) -> bool {
+        self.busy.get()
+    }
+
+    fn set_busy_watch(&self, cb: Box<dyn Fn() + 'static>) {
+        *self.busy_watch.borrow_mut() = Some(cb);
     }
 
     fn apply_settings(&self, settings: &MeldSettings) {
@@ -3126,6 +3244,7 @@ impl MeldPage for FileDiff {
 
     fn action_stop(&self) {
         self.diff_state.borrow_mut().cancel_all();
+        self.set_busy(false);
     }
 
     fn action_undo(&self) {
@@ -3288,6 +3407,45 @@ fn highlight_range(buffer: &gsv::Buffer, tag_name: &str, start_line: usize, end_
     let e = iter_at_line_or_end(buffer, end_line as i32);
     if let Some(tag) = tag_table.lookup(tag_name) {
         buffer.apply_tag(&tag, &s, &e);
+    }
+}
+
+/// Apply a busy transition to the page state, pane cursors, and busy watch.
+///
+/// Cursors are captured on entry and restored on exit: the text views set
+/// their own I-beam cursor, so clearing it with `None` would lose it.
+fn set_busy_state(
+    busy: &Rc<Cell<bool>>,
+    busy_watch: &BusyWatch,
+    views: &[gsv::View],
+    container: &gtk::Box,
+    saved_cursors: &Rc<RefCell<Vec<Option<gdk::Cursor>>>>,
+    value: bool,
+) {
+    if busy.get() == value {
+        return;
+    }
+    busy.set(value);
+
+    if value {
+        let mut saved = saved_cursors.borrow_mut();
+        saved.clear();
+        for view in views {
+            let previous = view.cursor();
+            view.set_cursor_from_name(Some("wait"));
+            saved.push(previous);
+        }
+        container.set_cursor_from_name(Some("wait"));
+    } else {
+        let mut saved = saved_cursors.borrow_mut();
+        for (view, previous) in views.iter().zip(saved.drain(..)) {
+            view.set_cursor(previous.as_ref());
+        }
+        container.set_cursor(None);
+    }
+
+    if let Some(cb) = busy_watch.borrow().as_ref() {
+        cb();
     }
 }
 
