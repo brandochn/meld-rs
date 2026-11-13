@@ -26,6 +26,7 @@ use std::rc::Rc;
 
 use crate::config::settings::MeldSettings;
 use crate::diff::diff_state::{DiffResult, DiffState};
+use crate::diff::drop_rules::{resolve_file_drop, FileDropAction, FileDropArea};
 use crate::diff::engine::{
     adjacent_change_chunks, locate_change_chunk, Chunk, DiffOp, InlineDiffer, LineCache,
     ThreeWayDiffer,
@@ -35,6 +36,7 @@ use crate::tr;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
 use crate::ui::diff_map::DiffMap;
+use crate::ui::dnd::{files_from_drop_value, FileDropFallback};
 use crate::ui::find_bar::FindBar;
 use crate::ui::link_map::LinkMap;
 use crate::ui::msgarea::MsgArea;
@@ -117,6 +119,10 @@ pub struct FileDiff {
     busy_watch: BusyWatch,
     /// Cursors captured from each pane view before entering the busy state.
     saved_cursors: Rc<RefCell<Vec<Option<gdk::Cursor>>>>,
+    /// Whether in-page file drop targets have been installed.
+    drops_enabled: Cell<bool>,
+    /// Application-level fallback for drops that cannot be handled in-page.
+    drop_fallback: RefCell<Option<FileDropFallback>>,
 }
 
 /// Per-pane data bundles the widgets that make up one column.
@@ -444,6 +450,8 @@ impl FileDiff {
             busy,
             busy_watch,
             saved_cursors,
+            drops_enabled: Cell::new(false),
+            drop_fallback: RefCell::new(None),
         };
 
         // Wire up everything
@@ -559,7 +567,6 @@ impl FileDiff {
 
         // Load files and detect languages using the content-type-aware
         // approach that mirrors Python Meld's LanguageManager.get_language_from_file().
-        let lang_mgr = gsv::LanguageManager::default();
         let mut detected_langs: Vec<Option<gsv::Language>> = Vec::with_capacity(self.num_panes);
 
         for (i, gfile) in gfiles.iter().enumerate().take(self.num_panes) {
@@ -577,34 +584,41 @@ impl FileDiff {
             }
         }
 
-        // Language unification (mirrors Python Meld's logic):
-        // if all identified languages are the same, apply that language
-        // to every pane — even panes where detection failed (e.g. temp
-        // files without a recognisable extension).
-        //
-        // Comparison uses language **IDs** (e.g. "rust"), not display
-        // names (e.g. "Rust") — LanguageManager::language() looks up by id.
-        let real_langs: Vec<&gsv::Language> =
-            detected_langs.iter().filter_map(|l| l.as_ref()).collect();
-        if !real_langs.is_empty() && real_langs.windows(2).all(|w| w[0].id() == w[1].id()) {
-            let unified_id = real_langs[0].id();
-            if let Some(lang) = lang_mgr.language(&unified_id) {
-                for i in 0..self.num_panes {
-                    let matches = detected_langs
-                        .get(i)
-                        .and_then(|l| l.as_ref())
-                        .map(|l| l.id() == unified_id)
-                        .unwrap_or(false);
-                    if !matches {
-                        self.panes[i].buffer.set_language(Some(&lang));
-                        self.panes[i].statusbar.set_language(&lang.name());
-                    }
-                }
-            }
-        }
+        self.unify_languages(&detected_langs);
 
         self.loading.set(false);
         self.compute_diff();
+    }
+
+    /// Apply the same language to every pane when all detected languages agree.
+    ///
+    /// Mirrors Python Meld's logic: if all identified languages are the same,
+    /// apply that language to every pane — even panes where detection failed
+    /// (e.g. temp files without a recognisable extension). Comparison uses
+    /// language IDs (e.g. "rust"), not display names.
+    fn unify_languages(&self, detected_langs: &[Option<gsv::Language>]) {
+        let real_langs: Vec<&gsv::Language> =
+            detected_langs.iter().filter_map(|l| l.as_ref()).collect();
+        if real_langs.is_empty() || !real_langs.windows(2).all(|w| w[0].id() == w[1].id()) {
+            return;
+        }
+
+        let unified_id = real_langs[0].id();
+        let lang_mgr = gsv::LanguageManager::default();
+        let Some(lang) = lang_mgr.language(&unified_id) else {
+            return;
+        };
+        for i in 0..self.num_panes {
+            let matches = detected_langs
+                .get(i)
+                .and_then(|l| l.as_ref())
+                .map(|l| l.id() == unified_id)
+                .unwrap_or(false);
+            if !matches {
+                self.panes[i].buffer.set_language(Some(&lang));
+                self.panes[i].statusbar.set_language(&lang.name());
+            }
+        }
     }
 
     /// Load a file into the given pane and detect its source language.
@@ -644,6 +658,360 @@ impl FileDiff {
         }
 
         lang
+    }
+
+    /// Checked variant of [`Self::load_file_sync`] for pane replacement.
+    ///
+    /// Does not update the tracked encoding or mtime when the load fails.
+    fn load_file_sync_checked(
+        &self,
+        pane_idx: usize,
+        gfile: &gio::File,
+        preferred: Option<&str>,
+    ) -> Result<Option<gsv::Language>, String> {
+        if pane_idx >= self.panes.len() || pane_idx >= self.num_panes {
+            return Err(tr!("Invalid pane index").into_owned());
+        }
+
+        self.suppress_undo.set(true);
+        let result = load_file_into_buffer_checked(
+            &self.panes[pane_idx].buffer,
+            &self.panes[pane_idx].statusbar,
+            gfile,
+            preferred,
+        );
+        self.suppress_undo.set(false);
+
+        let (lang, encoding) = result?;
+        self.undo_sequence.checkpoint(pane_idx);
+        if pane_idx < self.encodings.borrow().len() {
+            self.encodings.borrow_mut()[pane_idx] = Some(encoding);
+        }
+
+        let mtime = gfile
+            .path()
+            .and_then(|p| std::fs::metadata(&p).and_then(|m| m.modified()).ok());
+        if pane_idx < self.mtimes.borrow().len() {
+            self.mtimes.borrow_mut()[pane_idx] = mtime;
+        }
+
+        Ok(lang)
+    }
+
+    /// Confirm discarding unsaved changes for the given pane indices.
+    ///
+    /// Returns `true` when there is nothing to discard or the user confirms.
+    fn confirm_discard(&self, panes: &[usize]) -> bool {
+        let modified: Vec<usize> = panes
+            .iter()
+            .copied()
+            .filter(|&i| i < self.num_panes && self.panes[i].buffer.is_modified())
+            .collect();
+
+        if modified.is_empty() {
+            return true;
+        }
+
+        let labels = self.labels.borrow();
+        let file_list: Vec<String> = modified
+            .iter()
+            .map(|i| {
+                labels.get(*i).cloned().unwrap_or_else(|| {
+                    tr!("Pane {number}").replace("{number}", &(i + 1).to_string())
+                })
+            })
+            .collect();
+        drop(labels);
+
+        let parent = self
+            .container
+            .root()
+            .and_then(|r| r.downcast::<gtk::Window>().ok());
+
+        let dialog = gtk::MessageDialog::new(
+            parent.as_ref(),
+            gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+            gtk::MessageType::Question,
+            gtk::ButtonsType::None,
+            tr!("Discard unsaved changes to documents?").as_ref(),
+        );
+        dialog.set_secondary_text(Some(&tr!(
+            "Changes made to the following documents will be permanently lost:",
+        )));
+        dialog.add_button(&tr!("_Cancel"), gtk::ResponseType::Cancel);
+        dialog.add_button(&tr!("_Discard"), gtk::ResponseType::Ok);
+
+        let file_list_text = file_list
+            .iter()
+            .map(|name| format!("\t• {name}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let label = gtk::Label::new(Some(&file_list_text));
+        label.set_xalign(0.0);
+        label.set_halign(gtk::Align::Start);
+        if let Some(message_area) = dialog.message_area().downcast::<gtk::Box>().ok() {
+            message_area.append(&label);
+        }
+
+        let response = Rc::new(Cell::new(gtk::ResponseType::None));
+        let resp_clone = Rc::clone(&response);
+        dialog.connect_response(move |d, resp| {
+            resp_clone.set(resp);
+            d.destroy();
+        });
+        dialog.present();
+
+        let ctx = glib::MainContext::default();
+        while response.get() == gtk::ResponseType::None {
+            ctx.iteration(true);
+        }
+
+        response.get() == gtk::ResponseType::Ok
+    }
+
+    /// Update the tracked path and display label for one pane.
+    fn set_pane_file_metadata(&self, pane: usize, gfile: &gio::File) {
+        if pane >= self.num_panes {
+            return;
+        }
+        if pane < self.file_paths.borrow().len() {
+            self.file_paths.borrow_mut()[pane] = Some(gfile.clone());
+        }
+        if let Some(path) = gfile.path() {
+            let path_str = path.to_string_lossy().into_owned();
+            if let Some(name) = path.file_name() {
+                if pane < self.labels.borrow().len() {
+                    self.labels.borrow_mut()[pane] = name.to_string_lossy().into_owned();
+                }
+            }
+            self.panes[pane].file_label.set_path(&path_str);
+        }
+    }
+
+    /// Check that a dropped path is a readable regular file.
+    fn preflight_drop_file(gfile: &gio::File) -> Result<(), String> {
+        if gfile.query_file_type(gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE)
+            != gio::FileType::Regular
+        {
+            return Err(tr!("Not a regular file").into_owned());
+        }
+        let path = gfile
+            .path()
+            .ok_or_else(|| tr!("File has no local path").into_owned())?;
+        let path_str = path.to_string_lossy().into_owned();
+        crate::utils::encoding::read_text_with_encoding(&path_str, None)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Replace the file shown in one pane.
+    ///
+    /// Returns `false` when the drop cannot be handled in place (detached page,
+    /// merge output, invalid pane, directory/non-regular file), allowing the
+    /// caller to fall back to the application-level drop handler. Returns
+    /// `true` after a replacement, a cancelled confirmation, or a handled load
+    /// error.
+    pub fn replace_pane_file(&self, pane: usize, gfile: &gio::File) -> bool {
+        if self.container.root().is_none()
+            || self.merge_output.borrow().is_some()
+            || pane >= self.num_panes
+            || gfile.query_file_type(gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE)
+                != gio::FileType::Regular
+        {
+            return false;
+        }
+
+        if let Err(error) = Self::preflight_drop_file(gfile) {
+            self.panes[pane]
+                .msgarea
+                .show_error(&tr!("Error loading file: {error}").replace("{error}", &error));
+            return true;
+        }
+
+        if !self.confirm_discard(&[pane]) {
+            return true;
+        }
+
+        // Re-check after the modal dialog in case the page was detached.
+        if self.container.root().is_none() || self.merge_output.borrow().is_some() {
+            return false;
+        }
+
+        self.loading.set(true);
+        self.undo_sequence.clear();
+        let result = self.load_file_sync_checked(pane, gfile, None);
+        self.loading.set(false);
+
+        match result {
+            Ok(_) => {
+                self.set_pane_file_metadata(pane, gfile);
+                self.panes[pane].msgarea.hide();
+                self.panes[pane].buffer.set_modified(false);
+                self.compute_diff();
+            }
+            Err(error) => {
+                self.panes[pane]
+                    .msgarea
+                    .show_error(&tr!("Error loading file: {error}").replace("{error}", &error));
+            }
+        }
+        true
+    }
+
+    /// Replace every pane's file after confirming unsaved changes once.
+    ///
+    /// Returns `false` when the drop cannot be handled in place; see
+    /// [`Self::replace_pane_file`] for the handled/not-handled contract.
+    pub fn replace_all_files(&self, gfiles: &[gio::File]) -> bool {
+        if self.container.root().is_none()
+            || self.merge_output.borrow().is_some()
+            || gfiles.len() != self.num_panes
+        {
+            return false;
+        }
+        if gfiles.iter().any(|gfile| {
+            gfile.query_file_type(gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE)
+                != gio::FileType::Regular
+        }) {
+            return false;
+        }
+
+        for (i, gfile) in gfiles.iter().enumerate() {
+            if let Err(error) = Self::preflight_drop_file(gfile) {
+                self.panes[i]
+                    .msgarea
+                    .show_error(&tr!("Error loading file: {error}").replace("{error}", &error));
+                return true;
+            }
+        }
+
+        let all_panes: Vec<usize> = (0..self.num_panes).collect();
+        if !self.confirm_discard(&all_panes) {
+            return true;
+        }
+        if self.container.root().is_none() || self.merge_output.borrow().is_some() {
+            return false;
+        }
+
+        self.loading.set(true);
+        self.undo_sequence.clear();
+        let mut detected_langs = Vec::with_capacity(self.num_panes);
+        for (i, gfile) in gfiles.iter().enumerate() {
+            match self.load_file_sync_checked(i, gfile, None) {
+                Ok(lang) => {
+                    detected_langs.push(lang);
+                    self.set_pane_file_metadata(i, gfile);
+                    self.panes[i].msgarea.hide();
+                    self.panes[i].buffer.set_modified(false);
+                }
+                Err(error) => {
+                    self.loading.set(false);
+                    self.panes[i]
+                        .msgarea
+                        .show_error(&tr!("Error loading file: {error}").replace("{error}", &error));
+                    self.compute_diff();
+                    return true;
+                }
+            }
+        }
+        self.loading.set(false);
+        self.unify_languages(&detected_langs);
+        self.compute_diff();
+        true
+    }
+
+    /// Install file drop targets on the panes, filename labels, overview maps,
+    /// and page container.
+    ///
+    /// `fallback` opens a new comparison when a drop cannot be handled in place.
+    pub fn install_drop_targets(self: &Rc<Self>, fallback: FileDropFallback) {
+        if self.drops_enabled.get() || self.merge_output.borrow().is_some() {
+            return;
+        }
+
+        *self.drop_fallback.borrow_mut() = Some(fallback);
+        let weak = Rc::downgrade(self);
+
+        let add_target = |widget: &gtk::Widget, area: FileDropArea| {
+            let target = gtk::DropTarget::new(glib::Type::INVALID, gdk::DragAction::COPY);
+            target.set_types(&[gdk::FileList::static_type(), gio::File::static_type()]);
+            let weak = weak.clone();
+            target.connect_drop(move |_, value, _, _| {
+                let Some(fd) = weak.upgrade() else {
+                    return false;
+                };
+                let Some(files) = files_from_drop_value(value) else {
+                    return false;
+                };
+                fd.drop_files(&files, area)
+            });
+            widget.add_controller(target);
+        };
+
+        for (i, pane) in self.panes.iter().enumerate().take(self.num_panes) {
+            add_target(
+                pane.scrolled.upcast_ref::<gtk::Widget>(),
+                FileDropArea::Pane(i),
+            );
+            add_target(pane.view.upcast_ref::<gtk::Widget>(), FileDropArea::Pane(i));
+            add_target(pane.file_label.widget(), FileDropArea::Pane(i));
+        }
+        for (i, map) in self.diff_maps.iter().enumerate() {
+            add_target(
+                map.widget().upcast_ref::<gtk::Widget>(),
+                FileDropArea::Overview(i),
+            );
+        }
+        add_target(
+            self.container.upcast_ref::<gtk::Widget>(),
+            FileDropArea::Common,
+        );
+
+        self.drops_enabled.set(true);
+    }
+
+    /// Handle a file drop landed on `area`.
+    ///
+    /// Returns `true` when the drop was handled (replacement, cancelled
+    /// confirmation, handled load error, or successful app fallback). Returns
+    /// `false` only when neither in-page replacement nor fallback accepted it.
+    pub fn drop_files(&self, files: &[gio::File], area: FileDropArea) -> bool {
+        if files.is_empty()
+            || !self.drops_enabled.get()
+            || self.container.root().is_none()
+            || self.merge_output.borrow().is_some()
+        {
+            return false;
+        }
+
+        let has_non_regular = files.iter().any(|gfile| {
+            gfile.query_file_type(gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE)
+                != gio::FileType::Regular
+        });
+        let action = if has_non_regular {
+            FileDropAction::OpenNew
+        } else {
+            resolve_file_drop(area, files.len(), self.num_panes).unwrap_or(FileDropAction::OpenNew)
+        };
+
+        let handled = match action {
+            FileDropAction::ReplacePane(pane) => files
+                .first()
+                .is_some_and(|gfile| self.replace_pane_file(pane, gfile)),
+            FileDropAction::ReplaceAll => self.replace_all_files(files),
+            FileDropAction::OpenNew => false,
+        };
+
+        if handled {
+            return true;
+        }
+        self.invoke_fallback(files)
+    }
+
+    /// Invoke the application-level fallback without holding its `RefCell` borrow.
+    fn invoke_fallback(&self, files: &[gio::File]) -> bool {
+        let fallback = self.drop_fallback.borrow().as_ref().cloned();
+        fallback.map(|cb| cb(files)).unwrap_or(false)
     }
 
     /// Set the output file path for merge operations.
@@ -1121,6 +1489,39 @@ fn load_file_into_buffer(
     // Step 1: detect the source language BEFORE loading text so
     // that GtkSourceView can apply syntax highlighting during
     // text insertion (mirrors the original Meld order).
+    let (lang, _) = detect_pane_language(buffer, statusbar, gfile);
+
+    // Step 2: load file content (language already set, so highlighting
+    // is applied during text insertion).
+    let path_str = gfile
+        .path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let mut encoding_name = String::from("UTF-8");
+    match crate::utils::encoding::read_text_with_encoding(&path_str, preferred) {
+        Ok((content, encoding)) => {
+            buffer.set_text(&content);
+            buffer.set_modified(false);
+            statusbar.set_encoding(&encoding);
+            buffer.place_cursor(&buffer.start_iter());
+            encoding_name = encoding;
+        }
+        Err(e) => {
+            msgarea
+                .show_error(&tr!("Error loading file: {error}").replace("{error}", &e.to_string()));
+        }
+    }
+
+    (lang, encoding_name)
+}
+
+/// Detect a file's GtkSourceView language and apply it to `buffer`/`statusbar`.
+fn detect_pane_language(
+    buffer: &gsv::Buffer,
+    statusbar: &StatusBar,
+    gfile: &gio::File,
+) -> (Option<gsv::Language>, String) {
     let lang_mgr = gsv::LanguageManager::default();
     let content_type: Option<String> = gfile
         .query_info(
@@ -1158,35 +1559,39 @@ fn load_file_into_buffer(
     };
     statusbar.set_language(&display_name);
 
-    // Step 2: load file content (language already set, so highlighting
-    // is applied during text insertion).
-    let path_str = gfile
-        .path()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
-    let mut encoding_name = String::from("UTF-8");
-    match crate::utils::encoding::read_text_with_encoding(&path_str, preferred) {
-        Ok((content, encoding)) => {
-            buffer.set_text(&content);
-            buffer.set_modified(false);
-            statusbar.set_encoding(&encoding);
-            buffer.place_cursor(&buffer.start_iter());
-            encoding_name = encoding;
-        }
-        Err(e) => {
-            msgarea
-                .show_error(&tr!("Error loading file: {error}").replace("{error}", &e.to_string()));
-        }
-    }
-
     let lang = if lang_name == "Plain Text" {
         None
     } else {
         detected
     };
 
-    (lang, encoding_name)
+    (lang, display_name)
+}
+
+/// Checked variant of [`load_file_into_buffer`] for pane replacement.
+///
+/// Reads the file before mutating the buffer/status bar, so a failed load
+/// leaves the pane's existing content and path untouched.
+fn load_file_into_buffer_checked(
+    buffer: &gsv::Buffer,
+    statusbar: &StatusBar,
+    gfile: &gio::File,
+    preferred: Option<&str>,
+) -> Result<(Option<gsv::Language>, String), String> {
+    let path = gfile
+        .path()
+        .ok_or_else(|| tr!("File has no local path").into_owned())?;
+    let path_str = path.to_string_lossy().into_owned();
+    let (content, encoding) = crate::utils::encoding::read_text_with_encoding(&path_str, preferred)
+        .map_err(|e| e.to_string())?;
+
+    let (lang, _) = detect_pane_language(buffer, statusbar, gfile);
+    buffer.set_text(&content);
+    buffer.set_modified(false);
+    statusbar.set_encoding(&encoding);
+    buffer.place_cursor(&buffer.start_iter());
+
+    Ok((lang, encoding))
 }
 
 fn get_system_monospace_font() -> String {
@@ -2727,6 +3132,14 @@ impl MeldPage for FileDiff {
         self.container.upcast_ref()
     }
 
+    fn accepts_file_drops(&self) -> bool {
+        self.drops_enabled.get()
+    }
+
+    fn drop_files(&self, files: &[gio::File], area: FileDropArea) -> bool {
+        FileDiff::drop_files(self, files, area)
+    }
+
     fn close(&self) -> gtk::ResponseType {
         self.diff_state.borrow_mut().cancel_all();
         self.set_busy(false);
@@ -3061,76 +3474,9 @@ impl MeldPage for FileDiff {
     }
 
     fn action_revert(&self) {
-        // Check for unsaved changes first (mirrors Meld's confirm_unsaved_change_action).
-        let modified: Vec<usize> = self
-            .panes
-            .iter()
-            .enumerate()
-            .take(self.num_panes)
-            .filter(|(_, p)| p.buffer.is_modified())
-            .map(|(i, _)| i)
-            .collect();
-
-        if !modified.is_empty() {
-            let labels = self.labels.borrow();
-            let file_list: Vec<String> = modified
-                .iter()
-                .map(|i| {
-                    labels.get(*i).cloned().unwrap_or_else(|| {
-                        tr!("Pane {number}").replace("{number}", &(i + 1).to_string())
-                    })
-                })
-                .collect();
-            drop(labels);
-
-            let parent = self
-                .container
-                .root()
-                .and_then(|r| r.downcast::<gtk::Window>().ok());
-
-            let dialog = gtk::MessageDialog::new(
-                parent.as_ref(),
-                gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
-                gtk::MessageType::Question,
-                gtk::ButtonsType::None,
-                tr!("Discard unsaved changes to documents?").as_ref(),
-            );
-            dialog.set_secondary_text(Some(&tr!(
-                "Changes made to the following documents will be permanently lost:",
-            )));
-            dialog.add_button(&tr!("_Cancel"), gtk::ResponseType::Cancel);
-            dialog.add_button(&tr!("_Discard"), gtk::ResponseType::Ok);
-
-            // List the unsaved documents with bullet points, matching the
-            // original revert-dialog.ui (a single label with newline-joined items).
-            let file_list_text = file_list
-                .iter()
-                .map(|name| format!("\t• {name}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let label = gtk::Label::new(Some(&file_list_text));
-            label.set_xalign(0.0);
-            label.set_halign(gtk::Align::Start);
-            if let Some(message_area) = dialog.message_area().downcast::<gtk::Box>().ok() {
-                message_area.append(&label);
-            }
-
-            let response = Rc::new(Cell::new(gtk::ResponseType::None));
-            let resp_clone = Rc::clone(&response);
-            dialog.connect_response(move |d, resp| {
-                resp_clone.set(resp);
-                d.destroy();
-            });
-            dialog.present();
-
-            let ctx = glib::MainContext::default();
-            while response.get() == gtk::ResponseType::None {
-                ctx.iteration(true);
-            }
-
-            if response.get() != gtk::ResponseType::Ok {
-                return;
-            }
+        let all_panes: Vec<usize> = (0..self.num_panes).collect();
+        if !self.confirm_discard(&all_panes) {
+            return;
         }
 
         // Reload all files from disk, preserving each pane's encoding.

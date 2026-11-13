@@ -17,8 +17,10 @@ use std::rc::{Rc, Weak};
 use crate::config::recent::RecentType;
 use crate::config::settings::{MeldSettings, PaneOrder};
 use crate::diff::dirdiff::DirDiff;
+use crate::diff::drop_rules::FileDropArea;
 use crate::diff::filediff::FileDiff;
 use crate::tr;
+use crate::ui::dnd::{files_from_drop_value, FileDropFallback};
 use crate::ui::new_diff_tab::DiffType;
 use crate::ui::tab_manager::TabLabel;
 use crate::ui::vc_view::VcView;
@@ -28,7 +30,7 @@ use crate::vc::{ConflictKind, Vc, VcFileStatus};
 pub struct MeldWindow {
     window: gtk::ApplicationWindow,
     notebook: gtk::Notebook,
-    pages: Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    pages: Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
     /// Action group behind the gear menu's `view.*` entries.
     view_group: gio::SimpleActionGroup,
     view_toolbar: gtk::Box,
@@ -185,6 +187,19 @@ pub trait MeldPage {
 
     /// Install a callback invoked whenever the page's busy state changes.
     fn set_busy_watch(&self, _cb: Box<dyn Fn() + 'static>) {}
+
+    /// Whether this page accepts in-page file drops.
+    fn accepts_file_drops(&self) -> bool {
+        false
+    }
+
+    /// Handle files dropped on this page.
+    ///
+    /// Returns `true` when the drop was handled; `false` lets the caller use
+    /// the application-level drop behavior.
+    fn drop_files(&self, _files: &[gio::File], _area: FileDropArea) -> bool {
+        false
+    }
 }
 
 /// Payload sent from `NewDiffTab` when the user requests a comparison.
@@ -441,7 +456,7 @@ fn show_help_overlay(parent: Option<&gtk::Window>) {
 /// Apply per-change action sensitivity from the current page's state.
 fn refresh_change_action_sensitivity(
     view_group: &gio::SimpleActionGroup,
-    pages: &Weak<RefCell<Vec<Box<dyn MeldPage>>>>,
+    pages: &Weak<RefCell<Vec<Rc<dyn MeldPage>>>>,
     notebook: &gtk::Notebook,
 ) {
     let states = pages
@@ -481,7 +496,7 @@ fn refresh_change_action_sensitivity(
 fn refresh_busy_indicator(
     spinner: &gtk::Spinner,
     window: &gtk::ApplicationWindow,
-    pages: &Weak<RefCell<Vec<Box<dyn MeldPage>>>>,
+    pages: &Weak<RefCell<Vec<Rc<dyn MeldPage>>>>,
     notebook: &gtk::Notebook,
     page_idx: Option<u32>,
 ) {
@@ -662,7 +677,7 @@ impl MeldWindow {
         main_box.append(&notebook);
         window.set_child(Some(&main_box));
 
-        let pages: Rc<RefCell<Vec<Box<dyn MeldPage>>>> = Rc::new(RefCell::new(Vec::new()));
+        let pages: Rc<RefCell<Vec<Rc<dyn MeldPage>>>> = Rc::new(RefCell::new(Vec::new()));
         let menu = build_gear_menu();
         gear_btn.set_menu_model(Some(&menu));
         let view_group = gio::SimpleActionGroup::new();
@@ -701,16 +716,16 @@ impl MeldWindow {
 
     /// Append a "New Comparison" tab.
     pub fn append_new_comparison(&self) {
-        let tab = crate::ui::new_diff_tab();
+        let tab: Rc<dyn MeldPage> = Rc::new(crate::ui::new_diff_tab());
         let label = create_closeable_tab_label("New comparison", &self.notebook, &self.pages);
         wire_new_diff_tab_standalone(
-            &tab,
+            &*tab,
             &self.notebook,
             &self.pages,
             &self.settings,
             &self.window,
         );
-        append_registered_page(&self.notebook, &self.pages, Box::new(tab), &label.widget);
+        append_registered_page(&self.notebook, &self.pages, tab, &label.widget);
     }
 
     /// Open one or more file paths for comparison.
@@ -734,52 +749,48 @@ impl MeldWindow {
             );
         } else {
             let num_panes = gfiles.len().max(2);
-            let filediff = FileDiff::new(num_panes);
-            filediff.set_font(settings.use_system_font, &settings.custom_font);
-            filediff.set_ignore_blanks(settings.ignore_blank_lines);
-            filediff.set_show_connectors(settings.show_connectors);
-            filediff.set_inline_diff_mode(&settings.inline_diff_mode);
-            filediff.apply_settings(&settings);
-            filediff.connect_gutter_key_modes(&self.window);
-            filediff.set_files(gfiles);
-            let label = create_closeable_tab_label("File Comparison", &self.notebook, &self.pages);
-            append_registered_page(
+            let Some(filediff) = create_file_diff(
+                num_panes,
+                &settings,
                 &self.notebook,
                 &self.pages,
-                Box::new(filediff),
-                &label.widget,
-            );
+                &self.window,
+                true,
+            ) else {
+                return;
+            };
+            filediff.set_files(gfiles);
+            let label = create_closeable_tab_label("File Comparison", &self.notebook, &self.pages);
+            append_registered_page(&self.notebook, &self.pages, filediff, &label.widget);
         }
     }
 
     pub fn open_file_merge(&self, gfiles: &[gio::File], output: Option<&str>) {
         let num_panes = 3usize;
         let settings = self.settings.borrow().clone();
-        let filediff = FileDiff::new(num_panes);
-        filediff.set_font(settings.use_system_font, &settings.custom_font);
-        filediff.set_ignore_blanks(settings.ignore_blank_lines);
-        filediff.set_show_connectors(settings.show_connectors);
-        filediff.set_inline_diff_mode(&settings.inline_diff_mode);
-        filediff.apply_settings(&settings);
-        filediff.connect_gutter_key_modes(&self.window);
+        let Some(filediff) = create_file_diff(
+            num_panes,
+            &settings,
+            &self.notebook,
+            &self.pages,
+            &self.window,
+            false,
+        ) else {
+            return;
+        };
         filediff.set_files(gfiles);
         if let Some(out) = output {
             filediff.set_merge_output_file(out);
         }
         let label = create_closeable_tab_label("File Merge", &self.notebook, &self.pages);
-        append_registered_page(
-            &self.notebook,
-            &self.pages,
-            Box::new(filediff),
-            &label.widget,
-        );
+        append_registered_page(&self.notebook, &self.pages, filediff, &label.widget);
     }
 
     pub fn open_vc_view(&self, location: &str, auto_compare: bool) {
         let vc = VcView::new();
         vc.set_location(location);
         let label = create_closeable_tab_label("Version Control", &self.notebook, &self.pages);
-        append_registered_page(&self.notebook, &self.pages, Box::new(vc), &label.widget);
+        append_registered_page(&self.notebook, &self.pages, Rc::new(vc), &label.widget);
         let _ = auto_compare;
     }
 
@@ -800,17 +811,17 @@ impl MeldWindow {
     }
 
     fn create_and_append_new_diff_tab(&self) {
-        let tab = crate::ui::new_diff_tab();
+        let tab: Rc<dyn MeldPage> = Rc::new(crate::ui::new_diff_tab());
         let label = create_closeable_tab_label("New comparison", &self.notebook, &self.pages);
         self.notebook.append_page(tab.widget(), Some(&label.widget));
-        self.pages.borrow_mut().push(Box::new(tab));
+        self.pages.borrow_mut().push(tab);
     }
 
     fn wire_new_diff_tab(
         &self,
         tab: &dyn MeldPage,
         notebook: &gtk::Notebook,
-        pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+        pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
     ) {
         let nb = notebook.clone();
         let p = Rc::clone(pages);
@@ -852,10 +863,10 @@ impl MeldWindow {
         let settings = Rc::clone(&self.settings);
         let w = self.window.clone();
         new_btn.connect_clicked(move |_| {
-            let tab = crate::ui::new_diff_tab();
+            let tab: Rc<dyn MeldPage> = Rc::new(crate::ui::new_diff_tab());
             let label = create_closeable_tab_label("New comparison", &nb, &pages);
-            wire_new_diff_tab_standalone(&tab, &nb, &pages, &settings, &w);
-            append_registered_page(&nb, &pages, Box::new(tab), &label.widget);
+            wire_new_diff_tab_standalone(&*tab, &nb, &pages, &settings, &w);
+            append_registered_page(&nb, &pages, tab, &label.widget);
         });
 
         let popover = gtk::Popover::new();
@@ -1006,10 +1017,10 @@ impl MeldWindow {
         let w = self.window.clone();
         let new_action = gio::SimpleAction::new("new-tab", None);
         new_action.connect_activate(move |_, _| {
-            let tab = crate::ui::new_diff_tab();
+            let tab: Rc<dyn MeldPage> = Rc::new(crate::ui::new_diff_tab());
             let label = create_closeable_tab_label("New comparison", &nb, &pages);
-            wire_new_diff_tab_standalone(&tab, &nb, &pages, &settings, &w);
-            append_registered_page(&nb, &pages, Box::new(tab), &label.widget);
+            wire_new_diff_tab_standalone(&*tab, &nb, &pages, &settings, &w);
+            append_registered_page(&nb, &pages, tab, &label.widget);
         });
         self.window.add_action(&new_action);
 
@@ -1033,21 +1044,19 @@ impl MeldWindow {
     }
 
     fn setup_drag_drop(&self) {
-        let drop_target = gtk::DropTarget::new(gio::File::static_type(), gdk4::DragAction::COPY);
-        drop_target.set_actions(gdk4::DragAction::COPY);
+        let drop_target = gtk::DropTarget::new(glib::Type::INVALID, gdk4::DragAction::COPY);
+        drop_target.set_types(&[gdk4::FileList::static_type(), gio::File::static_type()]);
 
         let nb = self.notebook.clone();
         let p = self.pages.clone();
         let settings = Rc::clone(&self.settings);
         let w = self.window.clone();
         drop_target.connect_drop(move |_, value, _x, _y| {
-            if let Ok(gfile) = value.get::<gio::File>() {
-                let settings = settings.borrow().clone();
-                open_comparison_in_notebook(&nb, &p, &[gfile], false, false, &settings, &w);
-                true
-            } else {
-                false
-            }
+            let Some(files) = files_from_drop_value(value) else {
+                return false;
+            };
+            let settings = settings.borrow().clone();
+            open_dropped_files(&nb, &p, &settings, &w, &files)
         });
         self.window.add_controller(drop_target);
     }
@@ -1610,9 +1619,95 @@ impl MeldWindow {
     }
 }
 
+/// Build and configure a `FileDiff`, optionally installing in-page drop targets.
+fn create_file_diff(
+    num_panes: usize,
+    settings: &MeldSettings,
+    notebook: &gtk::Notebook,
+    pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
+    window: &gtk::ApplicationWindow,
+    enable_file_drops: bool,
+) -> Option<Rc<FileDiff>> {
+    if !(2..=3).contains(&num_panes) {
+        log::error!("Unsupported FileDiff pane count: {num_panes}");
+        return None;
+    }
+
+    let filediff = Rc::new(FileDiff::new(num_panes));
+    filediff.set_font(settings.use_system_font, &settings.custom_font);
+    filediff.set_ignore_blanks(settings.ignore_blank_lines);
+    filediff.set_show_connectors(settings.show_connectors);
+    filediff.set_inline_diff_mode(&settings.inline_diff_mode);
+    filediff.apply_settings(settings);
+    filediff.connect_gutter_key_modes(window);
+
+    if enable_file_drops {
+        let notebook_weak = notebook.downgrade();
+        let pages_weak = Rc::downgrade(pages);
+        let window_weak = window.downgrade();
+        let settings_snapshot = settings.clone();
+        let fallback: FileDropFallback = Rc::new(move |files| {
+            let (Some(notebook), Some(pages), Some(window)) = (
+                notebook_weak.upgrade(),
+                pages_weak.upgrade(),
+                window_weak.upgrade(),
+            ) else {
+                return false;
+            };
+            open_dropped_files(&notebook, &pages, &settings_snapshot, &window, files)
+        });
+        filediff.install_drop_targets(fallback);
+    }
+
+    Some(filediff)
+}
+
+/// Validate an application-level file drop and open one comparison.
+fn open_dropped_files(
+    notebook: &gtk::Notebook,
+    pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
+    settings: &MeldSettings,
+    window: &gtk::ApplicationWindow,
+    files: &[gio::File],
+) -> bool {
+    if files.is_empty() {
+        return false;
+    }
+
+    let mut regular = 0usize;
+    let mut directories = 0usize;
+    for gfile in files {
+        match gfile.query_file_type(gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE) {
+            gio::FileType::Regular => regular += 1,
+            gio::FileType::Directory => directories += 1,
+            _ => {
+                log::warn!("Rejected drop containing a non-regular, non-directory path");
+                return false;
+            }
+        }
+    }
+
+    if regular > 0 && directories > 0 {
+        log::warn!("Rejected mixed file/directory drop");
+        return false;
+    }
+    if directories > 0 {
+        if directories > 2 {
+            log::warn!("Rejected drop with more than two directories");
+            return false;
+        }
+    } else if regular > 3 {
+        log::warn!("Rejected drop with more than three files");
+        return false;
+    }
+
+    open_comparison_in_notebook(notebook, pages, files, false, false, settings, window);
+    true
+}
+
 fn open_comparison_in_notebook(
     notebook: &gtk::Notebook,
-    pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
     gfiles: &[gio::File],
     auto_compare: bool,
     _auto_merge: bool,
@@ -1628,7 +1723,7 @@ fn open_comparison_in_notebook(
             dirdiff.auto_compare();
         }
         let label = create_closeable_tab_label("Directory Comparison", notebook, pages);
-        append_registered_page(notebook, pages, Box::new(dirdiff), &label.widget);
+        append_registered_page(notebook, pages, Rc::new(dirdiff), &label.widget);
 
         // Save to recent history
         let paths: Vec<String> = gfiles
@@ -1640,16 +1735,13 @@ fn open_comparison_in_notebook(
         // For file comparisons, always use at least 2 panes.
         // A single file opens alongside a blank pane for editing.
         let num_panes = gfiles.len().max(2);
-        let filediff = FileDiff::new(num_panes);
-        filediff.set_font(settings.use_system_font, &settings.custom_font);
-        filediff.set_ignore_blanks(settings.ignore_blank_lines);
-        filediff.set_show_connectors(settings.show_connectors);
-        filediff.set_inline_diff_mode(&settings.inline_diff_mode);
-        filediff.apply_settings(settings);
-        filediff.connect_gutter_key_modes(window);
+        let Some(filediff) = create_file_diff(num_panes, settings, notebook, pages, window, true)
+        else {
+            return;
+        };
         filediff.set_files(gfiles);
         let label = create_closeable_tab_label("File Comparison", notebook, pages);
-        append_registered_page(notebook, pages, Box::new(filediff), &label.widget);
+        append_registered_page(notebook, pages, filediff, &label.widget);
 
         // Save to recent history
         let paths: Vec<String> = gfiles
@@ -1674,7 +1766,7 @@ fn is_directory_comparison(gfiles: &[gio::File]) -> bool {
 /// For normal files (2-way diff) uses `resolve_two_pane_order()`.
 fn open_vc_file_comparison(
     notebook: &gtk::Notebook,
-    pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
     settings: &MeldSettings,
     repo_root: &str,
     relative_path: &str,
@@ -1709,13 +1801,11 @@ fn open_vc_file_comparison(
                     );
                     // Fall through to 2-way comparison below
                     let files: Vec<gio::File> = vec![gio::File::for_path(&working_path)];
-                    let filediff = FileDiff::new(2);
-                    filediff.set_font(settings.use_system_font, &settings.custom_font);
-                    filediff.set_ignore_blanks(settings.ignore_blank_lines);
-                    filediff.set_show_connectors(settings.show_connectors);
-                    filediff.set_inline_diff_mode(&settings.inline_diff_mode);
-                    filediff.apply_settings(settings);
-                    filediff.connect_gutter_key_modes(window);
+                    let Some(filediff) =
+                        create_file_diff(2, settings, notebook, pages, window, false)
+                    else {
+                        return;
+                    };
                     filediff.set_files(&files);
                     filediff.set_labels(&[format!("{} — local", relative_path), String::new()]);
                     let label = create_closeable_tab_label(
@@ -1723,7 +1813,7 @@ fn open_vc_file_comparison(
                         notebook,
                         pages,
                     );
-                    append_registered_page(notebook, pages, Box::new(filediff), &label.widget);
+                    append_registered_page(notebook, pages, filediff, &label.widget);
                     return;
                 }
             };
@@ -1770,18 +1860,14 @@ fn open_vc_file_comparison(
             _ => unreachable!("resolve_merge_order returned a 2-pane order in 3-pane context"),
         };
 
-        let filediff = FileDiff::new(3);
-        filediff.set_font(settings.use_system_font, &settings.custom_font);
-        filediff.set_ignore_blanks(settings.ignore_blank_lines);
-        filediff.set_show_connectors(settings.show_connectors);
-        filediff.set_inline_diff_mode(&settings.inline_diff_mode);
-        filediff.apply_settings(settings);
-        filediff.connect_gutter_key_modes(window);
+        let Some(filediff) = create_file_diff(3, settings, notebook, pages, window, false) else {
+            return;
+        };
         filediff.set_files(&files);
         filediff.set_labels(&labels);
         filediff.set_merge_output_file(&working_path.to_string_lossy().into_owned());
         let lbl = create_closeable_tab_label(&tab_label, notebook, pages);
-        append_registered_page(notebook, pages, Box::new(filediff), &lbl.widget);
+        append_registered_page(notebook, pages, filediff, &lbl.widget);
     } else {
         let repo_content = match vc.get_repo_file(relative_path, repo_root) {
             Ok(c) => c,
@@ -1825,17 +1911,13 @@ fn open_vc_file_comparison(
             ),
         };
 
-        let filediff = FileDiff::new(2);
-        filediff.set_font(settings.use_system_font, &settings.custom_font);
-        filediff.set_ignore_blanks(settings.ignore_blank_lines);
-        filediff.set_show_connectors(settings.show_connectors);
-        filediff.set_inline_diff_mode(&settings.inline_diff_mode);
-        filediff.apply_settings(settings);
-        filediff.connect_gutter_key_modes(window);
+        let Some(filediff) = create_file_diff(2, settings, notebook, pages, window, false) else {
+            return;
+        };
         filediff.set_files(&files);
         filediff.set_labels(&labels);
         let lbl = create_closeable_tab_label(&tab_label, notebook, pages);
-        append_registered_page(notebook, pages, Box::new(filediff), &lbl.widget);
+        append_registered_page(notebook, pages, filediff, &lbl.widget);
     }
 }
 
@@ -1875,7 +1957,7 @@ fn write_temp_file(content: &str, prefix: &str, extension: Option<&str>) -> std:
 /// Respects the `diff_type` chosen by the user rather than inferring from paths.
 fn handle_diff_request(
     notebook: &gtk::Notebook,
-    pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
     req: &DiffRequest,
     auto_compare: bool,
     auto_merge: bool,
@@ -1898,13 +1980,10 @@ fn handle_diff_request(
             } else {
                 gfiles.len().max(2)
             };
-            let fd = FileDiff::new(num_panes);
-            fd.set_font(settings.use_system_font, &settings.custom_font);
-            fd.set_ignore_blanks(settings.ignore_blank_lines);
-            fd.set_show_connectors(settings.show_connectors);
-            fd.set_inline_diff_mode(&settings.inline_diff_mode);
-            fd.apply_settings(settings);
-            fd.connect_gutter_key_modes(window);
+            let Some(fd) = create_file_diff(num_panes, settings, notebook, pages, window, true)
+            else {
+                return;
+            };
             if !gfiles.is_empty() {
                 fd.set_files(&gfiles);
             }
@@ -1925,7 +2004,7 @@ fn handle_diff_request(
                 }
             };
             let lbl = create_closeable_tab_label(&label, notebook, pages);
-            append_registered_page(notebook, pages, Box::new(fd), &lbl.widget);
+            append_registered_page(notebook, pages, fd, &lbl.widget);
             let paths: Vec<String> = gfiles
                 .iter()
                 .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
@@ -1965,7 +2044,7 @@ fn handle_diff_request(
                 }
             };
             let lbl = create_closeable_tab_label(&label, notebook, pages);
-            append_registered_page(notebook, pages, Box::new(dd), &lbl.widget);
+            append_registered_page(notebook, pages, Rc::new(dd), &lbl.widget);
             let paths: Vec<String> = gfiles
                 .iter()
                 .filter_map(|f| f.path().map(|p| p.to_string_lossy().into_owned()))
@@ -1978,7 +2057,7 @@ fn handle_diff_request(
                 let vc = VcView::new();
                 vc.set_location(&path.to_string_lossy().to_string());
                 let lbl = create_closeable_tab_label("Version Control", notebook, pages);
-                append_registered_page(notebook, pages, Box::new(vc), &lbl.widget);
+                append_registered_page(notebook, pages, Rc::new(vc), &lbl.widget);
                 save_recent_comparison(
                     RecentType::VersionControl,
                     &[path.to_string_lossy().to_string()],
@@ -1996,7 +2075,7 @@ fn handle_diff_request(
 fn wire_new_diff_tab_standalone(
     tab: &dyn MeldPage,
     notebook: &gtk::Notebook,
-    pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
     settings: &Rc<RefCell<MeldSettings>>,
     window: &gtk::ApplicationWindow,
 ) {
@@ -2043,11 +2122,28 @@ fn wire_new_diff_tab_standalone(
 /// for pages added while another tab is active.
 fn append_registered_page(
     notebook: &gtk::Notebook,
-    pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
-    page: Box<dyn MeldPage>,
+    pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
+    page: Rc<dyn MeldPage>,
     tab_label: &impl IsA<gtk::Widget>,
 ) {
     let widget = page.widget().clone();
+
+    if page.accepts_file_drops() {
+        let page_weak = Rc::downgrade(&page);
+        let target = gtk::DropTarget::new(glib::Type::INVALID, gdk4::DragAction::COPY);
+        target.set_types(&[gdk4::FileList::static_type(), gio::File::static_type()]);
+        target.connect_drop(move |_, value, _, _| {
+            let Some(page) = page_weak.upgrade() else {
+                return false;
+            };
+            let Some(files) = files_from_drop_value(value) else {
+                return false;
+            };
+            page.drop_files(&files, FileDropArea::Common)
+        });
+        tab_label.upcast_ref::<gtk::Widget>().add_controller(target);
+    }
+
     pages.borrow_mut().push(page);
 
     let idx = notebook.append_page(&widget, Some(tab_label));
@@ -2071,7 +2167,7 @@ fn append_registered_page(
 fn create_closeable_tab_label(
     text: &str,
     notebook: &gtk::Notebook,
-    pages: &Rc<RefCell<Vec<Box<dyn MeldPage>>>>,
+    pages: &Rc<RefCell<Vec<Rc<dyn MeldPage>>>>,
 ) -> TabLabel {
     let label = TabLabel::new(text);
     let nb = notebook.clone();
