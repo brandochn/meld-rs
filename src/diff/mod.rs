@@ -3,6 +3,7 @@
 //! This module contains the core diffing algorithms (line-level and word-level),
 //! file comparison logic, and directory comparison logic.
 
+pub mod drop_rules;
 pub mod engine;
 pub mod matchers;
 

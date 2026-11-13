@@ -7,6 +7,7 @@ pub mod diff_grid;
 pub mod diff_map;
 pub mod diff_view;
 pub mod dir_view;
+pub mod dnd;
 pub mod emblem_cell_renderer;
 pub mod file_button;
 pub mod find_bar;
