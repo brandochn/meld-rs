@@ -181,16 +181,15 @@ impl Differ {
     fn compare_single(&self, text_a: &[String], text_b: &[String]) -> LineDiff {
         let pre = preprocess_diff(text_a, text_b);
 
-        let a_joined = if pre.filtered_a.is_empty() {
-            String::new()
-        } else {
-            pre.filtered_a.join("\n") + "\n"
-        };
-        let b_joined = if pre.filtered_b.is_empty() {
-            String::new()
-        } else {
-            pre.filtered_b.join("\n") + "\n"
-        };
+        // Diff the filtered line slices directly (one element = one line)
+        // instead of joining them into a string.  `similar`'s line tokenizer
+        // splits on both `\r` and `\n`, so a line containing a bare `\r` was
+        // split into extra tokens and produced chunk indices past the end of
+        // `index_map_a` / `index_map_b` (issue #53).  `diff_slices` keeps one
+        // token per line and still goes through `TextDiff`'s full capture
+        // pipeline (including the >100-element interning path).
+        let a_refs: Vec<&str> = pre.filtered_a.iter().map(String::as_str).collect();
+        let b_refs: Vec<&str> = pre.filtered_b.iter().map(String::as_str).collect();
 
         // When the unique-line filter discarded lines, the remaining sequence
         // is often highly repetitive (e.g. Firefox session entries) and many
@@ -207,7 +206,7 @@ impl Differ {
 
         let diff = TextDiff::configure()
             .algorithm(algorithm)
-            .diff_lines(&a_joined, &b_joined);
+            .diff_slices(&a_refs, &b_refs);
         let filtered = build_chunks_from_gaps(&diff);
         let mut chunks = rebuild_chunks(&filtered, &pre, text_a.len(), text_b.len());
 
@@ -332,8 +331,15 @@ fn rebuild_chunks(
             continue;
         }
         for k in 0..(chunk.end_a - chunk.start_a) {
-            let pa = pre.index_map_a[chunk.start_a + k];
-            let pb = pre.index_map_b[chunk.start_b + k];
+            // Defensive: with the slice-based diff these indices are always in
+            // range, but guard against a future mismatch instead of panicking
+            // (mirrors `unprocess_chunks`).
+            let (Some(&pa), Some(&pb)) = (
+                pre.index_map_a.get(chunk.start_a + k),
+                pre.index_map_b.get(chunk.start_b + k),
+            ) else {
+                break;
+            };
             push_pair(pa, pb, &mut runs);
         }
     }
@@ -441,14 +447,18 @@ struct RawChange {
 /// This mirrors difflib's opcode semantics where:
 ///   - Insert `(i1, i1, j1, j2)`: `i1` = current old context position
 ///   - Delete `(i1, i2, j1, j1)`: `j1` = current new context position
-fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, 'a, str>) -> Vec<Chunk> {
+fn build_chunks_from_gaps<'a>(diff: &TextDiff<'a, 'a, '_, str>) -> Vec<Chunk> {
+    // Every `similar` change is exactly one element of the diffed sequence.
+    // When diffing line slices each element is one line, so each change spans
+    // one line.  (`value().lines().count()` would be `0` for an empty line when
+    // diffing slices, hence the constant.)
     let raw: Vec<RawChange> = diff
         .iter_all_changes()
         .map(|c| RawChange {
             tag: c.tag(),
             old_index: c.old_index(),
             new_index: c.new_index(),
-            line_count: c.value().lines().count(),
+            line_count: 1,
         })
         .collect();
 
@@ -2332,6 +2342,109 @@ mod tests {
         let d = Differ::new(vec!["a".into(), "b".into()], vec!["a".into(), "c".into()]);
         let result = d.compare();
         assert!(!result.chunks.is_empty());
+    }
+
+    #[test]
+    fn test_bare_cr_lines_do_not_panic() {
+        // A bare '\r' inside a line made `similar::diff_lines` split that line
+        // into extra tokens, so the resulting chunk indices overflowed
+        // `index_map_a` / `index_map_b` and `rebuild_chunks` panicked with
+        // "index out of bounds".  Regression for issue #53.
+        let a = vec!["p".into(), "a\rb\rc\rd".into(), "q".into()];
+        let b = vec!["r".into(), "a\rb\rc\rd".into(), "s".into()];
+        let result = Differ::new(a.clone(), b.clone()).compare();
+
+        // Chunks must form a valid partition of both sequences.
+        let mut ca = 0usize;
+        let mut cb = 0usize;
+        for c in &result.chunks {
+            assert_eq!(c.start_a, ca, "gap in A at chunk {c:?}");
+            assert_eq!(c.start_b, cb, "gap in B at chunk {c:?}");
+            if c.op == DiffOp::Equal {
+                for k in 0..(c.end_a - c.start_a) {
+                    assert_eq!(
+                        a[c.start_a + k],
+                        b[c.start_b + k],
+                        "Equal chunk pairs different lines: {c:?}"
+                    );
+                }
+            }
+            ca = c.end_a;
+            cb = c.end_b;
+        }
+        assert_eq!(ca, a.len(), "chunks do not cover all of A");
+        assert_eq!(cb, b.len(), "chunks do not cover all of B");
+    }
+
+    #[test]
+    fn test_slice_diff_matches_joined_line_diff() {
+        // The slice-based diff (production path) must produce exactly the same
+        // chunks as the previous join + diff_lines pipeline for ordinary input
+        // that contains no embedded separators.
+        let cases: &[(&[&str], &[&str])] = &[
+            (&["a", "b", "c"], &["a", "c"]),
+            (&["a", "b", "c"], &["a", "x", "c"]),
+            (&["", "a", ""], &["", "b", ""]),
+            (&[], &["x"]),
+            (&["x"], &[]),
+            (&["same"], &["same"]),
+            (
+                &["one", "two", "three", "four"],
+                &["one", "2", "three", "4", "five"],
+            ),
+        ];
+
+        for &(a, b) in cases {
+            let a: Vec<String> = a.iter().map(|s| s.to_string()).collect();
+            let b: Vec<String> = b.iter().map(|s| s.to_string()).collect();
+            let pre = preprocess_diff(&a, &b);
+            let algorithm = if pre.discarded_lines {
+                Algorithm::Patience
+            } else {
+                Algorithm::Myers
+            };
+
+            let a_joined = if pre.filtered_a.is_empty() {
+                String::new()
+            } else {
+                pre.filtered_a.join("\n") + "\n"
+            };
+            let b_joined = if pre.filtered_b.is_empty() {
+                String::new()
+            } else {
+                pre.filtered_b.join("\n") + "\n"
+            };
+            let ref_diff = TextDiff::configure()
+                .algorithm(algorithm)
+                .diff_lines(&a_joined, &b_joined);
+            let expected = build_chunks_from_gaps(&ref_diff);
+
+            let a_refs: Vec<&str> = pre.filtered_a.iter().map(String::as_str).collect();
+            let b_refs: Vec<&str> = pre.filtered_b.iter().map(String::as_str).collect();
+            let slice_diff = TextDiff::configure()
+                .algorithm(algorithm)
+                .diff_slices(&a_refs, &b_refs);
+            let actual = build_chunks_from_gaps(&slice_diff);
+
+            assert_eq!(expected, actual, "chunks differ for a={a:?} b={b:?}");
+        }
+    }
+
+    #[test]
+    fn test_rebuild_chunks_out_of_range_degrades() {
+        // Feed an Equal chunk whose indices extend past the index maps: the
+        // guard must break out instead of panicking on out-of-bounds indexing.
+        let a = vec!["x".into(), "y".into()];
+        let pre = preprocess_diff(&a, &a);
+        let filtered = vec![Chunk {
+            start_a: 0,
+            end_a: 10,
+            start_b: 0,
+            end_b: 10,
+            op: DiffOp::Equal,
+        }];
+        let chunks = rebuild_chunks(&filtered, &pre, a.len(), a.len());
+        assert!(!chunks.is_empty());
     }
 
     #[test]
