@@ -7,6 +7,15 @@ pub mod drop_rules;
 pub mod engine;
 pub mod matchers;
 
+/// Layout-settle detection for the busy indicator (pure, no GTK).
+pub mod settle;
+
+/// Pure proportional scroll mapping shared by the GUI (no GTK).
+pub mod scroll_map;
+
+/// Inline-highlighting planning helpers (pure, no GTK).
+pub mod inline_plan;
+
 /// Cross-line similarity matching for non-aligned changes.
 pub mod similarity;
 

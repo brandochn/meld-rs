@@ -32,6 +32,7 @@ use crate::diff::engine::{
     ThreeWayDiffer,
 };
 use crate::diff::inline_cache::InlineDiffCache;
+use crate::diff::settle::{SettleOutcome, SettleTracker};
 use crate::tr;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
@@ -119,6 +120,10 @@ pub struct FileDiff {
     busy_watch: BusyWatch,
     /// Cursors captured from each pane view before entering the busy state.
     saved_cursors: Rc<RefCell<Vec<Option<gdk::Cursor>>>>,
+    /// Pending timer that delays clearing `busy` until layout settles.
+    busy_clear_source: Rc<RefCell<Option<glib::SourceId>>>,
+    /// Pending time-sliced inline-highlighting job.
+    inline_job_source: Rc<RefCell<Option<glib::SourceId>>>,
     /// Whether in-page file drop targets have been installed.
     drops_enabled: Cell<bool>,
     /// Application-level fallback for drops that cannot be handled in-page.
@@ -415,6 +420,8 @@ impl FileDiff {
         let busy = Rc::new(Cell::new(false));
         let busy_watch = Rc::new(RefCell::new(None::<Box<dyn Fn() + 'static>>));
         let saved_cursors = Rc::new(RefCell::new(Vec::new()));
+        let busy_clear_source = Rc::new(RefCell::new(None::<glib::SourceId>));
+        let inline_job_source = Rc::new(RefCell::new(None::<glib::SourceId>));
 
         let fd = Self {
             container,
@@ -450,6 +457,8 @@ impl FileDiff {
             busy,
             busy_watch,
             saved_cursors,
+            busy_clear_source,
+            inline_job_source,
             drops_enabled: Cell::new(false),
             drop_fallback: RefCell::new(None),
         };
@@ -1638,7 +1647,6 @@ impl FileDiff {
         let link_maps = self.link_maps.clone();
         let shared_msgarea = Rc::clone(&self.shared_msgarea);
         let inline_cache = Rc::clone(&self.inline_cache);
-        let ignore_blank_lines = Rc::clone(&self.ignore_blank_lines);
         let inline_diff_mode = Rc::clone(&self.inline_diff_mode);
         let large_file_notice: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
         let overlays: Vec<gtk::DrawingArea> = self
@@ -1681,20 +1689,27 @@ impl FileDiff {
         let busy = Rc::clone(&self.busy);
         let busy_watch = Rc::clone(&self.busy_watch);
         let saved_cursors = Rc::clone(&self.saved_cursors);
+        let busy_clear_source = Rc::clone(&self.busy_clear_source);
         let busy_views: Vec<gsv::View> = self.panes.iter().map(|p| p.view.clone()).collect();
         let busy_container = self.container.clone();
 
-        self.diff_state.borrow_mut().schedule_diff(
-            text_a.clone(),
-            text_b.clone(),
+        let diff_state = Rc::clone(&self.diff_state);
+        let scheduler = Rc::clone(&self.diff_state);
+        let inline_job_source = Rc::clone(&self.inline_job_source);
+
+        let ignore_blank_lines_now = self.ignore_blank_lines.get();
+        scheduler.borrow_mut().schedule_diff(
+            text_a,
+            text_b,
+            ignore_blank_lines_now,
             Box::new(move |result: DiffResult| {
                 let DiffResult {
-                    chunks: raw_chunks,
+                    chunks: final_chunks,
                     text_a,
                     text_b,
                     is_empty,
                     is_identical,
-                    ..
+                    line_cache: computed_line_cache,
                 } = result;
 
                 clear_diff_tags_single(&panes[0].0, &panes[0].1);
@@ -1702,31 +1717,20 @@ impl FileDiff {
                 ensure_diff_tags(&panes[0].1);
                 ensure_diff_tags(&panes[1].1);
 
-                let mut final_chunks = raw_chunks;
-                if ignore_blank_lines.get() {
-                    crate::diff::engine::consume_blank_lines(&mut final_chunks, &text_a, &text_b);
-                }
+                apply_diff_tags_to_buffer(&panes[0].0, &panes[0].1, 0, &final_chunks);
+                apply_diff_tags_to_buffer(&panes[1].0, &panes[1].1, 1, &final_chunks);
 
-                let mode = inline_diff_mode.borrow();
-                apply_diff_tags_to_buffer(
-                    &panes[0].0,
-                    &panes[0].1,
-                    0,
+                let generation = diff_state.borrow().generation();
+                schedule_inline_highlights(
                     &final_chunks,
-                    Some(&panes[1].0),
-                    &inline_cache,
-                    &mode,
+                    [panes[0].0.clone(), panes[1].0.clone()],
+                    [panes[0].1.clone(), panes[1].1.clone()],
+                    Rc::clone(&inline_cache),
+                    inline_diff_mode.borrow().clone(),
+                    generation,
+                    Rc::clone(&diff_state),
+                    Rc::clone(&inline_job_source),
                 );
-                apply_diff_tags_to_buffer(
-                    &panes[1].0,
-                    &panes[1].1,
-                    1,
-                    &final_chunks,
-                    Some(&panes[0].0),
-                    &inline_cache,
-                    &mode,
-                );
-                drop(mode);
 
                 for gutter in &gutters {
                     gutter.set_chunks(&final_chunks);
@@ -1737,8 +1741,7 @@ impl FileDiff {
                     lm.update_chunks(&final_chunks);
                 }
 
-                let max_lines = text_a.len().max(text_b.len());
-                *line_cache.borrow_mut() = LineCache::new(&final_chunks, max_lines);
+                *line_cache.borrow_mut() = computed_line_cache;
 
                 *chunks.borrow_mut() = final_chunks;
 
@@ -1770,13 +1773,13 @@ impl FileDiff {
                     shared_msgarea.hide();
                 }
 
-                set_busy_state(
-                    &busy,
-                    &busy_watch,
-                    &busy_views,
-                    &busy_container,
-                    &saved_cursors,
-                    false,
+                defer_busy_clear(
+                    Rc::clone(&busy),
+                    Rc::clone(&busy_watch),
+                    busy_views.clone(),
+                    busy_container.clone(),
+                    Rc::clone(&saved_cursors),
+                    Rc::clone(&busy_clear_source),
                 );
             }),
         );
@@ -1827,6 +1830,13 @@ impl FileDiff {
 
     /// Update the page busy state, its pane cursors, and the busy watch.
     fn set_busy(&self, value: bool) {
+        // Starting new work must cancel a pending "clear busy" timer so it
+        // cannot hide the indicator mid-computation.
+        if value {
+            if let Some(id) = self.busy_clear_source.borrow_mut().take() {
+                id.remove();
+            }
+        }
         let views: Vec<gsv::View> = self.panes.iter().map(|p| p.view.clone()).collect();
         set_busy_state(
             &self.busy,
@@ -2191,60 +2201,24 @@ impl FileDiff {
         from_pane: usize,
         to_pane: usize,
     ) -> f64 {
-        if master_max <= 0.0 {
-            return 0.0;
-        }
-
         let master_line_count = (master_view.buffer().line_count().max(1) - 1) as f64;
         let slave_line_count = (slave_view.buffer().line_count().max(1) - 1) as f64;
-        let master_scroll_frac = (master_value / master_max.max(1.0)).clamp(0.0, 1.0);
-        let master_line = master_scroll_frac * master_line_count;
-        let mut slave_line = master_scroll_frac * slave_line_count;
-
-        for chunk in chunks {
-            let m_start = if from_pane == 0 {
-                chunk.start_a as f64
-            } else {
-                chunk.start_b as f64
-            };
-            let m_end = if from_pane == 0 {
-                chunk.end_a as f64
-            } else {
-                chunk.end_b as f64
-            };
-            let m_range = m_end - m_start;
-            if m_range <= 0.0 {
-                continue;
-            }
-
-            if master_line >= m_start && master_line < m_end {
-                let chunk_frac = (master_line - m_start) / m_range;
-
-                let s_start = if to_pane == 0 {
-                    chunk.start_a as f64
-                } else {
-                    chunk.start_b as f64
-                };
-                let s_end = if to_pane == 0 {
-                    chunk.end_a as f64
-                } else {
-                    chunk.end_b as f64
-                };
-                let s_range = s_end - s_start;
-
-                if s_range > 0.0 {
-                    slave_line = s_start + chunk_frac * s_range;
-                }
-                break;
-            }
-        }
         let slave_scroll_max = slave_view
             .vadjustment()
             .map(|a| a.upper() - a.page_size())
             .unwrap_or(1.0)
             .max(1.0);
-        let slave_scroll_frac = (slave_line / slave_line_count.max(1.0)).clamp(0.0, 1.0);
-        slave_scroll_frac * slave_scroll_max
+
+        crate::diff::scroll_map::proportional_scroll_target(
+            master_value,
+            master_max,
+            master_line_count,
+            slave_line_count,
+            slave_scroll_max,
+            chunks,
+            from_pane,
+            to_pane,
+        )
     }
 
     fn sync_scroll(&self) {
@@ -2254,6 +2228,19 @@ impl FileDiff {
 
         let scroll_lock: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
+        // While a huge buffer is still being laid out, `vadjustment.upper()`
+        // keeps growing. Mapping with a stale `upper` makes the slave pane
+        // jump to a low line and then appear to jump back as it grows. Defer
+        // synchronization until the upper values stop changing (issue #45).
+        fn layout_is_growing(slot: &Rc<RefCell<(f64, f64)>>, u0: f64, u1: f64) -> bool {
+            let mut last = slot.borrow_mut();
+            let changed = (last.0 - u0).abs() > 1.0 || (last.1 - u1).abs() > 1.0;
+            if changed {
+                *last = (u0, u1);
+            }
+            changed
+        }
+
         let adj0 = self.panes[0].view.vadjustment();
         let adj1 = self.panes[1].view.vadjustment();
 
@@ -2262,60 +2249,71 @@ impl FileDiff {
             let view1 = self.panes[1].view.clone();
             let chunks = Rc::clone(&self.chunks);
             let lock = Rc::clone(&scroll_lock);
+            let last_uppers = Rc::new(RefCell::new((a0.upper(), a1.upper())));
 
-            // Pane 0 scroll â†’ sync Pane 1 (master=0, slave=1)
+            // Pane 0 scroll → sync Pane 1 (master=0, slave=1)
             let a1_weak = a1.downgrade();
             let lock_0_to_1 = Rc::clone(&lock);
             let chunks_01 = Rc::clone(&chunks);
             let view0_01 = view0.clone();
             let view1_01 = view1.clone();
+            let uppers_01 = Rc::clone(&last_uppers);
             a0.connect_value_changed(move |master_adj| {
                 if lock_0_to_1.get() {
                     return;
                 }
-                if let Some(slave_adj) = a1_weak.upgrade() {
-                    let new_val = FileDiff::map_scroll_proportionally(
-                        &view0_01,
-                        &view1_01,
-                        &chunks_01.borrow(),
-                        master_adj.value(),
-                        master_adj.upper() - master_adj.page_size(),
-                        0,
-                        1,
-                    );
-                    if (slave_adj.value() - new_val).abs() > 0.5 {
-                        lock_0_to_1.set(true);
-                        slave_adj.set_value(new_val);
-                        lock_0_to_1.set(false);
-                    }
+                let Some(slave_adj) = a1_weak.upgrade() else {
+                    return;
+                };
+                if layout_is_growing(&uppers_01, master_adj.upper(), slave_adj.upper()) {
+                    return;
+                }
+                let new_val = FileDiff::map_scroll_proportionally(
+                    &view0_01,
+                    &view1_01,
+                    &chunks_01.borrow(),
+                    master_adj.value(),
+                    master_adj.upper() - master_adj.page_size(),
+                    0,
+                    1,
+                );
+                if (slave_adj.value() - new_val).abs() > 0.5 {
+                    lock_0_to_1.set(true);
+                    slave_adj.set_value(new_val);
+                    lock_0_to_1.set(false);
                 }
             });
 
-            // Pane 1 scroll â†’ sync Pane 0 (master=1, slave=0)
+            // Pane 1 scroll → sync Pane 0 (master=1, slave=0)
             let a0_weak = a0.downgrade();
             let lock_1_to_0 = Rc::clone(&lock);
             let chunks_10 = Rc::clone(&chunks);
             let view0_10 = view0.clone();
             let view1_10 = view1.clone();
+            let uppers_10 = Rc::clone(&last_uppers);
             a1.connect_value_changed(move |master_adj| {
                 if lock_1_to_0.get() {
                     return;
                 }
-                if let Some(slave_adj) = a0_weak.upgrade() {
-                    let new_val = FileDiff::map_scroll_proportionally(
-                        &view1_10,
-                        &view0_10,
-                        &chunks_10.borrow(),
-                        master_adj.value(),
-                        master_adj.upper() - master_adj.page_size(),
-                        1,
-                        0,
-                    );
-                    if (slave_adj.value() - new_val).abs() > 0.5 {
-                        lock_1_to_0.set(true);
-                        slave_adj.set_value(new_val);
-                        lock_1_to_0.set(false);
-                    }
+                let Some(slave_adj) = a0_weak.upgrade() else {
+                    return;
+                };
+                if layout_is_growing(&uppers_10, slave_adj.upper(), master_adj.upper()) {
+                    return;
+                }
+                let new_val = FileDiff::map_scroll_proportionally(
+                    &view1_10,
+                    &view0_10,
+                    &chunks_10.borrow(),
+                    master_adj.value(),
+                    master_adj.upper() - master_adj.page_size(),
+                    1,
+                    0,
+                );
+                if (slave_adj.value() - new_val).abs() > 0.5 {
+                    lock_1_to_0.set(true);
+                    slave_adj.set_value(new_val);
+                    lock_1_to_0.set(false);
                 }
             });
         }
@@ -2536,6 +2534,8 @@ impl FileDiff {
         let busy = Rc::clone(&self.busy);
         let busy_watch = Rc::clone(&self.busy_watch);
         let saved_cursors = Rc::clone(&self.saved_cursors);
+        let busy_clear_source = Rc::clone(&self.busy_clear_source);
+        let inline_job_source = Rc::clone(&self.inline_job_source);
         let busy_views: Vec<gsv::View> = self.panes.iter().map(|p| p.view.clone()).collect();
         let busy_container = self.container.clone();
 
@@ -2559,6 +2559,8 @@ impl FileDiff {
             let busy_f = Rc::clone(&busy);
             let busy_watch_f = Rc::clone(&busy_watch);
             let saved_cursors_f = Rc::clone(&saved_cursors);
+            let busy_clear_source_f = Rc::clone(&busy_clear_source);
+            let inline_job_source_f = Rc::clone(&inline_job_source);
             let busy_views_f = busy_views.clone();
             let busy_container_f = busy_container.clone();
 
@@ -2593,8 +2595,11 @@ impl FileDiff {
                 let busy_inner = Rc::clone(&busy_f);
                 let busy_watch_inner = Rc::clone(&busy_watch_f);
                 let saved_cursors_inner = Rc::clone(&saved_cursors_f);
+                let busy_clear_source_inner = Rc::clone(&busy_clear_source_f);
+                let inline_job_source_inner = Rc::clone(&inline_job_source_f);
                 let busy_views_inner = busy_views_f.clone();
                 let busy_container_inner = busy_container_f.clone();
+                let diff_state_inner = Rc::clone(&diff_state);
 
                 // No callback fires when both sides are empty
                 // (schedule_diff returns early), so clear a pending state.
@@ -2607,17 +2612,19 @@ impl FileDiff {
                     !(text_a.is_empty() && text_b.is_empty()),
                 );
 
+                let ignore_blank_lines_now = ignore_bl.get();
                 diff_state.borrow_mut().schedule_diff(
-                    text_a.clone(),
-                    text_b.clone(),
+                    text_a,
+                    text_b,
+                    ignore_blank_lines_now,
                     Box::new(move |result: DiffResult| {
                         let DiffResult {
-                            chunks: raw_chunks,
+                            chunks: final_chunks,
                             text_a,
                             text_b,
                             is_empty,
                             is_identical,
-                            ..
+                            line_cache: computed_line_cache,
                         } = result;
 
                         for bi in 0..2.min(buffers.len()) {
@@ -2625,35 +2632,20 @@ impl FileDiff {
                             ensure_diff_tags(&tag_tables[bi]);
                         }
 
-                        let mut final_chunks = raw_chunks;
-                        if ignore_bl.get() {
-                            crate::diff::engine::consume_blank_lines(
-                                &mut final_chunks,
-                                &text_a,
-                                &text_b,
-                            );
-                        }
+                        apply_diff_tags_to_buffer(&buffers[0], &tag_tables[0], 0, &final_chunks);
+                        apply_diff_tags_to_buffer(&buffers[1], &tag_tables[1], 1, &final_chunks);
 
-                        let mode = inline_mode.borrow();
-                        apply_diff_tags_to_buffer(
-                            &buffers[0],
-                            &tag_tables[0],
-                            0,
+                        let generation = diff_state_inner.borrow().generation();
+                        schedule_inline_highlights(
                             &final_chunks,
-                            Some(&buffers[1]),
-                            &inline_cache,
-                            &mode,
+                            [buffers[0].clone(), buffers[1].clone()],
+                            [tag_tables[0].clone(), tag_tables[1].clone()],
+                            Rc::clone(&inline_cache),
+                            inline_mode.borrow().clone(),
+                            generation,
+                            Rc::clone(&diff_state_inner),
+                            Rc::clone(&inline_job_source_inner),
                         );
-                        apply_diff_tags_to_buffer(
-                            &buffers[1],
-                            &tag_tables[1],
-                            1,
-                            &final_chunks,
-                            Some(&buffers[0]),
-                            &inline_cache,
-                            &mode,
-                        );
-                        drop(mode);
 
                         for gutter in &gutters {
                             gutter.set_chunks(&final_chunks);
@@ -2664,8 +2656,7 @@ impl FileDiff {
                             lm.update_chunks(&final_chunks);
                         }
 
-                        let max_lines = text_a.len().max(text_b.len());
-                        *line_cache.borrow_mut() = LineCache::new(&final_chunks, max_lines);
+                        *line_cache.borrow_mut() = computed_line_cache;
 
                         *chunks.borrow_mut() = final_chunks;
 
@@ -2687,13 +2678,13 @@ impl FileDiff {
                             shared_msgarea.hide();
                         }
 
-                        set_busy_state(
-                            &busy_inner,
-                            &busy_watch_inner,
-                            &busy_views_inner,
-                            &busy_container_inner,
-                            &saved_cursors_inner,
-                            false,
+                        defer_busy_clear(
+                            Rc::clone(&busy_inner),
+                            Rc::clone(&busy_watch_inner),
+                            busy_views_inner.clone(),
+                            busy_container_inner.clone(),
+                            Rc::clone(&saved_cursors_inner),
+                            Rc::clone(&busy_clear_source_inner),
                         );
                     }),
                 );
@@ -2962,6 +2953,19 @@ impl FileDiff {
                 cr.set_line_width(1.0);
                 let visible = |y: f64| y >= scr_y - 1.0 && y <= scr_y + scr_h + 1.0;
 
+                // Restrict the chunk walk to the visible line range. Without
+                // this, every redraw resolved `line_to_y` (iter_at_line +
+                // line_yrange) for every chunk, which is costly on huge diffs.
+                let visible_rect = view.visible_rect();
+                let first_line = view.line_at_y(visible_rect.y()).0.line().max(0) as usize;
+                let last_line = view
+                    .line_at_y(visible_rect.y() + visible_rect.height())
+                    .0
+                    .line()
+                    .max(0) as usize;
+                let v_start = first_line.saturating_sub(1);
+                let v_end = last_line.saturating_add(1);
+
                 let chunks = chunks.borrow();
                 for chunk in chunks.iter() {
                     if chunk.op == DiffOp::Equal {
@@ -2973,6 +2977,14 @@ impl FileDiff {
                     } else {
                         (chunk.start_b, chunk.end_b)
                     };
+
+                    // Skip chunks entirely outside the visible range before
+                    // doing any layout work. A zero-span (cs == ce) chunk at
+                    // the boundary is still drawn because its point is in
+                    // range.
+                    if ce < v_start || cs > v_end {
+                        continue;
+                    }
 
                     let (r, g, b) = match style::line_color(chunk.op) {
                         Some(c) => c,
@@ -3735,6 +3747,12 @@ impl MeldPage for FileDiff {
 
 impl Drop for FileDiff {
     fn drop(&mut self) {
+        if let Some(id) = self.busy_clear_source.borrow_mut().take() {
+            id.remove();
+        }
+        if let Some(id) = self.inline_job_source.borrow_mut().take() {
+            id.remove();
+        }
         self.diff_state.borrow_mut().cancel_all();
         self.stop_file_monitoring();
         if let Some(out) = self.merge_output.borrow().as_ref() {
@@ -3795,6 +3813,55 @@ fn set_busy_state(
     if let Some(cb) = busy_watch.borrow().as_ref() {
         cb();
     }
+}
+
+/// Clear the busy state once the panes' layout stops growing, or after a hard
+/// timeout so the wait cursor/banner can never get stuck.
+fn defer_busy_clear(
+    busy: Rc<Cell<bool>>,
+    busy_watch: BusyWatch,
+    views: Vec<gsv::View>,
+    container: gtk::Box,
+    saved_cursors: Rc<RefCell<Vec<Option<gdk::Cursor>>>>,
+    source_slot: Rc<RefCell<Option<glib::SourceId>>>,
+) {
+    // Cancel a previous pending clear. A timer sets the slot to None before it
+    // breaks, so a completed source is never removed twice.
+    if let Some(id) = source_slot.borrow_mut().take() {
+        id.remove();
+    }
+
+    fn upper_values(views: &[gsv::View]) -> Vec<f64> {
+        views
+            .iter()
+            .map(|v| v.vadjustment().map(|a| a.upper()).unwrap_or(0.0))
+            .collect()
+    }
+
+    let mut tracker = SettleTracker::new(upper_values(&views), 2, 8_000);
+    let start = std::time::Instant::now();
+    let slot = Rc::clone(&source_slot);
+
+    let id = glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+        let current = upper_values(&views);
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        match tracker.observe(&current, elapsed_ms) {
+            SettleOutcome::Waiting => glib::ControlFlow::Continue,
+            SettleOutcome::Settled | SettleOutcome::TimedOut => {
+                *slot.borrow_mut() = None;
+                set_busy_state(
+                    &busy,
+                    &busy_watch,
+                    &views,
+                    &container,
+                    &saved_cursors,
+                    false,
+                );
+                glib::ControlFlow::Break
+            }
+        }
+    });
+    *source_slot.borrow_mut() = Some(id);
 }
 
 /// Extract text from a GtkSourceBuffer as a Vec of line strings.
@@ -3997,16 +4064,11 @@ fn apply_diff_tags_to_buffer(
     tag_table: &gtk::TextTagTable,
     pane: usize,
     chunks: &[Chunk],
-    other_buffer: Option<&gsv::Buffer>,
-    inline_cache: &InlineDiffCache,
-    inline_diff_mode: &str,
 ) {
-    // Bound the total inline work for this pane in one tagging pass.  The
-    // line-level backgrounds are always drawn; this only limits the extra
-    // per-line inline tags on very large comparisons (500k-line files must
-    // stay responsive, see issue #47).
-    let mut inline_budget = MAX_INLINE_LINE_PAIRS_PER_PASS;
-
+    // Line-level backgrounds are applied eagerly and unconditionally. Inline
+    // (word-level) highlighting is scheduled separately in time-sliced idle
+    // batches so it can cover the whole file without blocking the UI (issue
+    // #45).
     for chunk in chunks {
         let (start, end, tag_name) = match (&chunk.op, pane) {
             (DiffOp::Delete, 0) => (chunk.start_a, chunk.end_a, "diff-delete"),
@@ -4022,31 +4084,125 @@ fn apply_diff_tags_to_buffer(
                 buffer.apply_tag(&tag, &s, &e);
             }
         }
-
-        // For Replace chunks, apply inline (word-level) diff
-        if chunk.op == DiffOp::Replace {
-            if let Some(other_buf) = other_buffer {
-                apply_inline_diff(
-                    buffer,
-                    other_buf,
-                    tag_table,
-                    chunk,
-                    pane,
-                    inline_cache,
-                    inline_diff_mode,
-                    &mut inline_budget,
-                );
-            }
-        }
     }
 }
 
-/// Maximum number of line pairs inline-diffed per pane in one tagging pass.
+/// One unit of deferred inline work: a `Replace` chunk on one pane.
+struct InlineTask {
+    pane: usize,
+    chunk: Chunk,
+}
+
+/// State for a time-sliced inline-highlighting pass.
+struct InlineJob {
+    tasks: Vec<InlineTask>,
+    index: usize,
+    buffers: [gsv::Buffer; 2],
+    tag_tables: [gtk::TextTagTable; 2],
+    cache: Rc<InlineDiffCache>,
+    mode: String,
+}
+
+/// Schedule inline (word-level) highlighting for all `Replace` chunks.
 ///
-/// This is a hard safety bound for very large comparisons.  The 1 MB reporter
-/// case needs 5 000 pairs; a single `Replace` chunk may use up to 20 000
-/// pairs.  Anything beyond the budget keeps the line-level background but gets
-/// no inline highlight.
+/// Work is processed in short idle batches so a large comparison does not block
+/// the GTK main loop and is not truncated at an arbitrary line (issue #45). A
+/// newer diff bumps `DiffState`'s generation, which aborts a stale job.
+#[allow(clippy::too_many_arguments)]
+fn schedule_inline_highlights(
+    chunks: &[Chunk],
+    buffers: [gsv::Buffer; 2],
+    tag_tables: [gtk::TextTagTable; 2],
+    cache: Rc<InlineDiffCache>,
+    mode: String,
+    generation: u64,
+    diff_state: Rc<RefCell<DiffState>>,
+    source_slot: Rc<RefCell<Option<glib::SourceId>>>,
+) {
+    if mode == "none" {
+        return;
+    }
+
+    let mut tasks = Vec::new();
+    for pane in 0..2 {
+        for chunk in chunks {
+            if !crate::diff::inline_plan::should_inline(chunk) {
+                continue;
+            }
+            tasks.push(InlineTask {
+                pane,
+                chunk: chunk.clone(),
+            });
+        }
+    }
+    if tasks.is_empty() {
+        return;
+    }
+
+    // Cancel any previous job. A completed job sets the slot to None before it
+    // breaks, so a stale source is never removed twice.
+    if let Some(id) = source_slot.borrow_mut().take() {
+        id.remove();
+    }
+
+    let job = Rc::new(RefCell::new(InlineJob {
+        tasks,
+        index: 0,
+        buffers,
+        tag_tables,
+        cache,
+        mode,
+    }));
+    let job_handle = Rc::clone(&job);
+    let slot = Rc::clone(&source_slot);
+
+    let id = glib::timeout_add_local(std::time::Duration::from_millis(0), move || {
+        if diff_state.borrow().generation() != generation {
+            *slot.borrow_mut() = None;
+            return glib::ControlFlow::Break;
+        }
+
+        let mut job = job_handle.borrow_mut();
+        let start = std::time::Instant::now();
+        while job.index < job.tasks.len() {
+            if start.elapsed() >= std::time::Duration::from_millis(8) {
+                return glib::ControlFlow::Continue;
+            }
+
+            let pane = job.tasks[job.index].pane;
+            let chunk = job.tasks[job.index].chunk.clone();
+            job.index += 1;
+
+            let (buf_idx, other_idx) = if pane == 0 {
+                (0usize, 1usize)
+            } else {
+                (1usize, 0usize)
+            };
+            let mut budget = usize::MAX;
+            apply_inline_diff(
+                &job.buffers[buf_idx],
+                &job.buffers[other_idx],
+                &job.tag_tables[buf_idx],
+                &chunk,
+                pane,
+                job.cache.as_ref(),
+                &job.mode,
+                &mut budget,
+            );
+        }
+
+        *slot.borrow_mut() = None;
+        glib::ControlFlow::Break
+    });
+    *source_slot.borrow_mut() = Some(id);
+}
+
+/// Safety bound for inline work on a single `Replace` chunk / legacy pass.
+///
+/// The eager per-pass budget that stopped highlighting around line 40 000 was
+/// removed in favour of time-sliced batches (issue #45). This value now only
+/// caps the line span of one chunk that still receives inline highlights, and
+/// is used by the legacy `apply_diff_tags` path.
 const MAX_INLINE_LINE_PAIRS_PER_PASS: usize = 20_000;
 
 /// Apply inline diff highlighting within a `Replace` chunk.
