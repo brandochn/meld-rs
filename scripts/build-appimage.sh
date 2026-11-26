@@ -7,8 +7,9 @@
 # schemas, gettext catalogs and the GTK runtime data dirs), then linuxdeploy
 # bundles the shared libraries and generates the AppImage itself.
 #
-# Prerequisites (see PLAN.md Step 0): cargo, patchelf, glib-compile-schemas,
-# wget.  linuxdeploy is downloaded into target/appimage-tools/ on first run.
+# Prerequisites (see PLAN.md Step 0): cargo, msgfmt (gettext),
+# glib-compile-schemas, patchelf, wget.  linuxdeploy is downloaded into
+# target/appimage-tools/ on first run.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +32,7 @@ output_dir="${repo_dir}/publish"
 output_file="${output_dir}/meld-rs-${version}-${arch}.AppImage"
 
 # ── Fail fast if a required tool is missing ───────────────────────────────
-for tool in cargo patchelf glib-compile-schemas wget; do
+for tool in cargo msgfmt patchelf glib-compile-schemas wget; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
         echo "ERROR: required tool '${tool}' not found in PATH." >&2
         echo "See PLAN.md Step 0 for the prerequisites." >&2
@@ -55,6 +56,17 @@ cargo build --release
 binary="${repo_dir}/target/release/meld-rs"
 if [ ! -x "${binary}" ]; then
     echo "ERROR: release binary not found at ${binary}" >&2
+    exit 1
+fi
+
+# build.rs normally generates the desktop entry during compilation.  Regenerate
+# it here as well so packaging does not depend on build-script caching or on
+# the target dir layout (the generated file lives outside the crate out dir).
+echo "==> Generating desktop entry"
+mkdir -p "$(dirname "${desktop_src}")"
+if ! msgfmt --desktop --template=resources/org.gnome.meld-rs.desktop.in \
+        -d po -o "${desktop_src}"; then
+    echo "ERROR: failed to generate the desktop entry at ${desktop_src}" >&2
     exit 1
 fi
 
