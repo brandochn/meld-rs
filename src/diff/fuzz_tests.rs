@@ -22,11 +22,14 @@ fn random_line(rng: &mut impl Rng, max_len: usize) -> String {
     let chars: String = (0..len)
         .map(|_| {
             let c = rng.gen_range(32u8..127u8) as char;
-            // Occasionally insert tabs or spaces
+            // Occasionally insert tabs, spaces or a bare carriage return
+            // (a line separator for `similar`, but not for `str::lines`).
             if rng.gen_bool(0.05) {
                 '\t'
             } else if rng.gen_bool(0.1) {
                 ' '
+            } else if rng.gen_bool(0.02) {
+                '\r'
             } else {
                 c
             }
