@@ -274,7 +274,8 @@ fn long_line_with_scattered_edits_below_cutoff_highlights() {
 /// Measured on the reporter's real `a-cut6`/`b-cut6` (not checked in): of 848
 /// `favIconUrl` lines, 593 differ, 550 are longer than 512 chars, and the
 /// v0.1.8 guard skipped 502 of them. With the changes below all 593 are marked
-/// (509 coarse tail ranges and 84 precise multi-range highlights).
+/// (547 coarse tail ranges and 46 precise multi-range highlights; the per-line
+/// cap turns the noisiest cases into one coarse range).
 #[test]
 fn long_line_common_prefix_stays_unmarked() {
     let prefix = format!(

@@ -54,8 +54,8 @@ The AppImage is self-contained: no installation is required, and because the
 GTK 4 runtime is bundled you do not need any system packages.
 
 ```bash
-chmod +x meld-rs-0.1.8-x86_64.AppImage
-./meld-rs-0.1.8-x86_64.AppImage file_a.txt file_b.txt
+chmod +x meld-rs-0.1.9-x86_64.AppImage
+./meld-rs-0.1.9-x86_64.AppImage file_a.txt file_b.txt
 ```
 
 ## Requirements
@@ -114,11 +114,11 @@ writes the resulting AppImage into `publish/`:
 
 ```bash
 ./scripts/build-appimage.sh
-# -> publish/meld-rs-0.1.8-x86_64.AppImage
+# -> publish/meld-rs-0.1.9-x86_64.AppImage
 ```
 
-It requires `cargo`, `patchelf`, `glib-compile-schemas` and `wget`;
-`linuxdeploy` is downloaded automatically on first run.
+It requires `cargo`, `msgfmt` (gettext), `patchelf`, `glib-compile-schemas`
+and `wget`; `linuxdeploy` is downloaded automatically on first run.
 
 ### Releasing
 
@@ -126,8 +126,8 @@ Pushing a version tag that matches the `version` in `Cargo.toml` builds the
 AppImage on GitHub Actions and attaches it to a GitHub release:
 
 ```bash
-git tag v0.1.8
-git push origin v0.1.8
+git tag v0.1.9
+git push origin v0.1.9
 ```
 
 The workflow lives in `.github/workflows/release.yml`. It can also be started by
