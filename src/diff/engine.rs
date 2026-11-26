@@ -9,6 +9,7 @@
 
 use similar::{Algorithm, ChangeTag, DiffTag, TextDiff};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// Operation type for a diff chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1337,6 +1338,17 @@ pub struct InlineRange {
 pub struct InlineDiffer;
 
 impl InlineDiffer {
+    /// Upper bound for a single character-level diff.  Very long lines with
+    /// many scattered edits are quadratic in the worst case; `similar` stops
+    /// at the deadline and returns a valid coarse delete+insert diff.
+    const DIFF_TIMEOUT: Duration = Duration::from_millis(50);
+
+    /// Above this many ranges in one line, the detailed highlight is replaced
+    /// by a single coarse range.  A line with dozens of separate changes is
+    /// effectively noise, and painting thousands of text tags for it would
+    /// make the UI slow; the coarse range is still informative.
+    const MAX_RANGES_PER_LINE: usize = 64;
+
     /// Compare two lines and return a list of inline changes.
     /// Only returns differences when the lines are different but similar
     /// enough (e.g., a single word change).
@@ -1365,7 +1377,9 @@ impl InlineDiffer {
         }
 
         // === Step 1: character-level diff with token cache ===
-        let diff = TextDiff::from_chars(line_a, line_b);
+        let diff = TextDiff::configure()
+            .timeout(Self::DIFF_TIMEOUT)
+            .diff_chars(line_a, line_b);
 
         // Collect all changes so we can filter small equals
         struct RawCharChange {
@@ -1433,10 +1447,11 @@ impl InlineDiffer {
     }
 
     /// Return the character ranges that Meld-style inline highlighting should
-    /// paint for a whole `Replace` chunk.
+    /// paint for one line pair.
     ///
-    /// This implements Meld's `process_matches()` rule
-    /// (`meld/filediff.py:2049-2063`) over the chunk's full text:
+    /// The UI calls this per line (and historically passed the full text of a
+    /// `Replace` chunk).  It implements Meld's `process_matches()` rule
+    /// (`meld/filediff.py:2049-2063`) over the text passed in:
     ///
     /// - every non-`Equal` opcode is kept;
     /// - an `Equal` opcode is kept only when it does not touch the chunk
@@ -1445,17 +1460,28 @@ impl InlineDiffer {
     /// Keeping short internal equal runs bridges the small gaps that a
     /// character-level diff leaves inside a replaced block, so the highlight
     /// reads as one contiguous change. Long equal runs and equal runs at the
-    /// chunk edges are discarded.
+    /// text edges are discarded.
+    ///
+    /// Line pairs that are too different for a detailed diff are not left
+    /// unhighlighted: [`Self::coarse_ranges`] marks the span between the common
+    /// prefix and suffix instead.  That is what makes an all-different line
+    /// (for example `same-1MB` vs `diff-1MB`) show a changed tail rather than
+    /// nothing at all.
     ///
     /// All offsets are character indices, not byte offsets.
     pub fn highlight_ranges(line_a: &str, line_b: &str) -> Vec<InlineRange> {
-        if line_a == line_b || !Self::are_lines_similar_enough(line_a, line_b, 0.15) {
+        if line_a == line_b {
             return Vec::new();
+        }
+        if !Self::are_lines_similar_enough(line_a, line_b, 0.15) {
+            return Self::coarse_ranges(line_a, line_b);
         }
 
         let len_a = line_a.chars().count();
         let len_b = line_b.chars().count();
-        let diff = TextDiff::from_chars(line_a, line_b);
+        let diff = TextDiff::configure()
+            .timeout(Self::DIFF_TIMEOUT)
+            .diff_chars(line_a, line_b);
         let mut ranges = Vec::with_capacity(diff.ops().len());
 
         for op in diff.ops() {
@@ -1491,6 +1517,10 @@ impl InlineDiffer {
             });
         }
 
+        if ranges.len() > Self::MAX_RANGES_PER_LINE {
+            return Self::coarse_ranges(line_a, line_b);
+        }
+
         ranges
     }
 
@@ -1516,7 +1546,7 @@ impl InlineDiffer {
         // inserts separators and changes lengths, which makes the joined token
         // strings look unrelated even when the lines differ in a few chars.
         if !Self::are_lines_similar_enough(a, b, 0.15) {
-            return Vec::new();
+            return Self::coarse_ranges(a, b);
         }
 
         let (tokens_a, offsets_a) = tokenize_with_offsets(a);
@@ -1577,25 +1607,88 @@ impl InlineDiffer {
             return Self::highlight_ranges(a, b);
         }
 
+        if ranges.len() > Self::MAX_RANGES_PER_LINE {
+            return Self::coarse_ranges(a, b);
+        }
+
         ranges
     }
 
-    /// Quick pre-check to avoid O(L²) character diff on clearly unrelated lines.
+    /// Minimal highlight for line pairs that are too different for a detailed
+    /// diff: mark the span between the common prefix and suffix on each side.
     ///
-    /// Uses three cheap heuristics that run in O(L) with zero heap allocation:
+    /// This is O(L) and allocation-free, so it is safe for arbitrarily long
+    /// lines and preserves the reporter's expectation that an all-different
+    /// line still shows *where* it differs (the tail after the shared prefix)
+    /// instead of no inline mark at all.
+    fn coarse_ranges(line_a: &str, line_b: &str) -> Vec<InlineRange> {
+        let len_a = line_a.chars().count();
+        let len_b = line_b.chars().count();
+        if len_a == 0 && len_b == 0 {
+            return Vec::new();
+        }
+
+        let prefix = line_a
+            .chars()
+            .zip(line_b.chars())
+            .take_while(|(x, y)| x == y)
+            .count();
+        let max_suffix = len_a.min(len_b).saturating_sub(prefix);
+        let suffix = line_a
+            .chars()
+            .rev()
+            .zip(line_b.chars().rev())
+            .take_while(|(x, y)| x == y)
+            .count()
+            .min(max_suffix);
+
+        let start_a = prefix;
+        let end_a = len_a - suffix;
+        let start_b = prefix;
+        let end_b = len_b - suffix;
+
+        let op = match (start_a < end_a, start_b < end_b) {
+            (true, true) => DiffOp::Replace,
+            (true, false) => DiffOp::Delete,
+            (false, true) => DiffOp::Insert,
+            (false, false) => return Vec::new(),
+        };
+        vec![InlineRange {
+            start_a,
+            end_a,
+            start_b,
+            end_b,
+            op,
+        }]
+    }
+
+    /// Quick pre-check to decide whether a detailed character diff is worth it.
+    ///
+    /// Uses cheap heuristics in O(L) with zero heap allocation:
     /// 1. **Length ratio**: if one line is > 3× longer, they are unrelated.
     /// 2. **Short line bypass**: lines ≤ 30 bytes are cheap to diff → always try.
     /// 3. **Common prefix/suffix ratio**: counts matching chars from both ends.
-    ///    If the common portion is below `threshold` of the max length → skip.
+    /// 4. **Positional matches**: counts equal characters at the same index,
+    ///    which catches interspersed edits that leave only a short common
+    ///    prefix/suffix.
+    ///
+    /// Long lines are sampled rather than scanned in full for the positional
+    /// estimate, and must be at least 50% positionally similar before the
+    /// character diff runs.  Without that stronger requirement, a long line
+    /// with many scattered edits would pass the generic threshold and trigger
+    /// a quadratic diff; see issue #44.  Lines that fail the guard now fall
+    /// back to [`Self::coarse_ranges`] rather than producing no highlight.
     ///
     /// False positives (reporting "similar" when lines are unrelated) are
-    /// harmless — they just mean we run the expensive diff unnecessarily.
-    /// False negatives are avoided by using conservative thresholds so that
-    /// genuinely similar lines (small edits, renames) always pass.
+    /// harmless — they just mean we run the expensive diff unnecessarily, and
+    /// the diff itself has [`Self::DIFF_TIMEOUT`] as a hard bound.
     fn are_lines_similar_enough(a: &str, b: &str, threshold: f64) -> bool {
-        /// Above this length, skip the positional heuristic so a long line with
-        /// scattered edits cannot trigger an expensive character diff.
+        /// Above this length, sample the positional match count instead of
+        /// scanning every character.
         const POSITIONAL_MAX_CHARS: usize = 512;
+        /// Long lines must be this similar positionally before a character
+        /// diff is attempted.
+        const LONG_LINE_POSITIONAL_MIN: f64 = 0.5;
 
         let len_a = a.len();
         let len_b = b.len();
@@ -1628,19 +1721,45 @@ impl InlineDiffer {
             .count();
 
         let max_chars = a.chars().count().max(b.chars().count());
-        // Interspersed edits (e.g. every tenth character) leave only a short
-        // common prefix/suffix while the lines are still mostly equal.  Also
-        // count character-by-character matches at the same position; it is
-        // O(L) and allocation-free.  Cap it to medium lines so very long lines
-        // with scattered edits do not trigger an expensive character diff.
-        let positional = if max_chars <= POSITIONAL_MAX_CHARS {
-            a.chars().zip(b.chars()).filter(|(x, y)| x == y).count()
-        } else {
-            0
-        };
-        let common = (prefix_count + suffix_count).max(positional).min(max_chars);
 
-        common as f64 / max_chars as f64 >= threshold
+        // Interspersed edits (e.g. every tenth character) leave only a short
+        // common prefix/suffix while the lines are still mostly equal.  Count
+        // character-by-character matches at the same position.  For long lines
+        // only a bounded sample is compared, so the estimate cannot itself
+        // become the expensive part.
+        let (positional_hits, positional_samples) = if max_chars <= POSITIONAL_MAX_CHARS {
+            let hits = a.chars().zip(b.chars()).filter(|(x, y)| x == y).count();
+            (hits, max_chars)
+        } else {
+            let stride = max_chars.saturating_add(POSITIONAL_MAX_CHARS - 1) / POSITIONAL_MAX_CHARS;
+            let mut hits = 0usize;
+            let mut samples = 0usize;
+            for (i, (x, y)) in a.chars().zip(b.chars()).enumerate() {
+                if i % stride == 0 {
+                    samples += 1;
+                    if x == y {
+                        hits += 1;
+                    }
+                }
+            }
+            (hits, samples)
+        };
+
+        let prefix_suffix = prefix_count.saturating_add(suffix_count).min(max_chars);
+        let prefix_suffix_ratio = prefix_suffix as f64 / max_chars as f64;
+        let positional_ratio = if positional_samples == 0 {
+            0.0
+        } else {
+            positional_hits as f64 / positional_samples as f64
+        };
+
+        if max_chars > POSITIONAL_MAX_CHARS {
+            // Long lines: a short common prefix/suffix does not imply a cheap
+            // diff, so require a strong positional match as well.
+            prefix_suffix_ratio.max(positional_ratio) >= threshold.max(LONG_LINE_POSITIONAL_MIN)
+        } else {
+            prefix_suffix_ratio.max(positional_ratio) >= threshold
+        }
     }
 
     /// Compare two lines at the token (word) level.

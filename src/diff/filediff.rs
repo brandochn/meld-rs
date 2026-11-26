@@ -28,7 +28,7 @@ use crate::config::settings::MeldSettings;
 use crate::diff::diff_state::{DiffResult, DiffState};
 use crate::diff::drop_rules::{resolve_file_drop, FileDropAction, FileDropArea};
 use crate::diff::engine::{
-    adjacent_change_chunks, locate_change_chunk, Chunk, DiffOp, InlineDiffer, LineCache,
+    adjacent_change_chunks, locate_change_chunk, Chunk, DiffOp, Differ, InlineDiffer, LineCache,
     ThreeWayDiffer,
 };
 use crate::diff::inline_cache::InlineDiffCache;
@@ -2124,6 +2124,7 @@ impl FileDiff {
         };
 
         // Apply tags for this pane
+        let mut inline_budget = MAX_INLINE_LINE_PAIRS_PER_PASS;
         for chunk in chunks {
             let (start, end, tag_name) = match (&chunk.op, pane) {
                 (DiffOp::Delete, 0) => (chunk.start_a, chunk.end_a, "diff-delete"),
@@ -2172,6 +2173,7 @@ impl FileDiff {
                             pane,
                             &self.inline_cache,
                             &mode,
+                            &mut inline_budget,
                         );
                     }
                 }
@@ -3999,6 +4001,12 @@ fn apply_diff_tags_to_buffer(
     inline_cache: &InlineDiffCache,
     inline_diff_mode: &str,
 ) {
+    // Bound the total inline work for this pane in one tagging pass.  The
+    // line-level backgrounds are always drawn; this only limits the extra
+    // per-line inline tags on very large comparisons (500k-line files must
+    // stay responsive, see issue #47).
+    let mut inline_budget = MAX_INLINE_LINE_PAIRS_PER_PASS;
+
     for chunk in chunks {
         let (start, end, tag_name) = match (&chunk.op, pane) {
             (DiffOp::Delete, 0) => (chunk.start_a, chunk.end_a, "diff-delete"),
@@ -4026,19 +4034,28 @@ fn apply_diff_tags_to_buffer(
                     pane,
                     inline_cache,
                     inline_diff_mode,
+                    &mut inline_budget,
                 );
             }
         }
     }
 }
 
-/// Apply inline diff highlighting within a Replace chunk.
+/// Maximum number of line pairs inline-diffed per pane in one tagging pass.
 ///
-/// When the two sides have different line counts, this computes a
-/// character-level diff over the whole chunk and applies Meld's
-/// `process_matches` ranges (see `InlineDiffer::highlight_ranges`). When the
-/// line counts match, it keeps the per-line path and honours
-/// `inline_diff_mode`. `"none"` disables inline highlighting entirely.
+/// This is a hard safety bound for very large comparisons.  The 1 MB reporter
+/// case needs 5 000 pairs; a single `Replace` chunk may use up to 20 000
+/// pairs.  Anything beyond the budget keeps the line-level background but gets
+/// no inline highlight.
+const MAX_INLINE_LINE_PAIRS_PER_PASS: usize = 20_000;
+
+/// Apply inline diff highlighting within a `Replace` chunk.
+///
+/// Inline diffs are always computed per line, matching Meld. When the two sides
+/// have different line counts, the chunk is first re-aligned with a small
+/// nested line diff so inserted/deleted lines do not shift every following
+/// pair; this keeps the changed numbers highlighted inside large blocks.
+/// `"none"` disables inline highlighting entirely.
 fn apply_inline_diff(
     buffer: &gsv::Buffer,
     other_buffer: &gsv::Buffer,
@@ -4047,162 +4064,187 @@ fn apply_inline_diff(
     pane: usize,
     cache: &InlineDiffCache,
     inline_diff_mode: &str,
+    budget: &mut usize,
 ) {
     let (start_a, end_a, start_b, end_b) = (chunk.start_a, chunk.end_a, chunk.start_b, chunk.end_b);
     let count_a = end_a - start_a;
     let count_b = end_b - start_b;
 
-    if inline_diff_mode == "none" {
+    if inline_diff_mode == "none" || count_a == 0 || count_b == 0 || *budget == 0 {
         return;
     }
 
-    // Guard: skip inline diff for very large Replace chunks.
-    // A Replace with hundreds of lines is likely a wholesale section
-    // replacement where per-character highlighting adds no value.
-    const MAX_INLINE_CHUNK_LINES: usize = 500;
+    // Do not start inline work on a single wholesale-replacement chunk that is
+    // larger than the per-pass budget. Meld computes inline diffs lazily for
+    // the visible range; here the work is eager, so such a chunk keeps only
+    // the line-level background.
+    const MAX_INLINE_CHUNK_LINES: usize = MAX_INLINE_LINE_PAIRS_PER_PASS;
     if count_a > MAX_INLINE_CHUNK_LINES || count_b > MAX_INLINE_CHUNK_LINES {
         return;
     }
 
-    // --- Meld-style full-chunk diff (when line counts differ) ---
-    // Extract the complete text of the Replace chunk from both buffers
-    // and run character-level diff on it.  Offsets are relative to the
-    // chunk start in each buffer → absolute buffer offsets.
-    if count_a != count_b && count_a > 0 && count_b > 0 {
-        let (buf_a, buf_b) = if pane == 0 {
-            (buffer, other_buffer)
-        } else {
-            (other_buffer, buffer)
-        };
+    // Above this size, do not run the nested alignment diff: pair by offset so
+    // the work stays O(chunk lines).
+    const MAX_ALIGN_LINES: usize = 500;
 
-        let sa = buf_a.iter_at_line_offset(start_a as i32, 0);
-        let ea = buf_a.iter_at_line_offset(end_a as i32, 0);
-        let sb = buf_b.iter_at_line_offset(start_b as i32, 0);
-        let eb = buf_b.iter_at_line_offset(end_b as i32, 0);
+    if count_a != count_b && count_a.max(count_b) <= MAX_ALIGN_LINES {
+        // Charge the whole chunk up front: the nested alignment diff is
+        // O(chunk²) in the worst case, and this bounds the total alignment
+        // work per pass even when many chunks contain few changed pairs.
+        let align_cost = count_a.max(count_b);
+        if align_cost <= *budget {
+            *budget -= align_cost;
+            let (buf_a, buf_b) = if pane == 0 {
+                (buffer, other_buffer)
+            } else {
+                (other_buffer, buffer)
+            };
 
-        if let (Some(sa), Some(ea), Some(sb), Some(eb)) = (sa, ea, sb, eb) {
-            let text_a = buf_a.text(&sa, &ea, false).to_string();
-            let text_b = buf_b.text(&sb, &eb, false).to_string();
-            if !text_a.is_empty() && !text_b.is_empty() && text_a != text_b {
-                let base_a = sa.offset() as usize;
-                let base_b = sb.offset() as usize;
-                let Some(tag) = tag_table.lookup("diff-inline-replace") else {
-                    return;
-                };
+            let Some(lines_a) = buffer_lines(buf_a, start_a, end_a) else {
+                return;
+            };
+            let Some(lines_b) = buffer_lines(buf_b, start_b, end_b) else {
+                return;
+            };
 
-                // This function is invoked once per pane; paint only the side
-                // that belongs to the current pane's buffer.
-                for range in InlineDiffer::highlight_ranges(&text_a, &text_b) {
-                    let (target_buf, base, start, end) = if pane == 0 {
-                        (buf_a, base_a, range.start_a, range.end_a)
-                    } else {
-                        (buf_b, base_b, range.start_b, range.end_b)
-                    };
-                    if start >= end {
-                        continue;
-                    }
-
-                    let s_off = base + start;
-                    let e_off = base + end;
-                    let mut s = target_buf.iter_at_offset(s_off as i32);
-                    let mut e = target_buf.iter_at_offset(e_off as i32);
-                    if !s.is_cursor_position() {
-                        s.backward_cursor_position();
-                    }
-                    if !e.is_cursor_position() {
-                        e.forward_cursor_position();
-                    }
-                    if s.offset() < e.offset() {
-                        target_buf.apply_tag(&tag, &s, &e);
-                    }
+            // Re-align within the chunk; only paired `Replace` lines get an
+            // inline highlight, so equal lines (e.g. the `},` after a changed
+            // `favIconUrl`) and inserted/deleted lines stay unmarked.
+            let aligned = Differ::new(lines_a, lines_b).compare();
+            for sub in &aligned.chunks {
+                if sub.op != DiffOp::Replace {
+                    continue;
+                }
+                let pairs = (sub.end_a - sub.start_a).min(sub.end_b - sub.start_b);
+                for offset in 0..pairs {
+                    apply_inline_line_pair(
+                        buffer,
+                        other_buffer,
+                        tag_table,
+                        pane,
+                        start_a + sub.start_a + offset,
+                        start_b + sub.start_b + offset,
+                        cache,
+                        inline_diff_mode,
+                    );
                 }
             }
+            return;
         }
+        // Not enough budget for the nested alignment: fall through to offset
+        // pairing with the remaining budget.
+    }
+
+    // Equal line counts (or a chunk too large to align): pair by offset.
+    let pairs = count_a.min(count_b);
+    for offset in 0..pairs {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        apply_inline_line_pair(
+            buffer,
+            other_buffer,
+            tag_table,
+            pane,
+            start_a + offset,
+            start_b + offset,
+            cache,
+            inline_diff_mode,
+        );
+    }
+}
+
+/// Extract `[start, end)` lines from `buffer` as owned strings.
+fn buffer_lines(buffer: &gsv::Buffer, start: usize, end: usize) -> Option<Vec<String>> {
+    let mut lines = Vec::with_capacity(end.saturating_sub(start));
+    for line in start..end {
+        lines.push(buffer_line_text(buffer, line)?);
+    }
+    Some(lines)
+}
+
+/// Read a single line, including hidden characters, as owned text.
+fn buffer_line_text(buffer: &gsv::Buffer, line: usize) -> Option<String> {
+    let start = buffer.iter_at_line_offset(line as i32, 0)?;
+    let end = buffer
+        .iter_at_line_offset((line + 1) as i32, 0)
+        .unwrap_or_else(|| buffer.end_iter());
+    Some(buffer.text(&start, &end, true).to_string())
+}
+
+/// Apply inline highlights for one aligned `(a, b)` line pair.
+///
+/// `line_a` is a line index in the left/A pane and `line_b` in the right/B
+/// pane, regardless of which pane is currently being painted.
+#[allow(clippy::too_many_arguments)]
+fn apply_inline_line_pair(
+    buffer: &gsv::Buffer,
+    other_buffer: &gsv::Buffer,
+    tag_table: &gtk::TextTagTable,
+    pane: usize,
+    line_a: usize,
+    line_b: usize,
+    cache: &InlineDiffCache,
+    inline_diff_mode: &str,
+) {
+    let (text_a, text_b) = if pane == 0 {
+        (
+            buffer_line_text(buffer, line_a),
+            buffer_line_text(other_buffer, line_b),
+        )
+    } else {
+        (
+            buffer_line_text(other_buffer, line_a),
+            buffer_line_text(buffer, line_b),
+        )
+    };
+    let (Some(text_a), Some(text_b)) = (text_a, text_b) else {
+        return;
+    };
+    if text_a.is_empty() || text_b.is_empty() || text_a == text_b {
         return;
     }
 
-    // --- Original line-by-line path (when counts are equal) ---
-    let line_count = count_a.min(count_b);
-    for offset in 0..line_count {
-        let line_a_num = start_a + offset;
-        let line_b_num = start_b + offset;
+    let ranges = match inline_diff_mode {
+        "characters" => InlineDiffer::highlight_ranges(&text_a, &text_b),
+        "tokens" => (*cache.compare_line_token_ranges(&text_a, &text_b)).clone(),
+        _ => return,
+    };
+    if ranges.is_empty() {
+        return;
+    }
 
-        let (text_a, text_b) = if pane == 0 {
-            let a_start = buffer.iter_at_line_offset(line_a_num as i32, 0);
-            let a_end = buffer.iter_at_line_offset((line_a_num + 1) as i32, 0);
-            let b_start = other_buffer.iter_at_line_offset(line_b_num as i32, 0);
-            let b_end = other_buffer.iter_at_line_offset((line_b_num + 1) as i32, 0);
-            if let (Some(sa), Some(ea), Some(sb), Some(eb)) = (a_start, a_end, b_start, b_end) {
-                (
-                    buffer.text(&sa, &ea, true).to_string(),
-                    other_buffer.text(&sb, &eb, true).to_string(),
-                )
-            } else {
-                continue;
-            }
+    let base_line = if pane == 0 { line_a } else { line_b };
+    let Some(base_iter) = buffer.iter_at_line_offset(base_line as i32, 0) else {
+        return;
+    };
+    let Some(tag) = tag_table.lookup("diff-inline-replace") else {
+        return;
+    };
+
+    for range in ranges {
+        let (start, end) = if pane == 0 {
+            (range.start_a, range.end_a)
         } else {
-            let a_start = other_buffer.iter_at_line_offset(line_a_num as i32, 0);
-            let a_end = other_buffer.iter_at_line_offset((line_a_num + 1) as i32, 0);
-            let b_start = buffer.iter_at_line_offset(line_b_num as i32, 0);
-            let b_end = buffer.iter_at_line_offset((line_b_num + 1) as i32, 0);
-            if let (Some(sa), Some(ea), Some(sb), Some(eb)) = (a_start, a_end, b_start, b_end) {
-                (
-                    other_buffer.text(&sa, &ea, true).to_string(),
-                    buffer.text(&sb, &eb, true).to_string(),
-                )
-            } else {
-                continue;
-            }
+            (range.start_b, range.end_b)
         };
-
-        if text_a.is_empty() || text_b.is_empty() {
-            continue;
-        }
-        if text_a == text_b {
+        if start >= end {
             continue;
         }
 
-        let ranges = match inline_diff_mode {
-            "characters" => InlineDiffer::highlight_ranges(&text_a, &text_b),
-            "tokens" => (*cache.compare_line_token_ranges(&text_a, &text_b)).clone(),
-            _ => Vec::new(),
-        };
-        if ranges.is_empty() {
-            continue;
+        let start_offset = base_iter.offset() as usize + start;
+        let end_offset = base_iter.offset() as usize + end;
+        let mut s = buffer.iter_at_offset(start_offset as i32);
+        let mut e = buffer.iter_at_offset(end_offset as i32);
+        if !s.is_cursor_position() {
+            s.backward_cursor_position();
         }
-
-        let base_line = if pane == 0 { line_a_num } else { line_b_num };
-        let base_iter = match buffer.iter_at_line_offset(base_line as i32, 0) {
-            Some(iter) => iter,
-            None => continue,
-        };
-        let Some(tag) = tag_table.lookup("diff-inline-replace") else {
-            return;
-        };
-
-        for range in ranges {
-            let (start, end) = if pane == 0 {
-                (range.start_a, range.end_a)
-            } else {
-                (range.start_b, range.end_b)
-            };
-            if start >= end {
-                continue;
-            }
-
-            let start_offset = base_iter.offset() as usize + start;
-            let end_offset = base_iter.offset() as usize + end;
-            let mut s = buffer.iter_at_offset(start_offset as i32);
-            let mut e = buffer.iter_at_offset(end_offset as i32);
-            if !s.is_cursor_position() {
-                s.backward_cursor_position();
-            }
-            if !e.is_cursor_position() {
-                e.forward_cursor_position();
-            }
-            if s.offset() < e.offset() {
-                buffer.apply_tag(&tag, &s, &e);
-            }
+        if !e.is_cursor_position() {
+            e.forward_cursor_position();
+        }
+        if s.offset() < e.offset() {
+            buffer.apply_tag(&tag, &s, &e);
         }
     }
 }
