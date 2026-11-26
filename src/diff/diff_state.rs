@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::diff::engine::{Chunk, DiffOp, Differ};
+use crate::diff::engine::{consume_blank_lines, Chunk, DiffOp, Differ, LineCache};
 
 /// Above this many lines per side a comparison is slow enough (the line diff is
 /// quadratic in the worst case, see issue #44) that the UI shows a notice while
@@ -18,6 +18,8 @@ pub struct DiffResult {
     pub text_b: Vec<String>,
     pub is_empty: bool,
     pub is_identical: bool,
+    /// Line-to-chunk index built on the worker from the final chunks.
+    pub line_cache: LineCache,
 }
 
 pub struct DiffState {
@@ -37,6 +39,12 @@ impl DiffState {
         }
     }
 
+    /// Current generation counter. Time-sliced work captures this and aborts
+    /// when a newer diff has been scheduled.
+    pub fn generation(&self) -> u64 {
+        self.generation.get()
+    }
+
     pub fn cancel_all(&mut self) {
         if let Some(flag) = &self.cancel_flag {
             flag.store(true, Ordering::SeqCst);
@@ -53,6 +61,7 @@ impl DiffState {
         &mut self,
         text_a: Vec<String>,
         text_b: Vec<String>,
+        ignore_blank_lines: bool,
         on_complete: Box<dyn FnOnce(DiffResult) + 'static>,
     ) {
         self.cancel_all();
@@ -103,7 +112,10 @@ impl DiffState {
                     }
                 };
 
-                let merged = crate::diff::engine::merge_adjacent_replace_chunks(&result.chunks);
+                let mut merged = crate::diff::engine::merge_adjacent_replace_chunks(&result.chunks);
+                if ignore_blank_lines {
+                    consume_blank_lines(&mut merged, &text_a, &text_b);
+                }
 
                 if cancel_clone.load(Ordering::SeqCst) {
                     let _ = tx_clone.send(None);
@@ -112,6 +124,8 @@ impl DiffState {
 
                 let is_empty = text_a.is_empty() && text_b.is_empty();
                 let is_identical = merged.iter().all(|c| c.op == DiffOp::Equal);
+                let max_lines = text_a.len().max(text_b.len());
+                let line_cache = LineCache::new(&merged, max_lines);
 
                 let _ = tx_clone.send(Some(DiffResult {
                     chunks: merged,
@@ -119,6 +133,7 @@ impl DiffState {
                     text_b,
                     is_empty,
                     is_identical,
+                    line_cache,
                 }));
             });
 
