@@ -33,7 +33,12 @@ impl DiffMap {
     /// pane `pane` (0 = left/A, 1 = right/B).  `chunks` is the shared chunk
     /// list owned by the `FileDiff`; the map re-reads it on every redraw so it
     /// always reflects the latest diff.
-    pub fn new(view: &gsv::View, pane: usize, chunks: Rc<RefCell<Vec<Chunk>>>) -> Self {
+    pub fn new(
+        view: &gsv::View,
+        pane: usize,
+        chunks: Rc<RefCell<Vec<Chunk>>>,
+        progress: Rc<Cell<f32>>,
+    ) -> Self {
         let drawing_area = gtk::DrawingArea::new();
         drawing_area.set_width_request(16);
         drawing_area.set_vexpand(true);
@@ -41,6 +46,7 @@ impl DiffMap {
 
         let draw_chunks = Rc::clone(&chunks);
         let draw_view = view.clone();
+        let draw_progress = Rc::clone(&progress);
         drawing_area.set_draw_func(move |_, cr, width, height| {
             let w = width as f64;
             let h = height as f64;
@@ -55,6 +61,23 @@ impl DiffMap {
             let x1 = (w - 2.0 * x0).max(1.0);
 
             cr.set_line_width(1.0);
+
+            // While inline markup is still being applied, reveal only the
+            // processed prefix and show the rest as an inactive track. At 100%
+            // this is skipped entirely so the map looks exactly as before.
+            let progress = draw_progress.get().clamp(0.0, 1.0) as f64;
+            let reveal_y = progress * h;
+            if progress < 1.0 {
+                let (r, g, b, a) = style::overview_processed_rgba();
+                cr.set_source_rgba(r, g, b, a);
+                cr.rectangle(x0, 0.0, x1, reveal_y);
+                cr.fill().ok();
+
+                let (r, g, b, a) = style::overview_track_rgba();
+                cr.set_source_rgba(r, g, b, a);
+                cr.rectangle(x0, reveal_y, x1, h - reveal_y);
+                cr.fill().ok();
+            }
 
             // Aggregate the chunk list into one op per pixel row. Drawing one
             // rectangle per chunk is O(chunks) per redraw, which is far too
@@ -73,12 +96,17 @@ impl DiffMap {
                 };
 
                 let y0 = (cs as f64 / total) * h;
+                // Hide changes that have not been processed yet.
+                if progress < 1.0 && y0 >= reveal_y {
+                    continue;
+                }
                 // A zero-span chunk (an insertion/deletion that has no lines
-                // on this side) still gets a thin visible marker.
+                // on this side) still gets a thin visible marker, clamped to
+                // the processed frontier.
                 let y1 = if ce > cs {
-                    (ce as f64 / total) * h
+                    ((ce as f64 / total) * h).min(reveal_y)
                 } else {
-                    y0 + 2.0
+                    (y0 + 2.0).min(reveal_y).max(y0 + 1.0)
                 };
 
                 let first = y0.floor().max(0.0) as usize;
