@@ -66,6 +66,65 @@ impl SettleTracker {
     }
 }
 
+/// Tracks layout settle *and* inline-progress completion for the busy state.
+///
+/// `Settled` requires progress to be complete and the layout stable. If
+/// progress stops advancing for `stall_timeout_ms` (for example because a job
+/// was dropped), it returns `TimedOut` so the busy indicator cannot get stuck.
+#[derive(Debug, Clone)]
+pub struct ProgressSettleTracker {
+    last: Vec<f64>,
+    stable_ticks: u32,
+    required_ticks: u32,
+    stall_timeout_ms: u64,
+    last_progress: f32,
+    last_progress_change_ms: u64,
+}
+
+impl ProgressSettleTracker {
+    pub fn new(uppers: Vec<f64>, required_ticks: u32, stall_timeout_ms: u64) -> Self {
+        Self {
+            last: uppers,
+            stable_ticks: 0,
+            required_ticks: required_ticks.max(1),
+            stall_timeout_ms,
+            last_progress: 0.0,
+            last_progress_change_ms: 0,
+        }
+    }
+
+    pub fn observe(&mut self, uppers: &[f64], progress: f32, elapsed_ms: u64) -> SettleOutcome {
+        let changed = uppers.len() != self.last.len()
+            || uppers
+                .iter()
+                .zip(self.last.iter())
+                .any(|(a, b)| (a - b).abs() > 1.0);
+
+        self.last.clear();
+        self.last.extend_from_slice(uppers);
+
+        if changed {
+            self.stable_ticks = 0;
+        } else {
+            self.stable_ticks += 1;
+        }
+
+        if (progress - self.last_progress).abs() > 1e-4 {
+            self.last_progress = progress;
+            self.last_progress_change_ms = elapsed_ms;
+        }
+
+        let complete = progress >= 1.0 - 1e-4;
+        if complete && self.stable_ticks >= self.required_ticks {
+            SettleOutcome::Settled
+        } else if elapsed_ms.saturating_sub(self.last_progress_change_ms) >= self.stall_timeout_ms {
+            SettleOutcome::TimedOut
+        } else {
+            SettleOutcome::Waiting
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +165,37 @@ mod tests {
         let mut t2 = SettleTracker::new(vec![0.0], 1, 10_000);
         assert_eq!(t2.observe(&[0.0, 5.0], 100), SettleOutcome::Waiting);
         assert_eq!(t2.observe(&[0.0, 5.0], 200), SettleOutcome::Settled);
+    }
+
+    #[test]
+    fn progress_settles_when_complete_and_stable() {
+        let mut t = ProgressSettleTracker::new(vec![100.0], 2, 10_000);
+        assert_eq!(t.observe(&[100.0], 0.5, 250), SettleOutcome::Waiting);
+        assert_eq!(t.observe(&[100.0], 1.0, 500), SettleOutcome::Settled);
+    }
+
+    #[test]
+    fn progress_waits_while_advancing() {
+        let mut t = ProgressSettleTracker::new(vec![100.0], 2, 10_000);
+        assert_eq!(t.observe(&[100.0], 0.1, 250), SettleOutcome::Waiting);
+        assert_eq!(t.observe(&[100.0], 0.2, 500), SettleOutcome::Waiting);
+        assert_eq!(t.observe(&[100.0], 0.3, 750), SettleOutcome::Waiting);
+    }
+
+    #[test]
+    fn progress_times_out_when_stalled() {
+        let mut t = ProgressSettleTracker::new(vec![100.0], 2, 1000);
+        assert_eq!(t.observe(&[100.0], 0.2, 250), SettleOutcome::Waiting);
+        assert_eq!(t.observe(&[100.0], 0.2, 1000), SettleOutcome::Waiting);
+        assert_eq!(t.observe(&[100.0], 0.2, 1300), SettleOutcome::TimedOut);
+    }
+
+    #[test]
+    fn progress_complete_still_waits_for_layout() {
+        let mut t = ProgressSettleTracker::new(vec![100.0], 2, 10_000);
+        assert_eq!(t.observe(&[200.0], 1.0, 250), SettleOutcome::Waiting);
+        assert_eq!(t.observe(&[300.0], 1.0, 500), SettleOutcome::Waiting);
+        assert_eq!(t.observe(&[300.0], 1.0, 750), SettleOutcome::Waiting);
+        assert_eq!(t.observe(&[300.0], 1.0, 1000), SettleOutcome::Settled);
     }
 }

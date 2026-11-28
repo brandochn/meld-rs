@@ -10,7 +10,7 @@ use gtk4 as gtk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
@@ -482,6 +482,8 @@ fn refresh_change_action_sensitivity(
     ] {
         if let Some(action) = view_group.lookup_action(name) {
             if let Some(action) = action.downcast_ref::<gio::SimpleAction>() {
+                // `g_simple_action_set_enabled` ignores no-op changes, so this
+                // only notifies when the state actually flips.
                 action.set_enabled(enabled);
             }
         }
@@ -971,12 +973,28 @@ impl MeldWindow {
                 view_tb.set_visible(page.supports_change_toolbar());
 
                 // Install a watch so the page can refresh sensitivity when the
-                // cursor/focus moves or a chunk edit completes.
+                // cursor/focus moves or a chunk edit completes.  Rapid changes
+                // are coalesced into one refresh per main-loop iteration, and
+                // the refresh runs outside the frame's layout/snapshot phase:
+                // toggling action sensitivity mid-frame can leave a bound
+                // header widget unallocated when GTK snapshots it.
                 let group_w = view_group_sw.clone();
                 let pages_w = pages_weak.clone();
                 let nb_w = nb_switch.clone();
+                let pending = Rc::new(Cell::new(false));
                 page.set_change_action_watch(Box::new(move || {
-                    refresh_change_action_sensitivity(&group_w, &pages_w, &nb_w);
+                    if pending.get() {
+                        return;
+                    }
+                    pending.set(true);
+                    let group_w = group_w.clone();
+                    let pages_w = pages_w.clone();
+                    let nb_w = nb_w.clone();
+                    let pending = Rc::clone(&pending);
+                    glib::idle_add_local_once(move || {
+                        pending.set(false);
+                        refresh_change_action_sensitivity(&group_w, &pages_w, &nb_w);
+                    });
                 }));
 
                 // Install a watch so a busy transition can refresh the header

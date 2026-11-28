@@ -32,7 +32,7 @@ use crate::diff::engine::{
     ThreeWayDiffer,
 };
 use crate::diff::inline_cache::InlineDiffCache;
-use crate::diff::settle::{SettleOutcome, SettleTracker};
+use crate::diff::settle::{ProgressSettleTracker, SettleOutcome};
 use crate::tr;
 use crate::ui::action_gutter::{ActionGutter, ActionMode, GutterAction, GutterDirection};
 use crate::ui::chunk_gutter::ChunkGutterRenderer;
@@ -124,6 +124,9 @@ pub struct FileDiff {
     busy_clear_source: Rc<RefCell<Option<glib::SourceId>>>,
     /// Pending time-sliced inline-highlighting job.
     inline_job_source: Rc<RefCell<Option<glib::SourceId>>>,
+    /// Fraction (0.0..=1.0) of the document whose inline markup is applied.
+    /// Drives the overview progress track and the busy indicator.
+    inline_progress: Rc<Cell<f32>>,
     /// Whether in-page file drop targets have been installed.
     drops_enabled: Cell<bool>,
     /// Application-level fallback for drops that cannot be handled in-page.
@@ -291,11 +294,17 @@ impl FileDiff {
 
         // ── Diff overview maps ──
         let chunks: Rc<RefCell<Vec<Chunk>>> = Rc::new(RefCell::new(Vec::new()));
+        let inline_progress = Rc::new(Cell::new(1.0f32));
         let map_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         map_box.add_css_class("sourcemap-container");
         let mut diff_maps: Vec<Rc<DiffMap>> = Vec::new();
         for (i, pane) in panes.iter().enumerate().take(num_panes.min(2)) {
-            let dm = Rc::new(DiffMap::new(&pane.view, i, Rc::clone(&chunks)));
+            let dm = Rc::new(DiffMap::new(
+                &pane.view,
+                i,
+                Rc::clone(&chunks),
+                Rc::clone(&inline_progress),
+            ));
             map_box.append(dm.widget());
             diff_maps.push(dm);
         }
@@ -459,6 +468,7 @@ impl FileDiff {
             saved_cursors,
             busy_clear_source,
             inline_job_source,
+            inline_progress,
             drops_enabled: Cell::new(false),
             drop_fallback: RefCell::new(None),
         };
@@ -1696,6 +1706,17 @@ impl FileDiff {
         let diff_state = Rc::clone(&self.diff_state);
         let scheduler = Rc::clone(&self.diff_state);
         let inline_job_source = Rc::clone(&self.inline_job_source);
+        let inline_progress = Rc::clone(&self.inline_progress);
+
+        let total_lines = text_a.len().max(text_b.len());
+        inline_progress.set(if text_a.is_empty() && text_b.is_empty() {
+            1.0
+        } else {
+            0.0
+        });
+        for dm in &self.diff_maps {
+            dm.queue_draw();
+        }
 
         let ignore_blank_lines_now = self.ignore_blank_lines.get();
         scheduler.borrow_mut().schedule_diff(
@@ -1730,6 +1751,9 @@ impl FileDiff {
                     generation,
                     Rc::clone(&diff_state),
                     Rc::clone(&inline_job_source),
+                    Rc::clone(&inline_progress),
+                    total_lines,
+                    diff_maps.clone(),
                 );
 
                 for gutter in &gutters {
@@ -1780,6 +1804,7 @@ impl FileDiff {
                     busy_container.clone(),
                     Rc::clone(&saved_cursors),
                     Rc::clone(&busy_clear_source),
+                    Rc::clone(&inline_progress),
                 );
             }),
         );
@@ -2536,6 +2561,7 @@ impl FileDiff {
         let saved_cursors = Rc::clone(&self.saved_cursors);
         let busy_clear_source = Rc::clone(&self.busy_clear_source);
         let inline_job_source = Rc::clone(&self.inline_job_source);
+        let inline_progress = Rc::clone(&self.inline_progress);
         let busy_views: Vec<gsv::View> = self.panes.iter().map(|p| p.view.clone()).collect();
         let busy_container = self.container.clone();
 
@@ -2561,6 +2587,7 @@ impl FileDiff {
             let saved_cursors_f = Rc::clone(&saved_cursors);
             let busy_clear_source_f = Rc::clone(&busy_clear_source);
             let inline_job_source_f = Rc::clone(&inline_job_source);
+            let inline_progress_f = Rc::clone(&inline_progress);
             let busy_views_f = busy_views.clone();
             let busy_container_f = busy_container.clone();
 
@@ -2597,6 +2624,7 @@ impl FileDiff {
                 let saved_cursors_inner = Rc::clone(&saved_cursors_f);
                 let busy_clear_source_inner = Rc::clone(&busy_clear_source_f);
                 let inline_job_source_inner = Rc::clone(&inline_job_source_f);
+                let inline_progress_inner = Rc::clone(&inline_progress_f);
                 let busy_views_inner = busy_views_f.clone();
                 let busy_container_inner = busy_container_f.clone();
                 let diff_state_inner = Rc::clone(&diff_state);
@@ -2611,6 +2639,16 @@ impl FileDiff {
                     &saved_cursors_f,
                     !(text_a.is_empty() && text_b.is_empty()),
                 );
+
+                let total_lines = text_a.len().max(text_b.len());
+                inline_progress_inner.set(if text_a.is_empty() && text_b.is_empty() {
+                    1.0
+                } else {
+                    0.0
+                });
+                for dm in &diff_maps_inner {
+                    dm.queue_draw();
+                }
 
                 let ignore_blank_lines_now = ignore_bl.get();
                 diff_state.borrow_mut().schedule_diff(
@@ -2645,6 +2683,9 @@ impl FileDiff {
                             generation,
                             Rc::clone(&diff_state_inner),
                             Rc::clone(&inline_job_source_inner),
+                            Rc::clone(&inline_progress_inner),
+                            total_lines,
+                            diff_maps_inner.clone(),
                         );
 
                         for gutter in &gutters {
@@ -2685,6 +2726,7 @@ impl FileDiff {
                             busy_container_inner.clone(),
                             Rc::clone(&saved_cursors_inner),
                             Rc::clone(&busy_clear_source_inner),
+                            Rc::clone(&inline_progress_inner),
                         );
                     }),
                 );
@@ -3824,6 +3866,7 @@ fn defer_busy_clear(
     container: gtk::Box,
     saved_cursors: Rc<RefCell<Vec<Option<gdk::Cursor>>>>,
     source_slot: Rc<RefCell<Option<glib::SourceId>>>,
+    progress: Rc<Cell<f32>>,
 ) {
     // Cancel a previous pending clear. A timer sets the slot to None before it
     // breaks, so a completed source is never removed twice.
@@ -3838,14 +3881,14 @@ fn defer_busy_clear(
             .collect()
     }
 
-    let mut tracker = SettleTracker::new(upper_values(&views), 2, 8_000);
+    let mut tracker = ProgressSettleTracker::new(upper_values(&views), 2, 10_000);
     let start = std::time::Instant::now();
     let slot = Rc::clone(&source_slot);
 
     let id = glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
         let current = upper_values(&views);
         let elapsed_ms = start.elapsed().as_millis() as u64;
-        match tracker.observe(&current, elapsed_ms) {
+        match tracker.observe(&current, progress.get(), elapsed_ms) {
             SettleOutcome::Waiting => glib::ControlFlow::Continue,
             SettleOutcome::Settled | SettleOutcome::TimedOut => {
                 *slot.borrow_mut() = None;
@@ -4091,23 +4134,33 @@ fn apply_diff_tags_to_buffer(
 struct InlineTask {
     pane: usize,
     chunk: Chunk,
+    /// End line on pane A, used as the progress frontier.
+    end_a: usize,
 }
 
 /// State for a time-sliced inline-highlighting pass.
 struct InlineJob {
     tasks: Vec<InlineTask>,
     index: usize,
+    frontier: usize,
     buffers: [gsv::Buffer; 2],
     tag_tables: [gtk::TextTagTable; 2],
     cache: Rc<InlineDiffCache>,
     mode: String,
+    progress: Rc<Cell<f32>>,
+    total_lines: usize,
+    diff_maps: Vec<Rc<DiffMap>>,
+    last_drawn_f: f32,
+    last_draw: std::time::Instant,
 }
 
 /// Schedule inline (word-level) highlighting for all `Replace` chunks.
 ///
-/// Work is processed in short idle batches so a large comparison does not block
-/// the GTK main loop and is not truncated at an arbitrary line (issue #45). A
-/// newer diff bumps `DiffState`'s generation, which aborts a stale job.
+/// Work is processed in short time-sliced batches so a large comparison does
+/// not block the GTK main loop and is not truncated at an arbitrary line
+/// (issue #45). A newer diff bumps `DiffState`'s generation, which aborts a
+/// stale job. Progress is written to `progress` and drives the overview map
+/// and the busy indicator.
 #[allow(clippy::too_many_arguments)]
 fn schedule_inline_highlights(
     chunks: &[Chunk],
@@ -4118,26 +4171,39 @@ fn schedule_inline_highlights(
     generation: u64,
     diff_state: Rc<RefCell<DiffState>>,
     source_slot: Rc<RefCell<Option<glib::SourceId>>>,
+    progress: Rc<Cell<f32>>,
+    total_lines: usize,
+    diff_maps: Vec<Rc<DiffMap>>,
 ) {
+    fn redraw_maps(maps: &[Rc<DiffMap>]) {
+        for dm in maps {
+            if dm.widget().is_visible() {
+                dm.queue_draw();
+            }
+        }
+    }
+
     if mode == "none" {
+        progress.set(1.0);
+        redraw_maps(&diff_maps);
         return;
     }
 
-    let mut tasks = Vec::new();
-    for pane in 0..2 {
-        for chunk in chunks {
-            if !crate::diff::inline_plan::should_inline(chunk) {
-                continue;
-            }
-            tasks.push(InlineTask {
-                pane,
-                chunk: chunk.clone(),
-            });
-        }
-    }
-    if tasks.is_empty() {
+    let planned = crate::diff::inline_plan::planned_tasks(chunks);
+    if planned.is_empty() {
+        progress.set(1.0);
+        redraw_maps(&diff_maps);
         return;
     }
+
+    let tasks: Vec<InlineTask> = planned
+        .into_iter()
+        .map(|t| InlineTask {
+            pane: t.pane,
+            chunk: chunks[t.chunk_index].clone(),
+            end_a: t.end_a,
+        })
+        .collect();
 
     // Cancel any previous job. A completed job sets the slot to None before it
     // breaks, so a stale source is never removed twice.
@@ -4148,10 +4214,16 @@ fn schedule_inline_highlights(
     let job = Rc::new(RefCell::new(InlineJob {
         tasks,
         index: 0,
+        frontier: 0,
         buffers,
         tag_tables,
         cache,
         mode,
+        progress,
+        total_lines,
+        diff_maps,
+        last_drawn_f: 0.0,
+        last_draw: std::time::Instant::now(),
     }));
     let job_handle = Rc::clone(&job);
     let slot = Rc::clone(&source_slot);
@@ -4166,10 +4238,11 @@ fn schedule_inline_highlights(
         let start = std::time::Instant::now();
         while job.index < job.tasks.len() {
             if start.elapsed() >= std::time::Duration::from_millis(8) {
-                return glib::ControlFlow::Continue;
+                break;
             }
 
             let pane = job.tasks[job.index].pane;
+            let end_a = job.tasks[job.index].end_a;
             let chunk = job.tasks[job.index].chunk.clone();
             job.index += 1;
 
@@ -4189,10 +4262,35 @@ fn schedule_inline_highlights(
                 &job.mode,
                 &mut budget,
             );
+            job.frontier = job.frontier.max(end_a);
         }
 
-        *slot.borrow_mut() = None;
-        glib::ControlFlow::Break
+        let done = job.index >= job.tasks.len();
+        let fraction = if done {
+            1.0
+        } else {
+            crate::diff::inline_plan::progress_fraction(job.frontier, job.total_lines)
+        };
+        job.progress.set(fraction);
+
+        // The map draw is O(chunks); throttle redraws instead of doing one per
+        // 8 ms batch.
+        let now = std::time::Instant::now();
+        if done
+            || fraction - job.last_drawn_f >= 0.005
+            || now.duration_since(job.last_draw) >= std::time::Duration::from_millis(100)
+        {
+            job.last_drawn_f = fraction;
+            job.last_draw = now;
+            redraw_maps(&job.diff_maps);
+        }
+
+        if done {
+            *slot.borrow_mut() = None;
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
     });
     *source_slot.borrow_mut() = Some(id);
 }

@@ -121,6 +121,24 @@ pub fn line_color(op: DiffOp) -> Option<Rgb> {
     }
 }
 
+/// Muted fill for the not-yet-processed part of the overview map.
+pub fn overview_track_rgba() -> (f64, f64, f64, f64) {
+    if is_dark() {
+        (0.70, 0.70, 0.70, 0.16)
+    } else {
+        (0.35, 0.35, 0.35, 0.16)
+    }
+}
+
+/// Subtle fill for the processed-but-equal part of the overview map.
+pub fn overview_processed_rgba() -> (f64, f64, f64, f64) {
+    if is_dark() {
+        (0.22, 0.22, 0.22, 0.55)
+    } else {
+        (1.0, 1.0, 1.0, 0.65)
+    }
+}
+
 /// Conflict fill colour (3-way merge), theme-aware.
 pub fn conflict_fill() -> Rgb {
     if is_dark() {
